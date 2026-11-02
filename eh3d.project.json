@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.1",
+  "ecosystem": "EH3D",
+  "name": "EH3D-PHOENIX-CAD",
+  "version": "0.0.1",
+  "role": "tool",
+  "stack": "rust",
+  "technologies": [
+    "Rust (planned)",
+    "Markdown",
+    "Python 3.10+"
+  ],
+  "deployment_target": "user-pc",
+  "maturity": "scaffolding",
+  "evidence": "none",
+  "hardware_bound": false,
+  "family": "PHOENIX",
+  "parent": null,
+  "build": "python -I tools/ci_validate.py",
+  "notes": "Scaffolding v0.0.1: PLANNED, no code yet. Mechanical design for the PHOENIX family: parametric enclosures, chassis and heat sinks that live in the same project as the board. What exists is the base of every repository of the suite and the written scope, requirements, dependencies, threat model and decisions in docs/. The planned stack is Rust (a library with a command-line interface); nothing has been run on a machine.",
+  "native_version": {
+    "file": "VERSION",
+    "pattern": "^(\\d+\\.\\d+\\.\\d+)"
+  }
+}

@@ -1,0 +1,83 @@
+{
+  "repo": "EH3D-PHOENIX-CAD",
+  "ecosystem": "eh3d",
+  "tagline": "Planned: a parametric mechanical CAD for enclosures, chassis and heat sinks.",
+  "description": "EH3D-PHOENIX-CAD is planned as a parametric mechanical CAD focused on the design of enclosures, chassis and heat sinks. Today it has the base of every repository of the suite and a written scope, requirements and dependencies; no code has been written and nothing has been run on a machine.",
+  "columns": [
+    "WHO USES IT",
+    "THIS REPOSITORY",
+    "WHAT IT FOLLOWS"
+  ],
+  "nodes": [
+    {
+      "id": "reader",
+      "column": 0,
+      "level": "external",
+      "title": "A developer",
+      "lines": [
+        "someone who is going to give",
+        "this repository its purpose"
+      ]
+    },
+    {
+      "id": "base",
+      "column": 1,
+      "level": "tested",
+      "title": "The base",
+      "lines": [
+        "manifest, README files, changelog",
+        "and CI, with their checks"
+      ],
+      "code": [
+        "tools/ci_validate.py",
+        "tools/test_repository.py"
+      ]
+    },
+    {
+      "id": "code",
+      "column": 1,
+      "level": "config",
+      "title": "The code",
+      "lines": [
+        "planned: parametric",
+        "enclosures, chassis, heat sinks"
+      ]
+    },
+    {
+      "id": "suite",
+      "column": 2,
+      "level": "external",
+      "title": "EH3D-DOCS",
+      "lines": [
+        "the map of the suite, the",
+        "conventions and the shared checks"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "reader",
+      "to": "base",
+      "label": "starts from",
+      "level": "tested"
+    },
+    {
+      "from": "base",
+      "to": "suite",
+      "label": "follows",
+      "level": "tested"
+    },
+    {
+      "from": "reader",
+      "to": "code",
+      "label": "writes",
+      "level": "config"
+    }
+  ],
+  "legend": {
+    "tested": "covered by the checks of this repository",
+    "config": "planned, not built",
+    "external": "a person or other repositories"
+  },
+  "footer": "Nothing here has been run on a machine."
+}
