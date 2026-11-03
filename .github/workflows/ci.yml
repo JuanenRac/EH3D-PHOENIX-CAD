@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # The tag of each sibling repository this one is built against (name=tag, separated by spaces).
+  SIBLING_REFS: "EH3D-COMMON=v0.1.6"
+
 jobs:
   validate:
     name: Validate the repository
@@ -28,3 +32,35 @@ jobs:
           python -I tools/make_structure.py --check --readmes
       - name: Tests of the base
         run: python -I -m unittest discover -s tools -p "test_*.py"
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          path: EH3D-PHOENIX-CAD
+          persist-credentials: false
+      - name: Check out the sibling repository named in SIBLING_REFS
+        shell: bash
+        run: |
+          for pair in $SIBLING_REFS; do
+            name="${pair%%=*}"
+            ref="${pair#*=}"
+            git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$ref" "https://github.com/${GITHUB_REPOSITORY_OWNER}/${name}.git" "$name"
+            echo "$name at $ref"
+          done
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+      - name: Format
+        run: cargo fmt --check
+        working-directory: EH3D-PHOENIX-CAD
+      - name: Lints
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: EH3D-PHOENIX-CAD
+      - name: Tests
+        run: cargo test --all-targets
+        working-directory: EH3D-PHOENIX-CAD
