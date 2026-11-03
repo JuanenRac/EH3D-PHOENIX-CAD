@@ -2,8 +2,7 @@
   <img src="images/EH3D_PHOENIX_CAD_BANNER.svg" alt="EH3D-PHOENIX-CAD banner" width="100%">
 </p>
 
-# 🛠️ EH3D-PHOENIX-CAD
-
+# <img src="images/brand/icon-64.png" alt="" width="40" height="40" align="absmiddle"> EH3D-PHOENIX-CAD
 <p align="center"><a href="README.md">🇺🇸 English</a> | 🇪🇸 <b>Español</b> | <a href="README_fra.md">🇫🇷 Français</a> | <a href="README_ita.md">🇮🇹 Italiano</a> | <a href="README_deu.md">🇩🇪 Deutsch</a> | <a href="README_zho.md">🇨🇳 中文</a> | <a href="README_jpn.md">🇯🇵 日本語</a> | <a href="README_por.md">🇵🇹 Português</a></p>
 
 ### EH3D-PHOENIX-CAD: planificado como un CAD mecánico paramétrico centrado en el diseño de cajas, chasis y disipadores térmicos. Existe un primer modelo de cajas como biblioteca; no se ha ejecutado nada en una máquina.
