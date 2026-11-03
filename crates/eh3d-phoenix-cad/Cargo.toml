@@ -1,0 +1,12 @@
+[package]
+name = "eh3d-phoenix-cad"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The mechanical model of the design: lengths in integer nanometres with their own range, a parametric enclosure, structured change operations that report conflicts and leave the model unchanged, an OpenSCAD-style script and a fit check against the envelope of a board"
+
+[dependencies]
+# the object identity (UUID v7) is the one of the shared repository, next to this one; the CI checks out the tag named in SIBLING_REFS
+eh3d-container = { version = ">=0.0.1", path = "../../../EH3D-COMMON/crates/container" }
