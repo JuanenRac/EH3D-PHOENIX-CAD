@@ -1,6 +1,6 @@
 # EH3D-PHOENIX-CAD: scope
 
-Status: **planned**. EH3D-PHOENIX-CAD has no code. This page says what it is meant to do, what it will not do, and where it sits. Nothing here has been built or run.
+Status: **early code**. EH3D-PHOENIX-CAD has a first library, `eh3d-phoenix-cad`: a parametric enclosure with round holes, structured change operations, an OpenSCAD-style script and a fit check against the envelope of a board. This page says what it is meant to do, what it will not do, and where it sits. Nothing here has been run on a machine.
 
 ## Purpose
 
@@ -26,7 +26,7 @@ Mechanical design for the PHOENIX family: parametric enclosures, chassis and hea
 
 A library without a window, written in Rust (planned), with a command-line interface and, where it applies, a kind of task for the server. Programs of the suite exchange work through project files or through the server, never by depending on each other.
 
-Crates, names and file layout will be decided together with the first code; no crate exists yet.
+The first crate is `eh3d-phoenix-cad` (lengths with their own range, the enclosure, the operations, the script and the fit check). The command-line interface, the server task, the STEP export and the heat sinks are not written; the other crates will be decided together with their code.
 
 ## Where it sits
 

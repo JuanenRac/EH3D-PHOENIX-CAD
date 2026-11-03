@@ -208,24 +208,24 @@
 
     <text x="0" y="182" font-family="'Inter', 'Segoe UI', 'Roboto', sans-serif" font-weight="700" font-size="22" fill="url(#goldGlow)" letter-spacing="4" filter="url(#glowGold)">PARAMETRIC MECHANICAL CAD</text>
 
-    <text x="0" y="212" font-family="'Inter', 'Segoe UI', 'Roboto', sans-serif" font-weight="500" font-size="12" fill="#8B949E" letter-spacing="1.5">RUST (PLANNED) · MARKDOWN · PYTHON 3.10+</text>
+    <text x="0" y="212" font-family="'Inter', 'Segoe UI', 'Roboto', sans-serif" font-weight="500" font-size="12" fill="#8B949E" letter-spacing="1.5">RUST · MARKDOWN · PYTHON 3.10+</text>
 
     <g transform="translate(0, 232)">
-      <rect x="0" y="0" width="124" height="22" rx="11" fill="#161B22" stroke="#30363D" stroke-width="1"/>
+      <rect x="0" y="0" width="62" height="22" rx="11" fill="#161B22" stroke="#30363D" stroke-width="1"/>
       <circle cx="11" cy="11" r="4" fill="#00E5FF">
         <animate attributeName="opacity" values="0.5;1;0.5" dur="2.0s" repeatCount="indefinite"/>
       </circle>
-      <text x="22" y="15" font-family="sans-serif" font-weight="600" font-size="10" fill="#C9D1D9" letter-spacing="0.5">RUST (PLANNED)</text>
-      <rect x="134" y="0" width="85" height="22" rx="11" fill="#161B22" stroke="#30363D" stroke-width="1"/>
-      <circle cx="145" cy="11" r="4" fill="#FFB300">
+      <text x="22" y="15" font-family="sans-serif" font-weight="600" font-size="10" fill="#C9D1D9" letter-spacing="0.5">RUST</text>
+      <rect x="72" y="0" width="85" height="22" rx="11" fill="#161B22" stroke="#30363D" stroke-width="1"/>
+      <circle cx="83" cy="11" r="4" fill="#FFB300">
         <animate attributeName="opacity" values="0.5;1;0.5" dur="2.2s" repeatCount="indefinite"/>
       </circle>
-      <text x="156" y="15" font-family="sans-serif" font-weight="600" font-size="10" fill="#C9D1D9" letter-spacing="0.5">MARKDOWN</text>
-      <rect x="229" y="0" width="111" height="22" rx="11" fill="#161B22" stroke="#30363D" stroke-width="1"/>
-      <circle cx="240" cy="11" r="4" fill="#00FF88">
+      <text x="94" y="15" font-family="sans-serif" font-weight="600" font-size="10" fill="#C9D1D9" letter-spacing="0.5">MARKDOWN</text>
+      <rect x="167" y="0" width="111" height="22" rx="11" fill="#161B22" stroke="#30363D" stroke-width="1"/>
+      <circle cx="178" cy="11" r="4" fill="#00FF88">
         <animate attributeName="opacity" values="0.5;1;0.5" dur="2.4s" repeatCount="indefinite"/>
       </circle>
-      <text x="251" y="15" font-family="sans-serif" font-weight="600" font-size="10" fill="#C9D1D9" letter-spacing="0.5">PYTHON 3.10+</text>
+      <text x="189" y="15" font-family="sans-serif" font-weight="600" font-size="10" fill="#C9D1D9" letter-spacing="0.5">PYTHON 3.10+</text>
     </g>
   </g>
 

@@ -6,20 +6,23 @@
   "role": "tool",
   "stack": "rust",
   "technologies": [
-    "Rust (planned)",
+    "Rust",
     "Markdown",
     "Python 3.10+"
   ],
   "deployment_target": "user-pc",
   "maturity": "scaffolding",
-  "evidence": "none",
+  "evidence": "host-test",
   "hardware_bound": false,
   "family": "PHOENIX",
   "parent": null,
-  "build": "python -I tools/ci_validate.py",
-  "notes": "Scaffolding v0.0.1: PLANNED, no code yet. Mechanical design for the PHOENIX family: parametric enclosures, chassis and heat sinks that live in the same project as the board. What exists is the base of every repository of the suite and the written scope, requirements, dependencies, threat model and decisions in docs/. The planned stack is Rust (a library with a command-line interface); nothing has been run on a machine.",
+  "build": "cargo build --release; cargo test; python -I tools/ci_validate.py",
+  "notes": "Scaffolding v0.0.1: early code. Mechanical design for the PHOENIX family: parametric enclosures, chassis and heat sinks that live in the same project as the board. What exists is the base of every repository of the suite, the written scope, requirements, dependencies, threat model and decisions in docs/, and a Rust library with a parametric enclosure (lengths with their own range, round holes, change operations that report conflicts, an OpenSCAD-style script and a fit check). It has only been tried on models made by its own tests; there is no command line, no STEP export and no heat sink, and nothing has been run on a machine.",
   "native_version": {
     "file": "VERSION",
     "pattern": "^(\\d+\\.\\d+\\.\\d+)"
-  }
+  },
+  "depends_on": [
+    "EH3D-COMMON"
+  ]
 }

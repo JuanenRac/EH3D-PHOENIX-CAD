@@ -6,7 +6,7 @@
 
 <p align="center">🇺🇸 <b>English</b> | <a href="README_spa.md">🇪🇸 Español</a> | <a href="README_fra.md">🇫🇷 Français</a> | <a href="README_ita.md">🇮🇹 Italiano</a> | <a href="README_deu.md">🇩🇪 Deutsch</a> | <a href="README_zho.md">🇨🇳 中文</a> | <a href="README_jpn.md">🇯🇵 日本語</a> | <a href="README_por.md">🇵🇹 Português</a></p>
 
-### EH3D-PHOENIX-CAD: planned as a parametric mechanical CAD focused on the design of enclosures, chassis and heat sinks. No code yet.
+### EH3D-PHOENIX-CAD: planned as a parametric mechanical CAD focused on the design of enclosures, chassis and heat sinks. A first model of enclosures exists as a library; nothing has been run on a machine.
 
 <p align="center">
   <img src="https://img.shields.io/badge/License-GPL%203.0--or--later-blue.svg" alt="GPL 3.0 or later">
@@ -19,7 +19,7 @@
 
 ---
 
-**Honesty check - what actually runs today:** nothing. EH3D-PHOENIX-CAD is only planned: it has no code, no tests of its own and has never run. What exists is the base every repository of the suite carries, plus the written scope, requirements, dependencies, threat model and decisions in `docs/`.
+**Honesty check - what actually runs today:** a Rust library without a window with a parametric enclosure: lengths in integer nanometres with their own range, round holes in the faces, structured change operations that report conflicts and leave the model unchanged, an OpenSCAD-style script and a fit check against the envelope of a board. It has 17 tests of its own and they pass on a computer. It has only been tried on models made by its own tests; nothing has been drawn, exported to STEP or run on a machine, and heat sinks, sketches and assemblies are only planned.
 
 ---
 
@@ -46,14 +46,14 @@ Each line is one part of this repository and the light says how far it is today.
 | Area | State | What it means here |
 |---|---|---|
 | Repository checks | 🟡 | The repository check, the check of the pictures and the 3 tests of the base run in CI and pass. |
-| Tests | 🟠 | Only the base has tests (3); the code of the repository will get its own as it is written. |
+| Tests | 🟡 | The 17 tests of the Rust library and the 3 of the base pass on a computer. They use only models made by the tests themselves. |
 | Real hardware | 🟠 | Not run on any machine or board: nothing here has been tried on hardware. |
-| Planned function | 🔴 | Not started: none of the planned function has been written. |
-| Requirements | 🔴 | Every requirement is only planned: none is implemented or verified. |
+| Planned function | 🟠 | Partly done: a parametric enclosure with holes, an OpenSCAD-style script and a fit check exist; STEP export, heat sinks, sketches and assemblies are not started. |
+| Requirements | 🟠 | 4 of 6 requirements are at prototype (the enclosure, the script, the change operations and the mechanical range), 2 are only planned and none is validated. |
 
 ## 🎯 Overview
 
-* **Planned:** EH3D-PHOENIX-CAD is meant to be a parametric mechanical CAD focused on the design of enclosures, chassis and heat sinks. It is planned as a library without a window, with a command-line interface and, when it applies, a kind of server task. None of this exists yet.
+* **Planned:** EH3D-PHOENIX-CAD is meant to be a parametric mechanical CAD focused on the design of enclosures, chassis and heat sinks, as a library without a window, with a command-line interface and, when it applies, a kind of server task. The library exists with a first parametric enclosure; the command line, the server task, the STEP export and the heat sinks do not exist yet.
 
 ## 🧩 Role in EH3D
 
@@ -80,7 +80,7 @@ python -I -m unittest discover -s tools -p "test_*.py"
 
 ## 🧪 Testing
 
-The base has 3 tests (`python -I -m unittest discover -s tools -p "test_*.py"`), and they pass. The CI runs the repository check, the check of the pictures and those tests.
+The Rust library has 17 tests (`cargo test`) and the base has 3 (`python -I -m unittest discover -s tools -p "test_*.py"`); all pass on a computer. The CI runs the repository check, the check of the pictures, the tests of the base and, for the Rust code, the format check, clippy with warnings as errors and the tests on Linux and Windows.
 
 ## 🏗️ Build & Release
 
@@ -103,7 +103,10 @@ EH3D-PHOENIX-CAD/
 │   ├── DEPENDENCIES.md THREAT_MODEL.md          relations with other repositories and the threat model
 │   ├── DECISIONS.md STATUS.md                   decisions that apply here and the honest status
 │   ├── NOT_YET.md RULES.md                      ideas left for later and rules for writing code
+│   ├── ERROR_CODES.md                           the diagnostic codes PHOENIX-<AREA>-<NNN>
 │   └── adr/                                     the accepted decision records
+├── Cargo.toml Cargo.lock                        the Rust workspace and its locked dependencies
+├── crates/                                      the mechanical model: enclosure, operations, script, fit check
 ├── AGENTS.md                                    rules for anyone who changes the repository
 ├── tools/                                       the repository check, its tests and the picture tools
 ├── images/                                      banner and the Architecture and Repository Structure pictures
@@ -121,11 +124,11 @@ EH3D-PHOENIX-CAD/
 
 **Known limits today**
 
-* Planned only: there is no code, nothing has been run and no requirement is implemented.
+* Early code: only the model of an enclosure exists, tried on models made by its own tests; nothing has been run on a machine and no requirement is validated.
 
 **Next**
 
-* Wait until the contracts this project depends on are accepted (see `docs/DEPENDENCIES.md`), then write the first version with tests and replace the status rows with real results.
+* Write the mechanical domain of the project format with the board tool, then the change operations that come from it; after that the STEP export, the heat sinks and the command line, each with its tests.
 
 ## 🌍 Languages
 
@@ -134,7 +137,8 @@ README and texts exist in English, Spanish, French, Italian, German, Chinese, Ja
 ## 🔗 Related Projects
 
 * [EH3D-DOCS](https://github.com/JuanenRac/EH3D-DOCS): the map of the suite, its architecture, the conventions and the shared checks
-* Planned relations, not built yet (EH3D-PHOENIX-PCB, EH3D-COMMON, EH3D-THERMAL-LAB): see [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)
+* [EH3D-COMMON](https://github.com/JuanenRac/EH3D-COMMON): the object identity (UUID v7) that the holes use; later the project container and the diagnostic crate
+* Planned relations, not built yet (EH3D-PHOENIX-PCB, EH3D-THERMAL-LAB): see [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)
 
 ## 📚 Documentation
 

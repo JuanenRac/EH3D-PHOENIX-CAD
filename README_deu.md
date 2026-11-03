@@ -6,7 +6,7 @@
 
 <p align="center"><a href="README.md">🇺🇸 English</a> | <a href="README_spa.md">🇪🇸 Español</a> | <a href="README_fra.md">🇫🇷 Français</a> | <a href="README_ita.md">🇮🇹 Italiano</a> | 🇩🇪 <b>Deutsch</b> | <a href="README_zho.md">🇨🇳 中文</a> | <a href="README_jpn.md">🇯🇵 日本語</a> | <a href="README_por.md">🇵🇹 Português</a></p>
 
-### EH3D-PHOENIX-CAD: geplant als ein parametrisches mechanisches CAD für den Entwurf von Gehäusen, Chassis und Kühlkörpern. Noch kein Code.
+### EH3D-PHOENIX-CAD: geplant als ein parametrisches mechanisches CAD für den Entwurf von Gehäusen, Chassis und Kühlkörpern. Ein erstes Modell für Gehäuse existiert als Bibliothek; nichts wurde auf einer Maschine ausgeführt.
 
 <p align="center">
   <img src="https://img.shields.io/badge/License-GPL%203.0--or--later-blue.svg" alt="GPL 3.0 or later">
@@ -19,7 +19,7 @@
 
 ---
 
-**Ehrlichkeitscheck - was heute tatsächlich läuft:** nichts. EH3D-PHOENIX-CAD ist nur geplant: Es gibt keinen Code, keine eigenen Tests, und es ist nie gelaufen. Vorhanden sind die Basis, die jedes Repository der Suite trägt, sowie Umfang, Anforderungen, Abhängigkeiten, Bedrohungsmodell und Entscheidungen in `docs/`.
+**Ehrlichkeitscheck - was heute tatsächlich läuft:** eine Rust-Bibliothek ohne Fenster mit einem parametrischen Gehäuse: Längen in ganzzahligen Nanometern mit eigenem Bereich, runde Löcher in den Flächen, strukturierte Änderungsoperationen, die Konflikte melden und das Modell unverändert lassen, ein Skript im OpenSCAD-Stil und eine Passprüfung gegen die Hüllgröße einer Platine. Sie hat 17 eigene Tests, die auf einem Computer bestehen. Sie wurde nur mit Modellen aus ihren eigenen Tests erprobt; nichts wurde gezeichnet, nach STEP exportiert oder auf einer Maschine ausgeführt, und Kühlkörper, Skizzen und Baugruppen sind nur geplant.
 
 ---
 
@@ -46,14 +46,14 @@ Jede Zeile ist ein Teil dieses Repositorys, und die Ampel sagt, wie weit er heut
 | Bereich | Stand | Was das hier bedeutet |
 |---|---|---|
 | Repository-Prüfungen | 🟡 | Die Repository-Prüfung, die Prüfung der Bilder und die 3 Tests der Basis laufen in der CI und bestehen. |
-| Tests | 🟠 | Nur die Basis hat Tests (3); der Code des Repositorys bekommt seine eigenen, sobald er geschrieben wird. |
+| Tests | 🟡 | Die 17 Tests der Rust-Bibliothek und die 3 der Basis bestehen auf einem Computer. Sie nutzen nur Modelle, die die Tests selbst erzeugen. |
 | Echte Hardware | 🟠 | Auf keiner Maschine und keiner Platine ausgeführt: nichts hier wurde auf Hardware ausprobiert. |
-| Geplante Funktion | 🔴 | Nicht begonnen: Von der geplanten Funktion ist nichts geschrieben. |
-| Anforderungen | 🔴 | Alle Anforderungen sind nur geplant: Keine ist umgesetzt oder geprüft. |
+| Geplante Funktion | 🟠 | Teilweise fertig: ein parametrisches Gehäuse mit Löchern, ein Skript im OpenSCAD-Stil und eine Passprüfung existieren; STEP-Export, Kühlkörper, Skizzen und Baugruppen sind nicht begonnen. |
+| Anforderungen | 🟠 | 4 von 6 Anforderungen sind als Prototyp (Gehäuse, Skript, Änderungsoperationen und mechanischer Bereich), 2 nur geplant und keine ist validiert. |
 
 ## 🎯 Überblick
 
-* **Geplant:** EH3D-PHOENIX-CAD soll ein parametrisches mechanisches CAD für den Entwurf von Gehäusen, Chassis und Kühlkörpern werden. Vorgesehen ist eine Bibliothek ohne Fenster mit Kommandozeile und, wo es passt, einer Art Server-Aufgabe. Nichts davon existiert bisher.
+* **Geplant:** EH3D-PHOENIX-CAD soll ein parametrisches mechanisches CAD für den Entwurf von Gehäusen, Chassis und Kühlkörpern werden, als Bibliothek ohne Fenster, mit Kommandozeile und, wo es passt, einer Art Serveraufgabe. Die Bibliothek existiert mit einem ersten parametrischen Gehäuse; die Kommandozeile, die Serveraufgabe, der STEP-Export und die Kühlkörper gibt es noch nicht.
 
 ## 🧩 Rolle in EH3D
 
@@ -80,7 +80,7 @@ python -I -m unittest discover -s tools -p "test_*.py"
 
 ## 🧪 Tests
 
-Die Basis hat 3 Tests (`python -I -m unittest discover -s tools -p "test_*.py"`), und sie bestehen. Die CI führt die Repository-Prüfung, die Prüfung der Bilder und diese Tests aus.
+Die Rust-Bibliothek hat 17 Tests (`cargo test`) und die Basis hat 3 (`python -I -m unittest discover -s tools -p "test_*.py"`); alle bestehen auf einem Computer. Die CI führt die Repository-Prüfung, die Prüfung der Bilder, die Tests der Basis und für den Rust-Code die Formatprüfung, clippy mit Warnungen als Fehlern und die Tests unter Linux und Windows aus.
 
 ## 🏗️ Build und Veröffentlichung
 
@@ -103,7 +103,10 @@ EH3D-PHOENIX-CAD/
 │   ├── DEPENDENCIES.md THREAT_MODEL.md          Beziehungen zu anderen Repositories und Bedrohungsmodell
 │   ├── DECISIONS.md STATUS.md                   hier geltende Entscheidungen und ehrlicher Status
 │   ├── NOT_YET.md RULES.md                      Ideen für später und Regeln zum Schreiben von Code
+│   ├── ERROR_CODES.md                           die Diagnosecodes PHOENIX-<BEREICH>-<NNN>
 │   └── adr/                                     die angenommenen Entscheidungsprotokolle
+├── Cargo.toml Cargo.lock                        der Rust-Workspace und seine festgelegten Abhängigkeiten
+├── crates/                                      das mechanische Modell: Gehäuse, Operationen, Skript, Passprüfung
 ├── AGENTS.md                                    Regeln für alle, die das Repository ändern
 ├── tools/                                       die Repository-Prüfung, ihre Tests und die Bild-Werkzeuge
 ├── images/                                      Banner und die Bilder von Architektur und Repository-Struktur
@@ -121,11 +124,11 @@ EH3D-PHOENIX-CAD/
 
 **Bekannte Grenzen heute**
 
-* Nur geplant: Es gibt keinen Code, nichts wurde ausgeführt und keine Anforderung ist umgesetzt.
+* Früher Code: Es gibt nur das Modell eines Gehäuses, erprobt mit Modellen aus seinen eigenen Tests; nichts wurde auf einer Maschine ausgeführt und keine Anforderung ist validiert.
 
 **Als Nächstes**
 
-* Warten, bis die Verträge, von denen dieses Projekt abhängt, akzeptiert sind (siehe `docs/DEPENDENCIES.md`), dann die erste Version mit Tests schreiben und die Statuszeilen durch echte Ergebnisse ersetzen.
+* Die mechanische Domäne des Projektformats gemeinsam mit dem Platinenwerkzeug schreiben, danach die Änderungsoperationen, die daraus kommen; dann der STEP-Export, die Kühlkörper und die Kommandozeile, jeweils mit Tests.
 
 ## 🌍 Sprachen
 
@@ -134,7 +137,8 @@ README und Texte gibt es auf Englisch, Spanisch, Französisch, Italienisch, Deut
 ## 🔗 Verwandte Projekte
 
 * [EH3D-DOCS](https://github.com/JuanenRac/EH3D-DOCS): die Karte der Suite, ihre Architektur, die Konventionen und die gemeinsamen Prüfungen
-* Geplante Beziehungen, noch nicht gebaut (EH3D-PHOENIX-PCB, EH3D-COMMON, EH3D-THERMAL-LAB): siehe [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)
+* [EH3D-COMMON](https://github.com/JuanenRac/EH3D-COMMON): die Objektidentität (UUID v7), die die Löcher verwenden; später der Projektcontainer und das Diagnose-Crate
+* Geplante Beziehungen, noch nicht gebaut (EH3D-PHOENIX-PCB, EH3D-THERMAL-LAB): siehe [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)
 
 ## 📚 Dokumentation
 

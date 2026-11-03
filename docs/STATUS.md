@@ -2,11 +2,11 @@
 
 ## Current state
 
-EH3D-PHOENIX-CAD is planned. Version 0.0.1 holds only the base that every repository of the suite carries (manifest, README files in eight languages, changelog, CI, shared checks) and the written scope, requirements, dependencies, threat model and decisions. There is no code, nothing has been run on a machine, and no requirement is implemented.
+EH3D-PHOENIX-CAD is early code. Beside the base that every repository of the suite carries (manifest, README files in eight languages, changelog, CI, shared checks) and the written scope, requirements, dependencies, threat model and decisions, it has a Rust library, `eh3d-phoenix-cad`: lengths in integer nanometres with their own range, a parametric enclosure with round holes in its faces, structured change operations that report conflicts and leave the model unchanged (each with an exact inverse), an OpenSCAD-style script, and a fit check of the envelope of a board. It has only been tried on models made by its own tests. There is no command line, no server task, no STEP export, no heat sink, no sketch and no assembly, and nothing has been run on a machine.
 
 ## Capabilities
 
-The official state of each capability is in REQUIREMENTS.md: 6 requirements, all `planned`. This page never states a state that REQUIREMENTS.md does not.
+The official state of each capability is in REQUIREMENTS.md: 6 requirements: 4 `prototype` (FCAD-001, FCAD-003, FCAD-004, FCAD-006) and 2 `planned`. This page never states a state that REQUIREMENTS.md does not.
 
 ## Open questions
 
@@ -20,4 +20,4 @@ The official state of each capability is in REQUIREMENTS.md: 6 requirements, all
 
 ## Known technical debt and omitted tests
 
-None yet. The only tests are those of the base (the repository check and the checks of the two README pictures).
+The holes carry the shared object identity (UUID v7 of EH3D-COMMON), but the mechanical domain of the project format is not written, so nothing stores or exchanges them yet. The script has not been opened in OpenSCAD and nothing is compared with a reference CAD program.

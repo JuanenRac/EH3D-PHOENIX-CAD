@@ -90,6 +90,19 @@
           }
         },
         {
+          "name": "ERROR_CODES.md",
+          "desc": {
+            "en": "the diagnostic codes PHOENIX-<AREA>-<NNN>",
+            "es": "los códigos de diagnóstico PHOENIX-<ÁREA>-<NNN>",
+            "de": "die Diagnosecodes PHOENIX-<BEREICH>-<NNN>",
+            "fr": "les codes de diagnostic PHOENIX-<ZONE>-<NNN>",
+            "it": "i codici di diagnostica PHOENIX-<AREA>-<NNN>",
+            "ja": "診断コード PHOENIX-<領域>-<NNN>",
+            "zh": "诊断代码 PHOENIX-<领域>-<NNN>",
+            "pt": "os códigos de diagnóstico PHOENIX-<ÁREA>-<NNN>"
+          }
+        },
+        {
           "desc": {
             "en": "the accepted decision records",
             "es": "los registros de decisiones aceptadas",
@@ -129,6 +142,33 @@
       "accent": "a",
       "kind": "group",
       "rows": [
+        {
+          "name": "Cargo.toml  Cargo.lock",
+          "tree_name": "Cargo.toml Cargo.lock",
+          "desc": {
+            "en": "the Rust workspace and its locked dependencies",
+            "es": "el espacio de trabajo de Rust y sus dependencias fijadas",
+            "de": "der Rust-Workspace und seine festgelegten Abhängigkeiten",
+            "fr": "l'espace de travail Rust et ses dépendances verrouillées",
+            "it": "il workspace Rust e le sue dipendenze bloccate",
+            "ja": "Rust ワークスペースと固定された依存関係",
+            "zh": "Rust 工作区及其锁定的依赖",
+            "pt": "o espaço de trabalho Rust e as suas dependências fixadas"
+          }
+        },
+        {
+          "name": "crates/",
+          "desc": {
+            "en": "the mechanical model: enclosure, operations, script, fit check",
+            "es": "el modelo mecánico: caja, operaciones, script, comprobación de encaje",
+            "de": "das mechanische Modell: Gehäuse, Operationen, Skript, Passprüfung",
+            "fr": "le modèle mécanique : boîtier, opérations, script, contrôle d'ajustement",
+            "it": "il modello meccanico: contenitore, operazioni, script, controllo di alloggiamento",
+            "ja": "機械モデル：筐体、操作、スクリプト、収まりの検査",
+            "zh": "机械模型：外壳、操作、脚本、装配检查",
+            "pt": "o modelo mecânico: caixa, operações, script, verificação de encaixe"
+          }
+        },
         {
           "desc": {
             "en": "rules for anyone who changes the repository",

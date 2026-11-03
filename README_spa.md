@@ -6,7 +6,7 @@
 
 <p align="center"><a href="README.md">🇺🇸 English</a> | 🇪🇸 <b>Español</b> | <a href="README_fra.md">🇫🇷 Français</a> | <a href="README_ita.md">🇮🇹 Italiano</a> | <a href="README_deu.md">🇩🇪 Deutsch</a> | <a href="README_zho.md">🇨🇳 中文</a> | <a href="README_jpn.md">🇯🇵 日本語</a> | <a href="README_por.md">🇵🇹 Português</a></p>
 
-### EH3D-PHOENIX-CAD: planificado como un CAD mecánico paramétrico centrado en el diseño de cajas, chasis y disipadores térmicos. Todavía sin código.
+### EH3D-PHOENIX-CAD: planificado como un CAD mecánico paramétrico centrado en el diseño de cajas, chasis y disipadores térmicos. Existe un primer modelo de cajas como biblioteca; no se ha ejecutado nada en una máquina.
 
 <p align="center">
   <img src="https://img.shields.io/badge/License-GPL%203.0--or--later-blue.svg" alt="GPL 3.0 or later">
@@ -19,7 +19,7 @@
 
 ---
 
-**Comprobación de honestidad - lo que se ejecuta hoy:** nada. EH3D-PHOENIX-CAD solo está planificado: no tiene código, ni pruebas propias, y nunca se ha ejecutado. Lo que existe es la base que lleva todo repositorio de la suite, más el alcance, los requisitos, las dependencias, el modelo de amenazas y las decisiones escritos en `docs/`.
+**Comprobación de honestidad - lo que se ejecuta hoy:** una biblioteca de Rust sin ventana con una caja paramétrica: longitudes en nanómetros enteros con su propio rango, agujeros redondos en las caras, operaciones de cambio estructuradas que informan de los conflictos y dejan el modelo intacto, un script al estilo OpenSCAD y una comprobación de encaje contra la envolvente de una placa. Tiene 17 pruebas propias y pasan en un ordenador. Solo se ha probado con modelos hechos por sus propias pruebas; no se ha dibujado nada, ni exportado a STEP ni ejecutado en una máquina, y los disipadores, los bocetos y los ensamblajes solo están planificados.
 
 ---
 
@@ -46,14 +46,14 @@ Cada línea es una parte de este repositorio y la luz dice hasta dónde llega ho
 | Área | Estado | Qué significa aquí |
 |---|---|---|
 | Comprobaciones del repositorio | 🟡 | La comprobación del repositorio, la de las imágenes y las 3 pruebas de la base se ejecutan en el CI y pasan. |
-| Pruebas | 🟠 | Solo la base tiene pruebas (3); el código del repositorio tendrá las suyas a medida que se escriba. |
+| Pruebas | 🟡 | Las 17 pruebas de la biblioteca de Rust y las 3 de la base pasan en un ordenador. Solo usan modelos hechos por las propias pruebas. |
 | Hardware real | 🟠 | No se ha ejecutado en ninguna máquina ni placa: nada de aquí se ha probado en hardware. |
-| Función planificada | 🔴 | Sin empezar: nada de la función planificada está escrito. |
-| Requisitos | 🔴 | Todos los requisitos están solo planificados: ninguno está implementado ni verificado. |
+| Función planificada | 🟠 | Hecho en parte: existen una caja paramétrica con agujeros, un script al estilo OpenSCAD y una comprobación de encaje; la exportación a STEP, los disipadores, los bocetos y los ensamblajes no se han empezado. |
+| Requisitos | 🟠 | 4 de 6 requisitos están en prototipo (la caja, el script, las operaciones de cambio y el rango mecánico), 2 solo están planificados y ninguno está validado. |
 
 ## 🎯 Resumen
 
-* **Planificado:** EH3D-PHOENIX-CAD pretende ser un CAD mecánico paramétrico centrado en el diseño de cajas, chasis y disipadores térmicos. Se planea como una biblioteca sin ventana, con interfaz de línea de comandos y, cuando proceda, un tipo de tarea del servidor. Nada de esto existe todavía.
+* **Planificado:** EH3D-PHOENIX-CAD quiere ser un CAD mecánico paramétrico centrado en el diseño de cajas, chasis y disipadores, como una biblioteca sin ventana, con una interfaz de línea de comandos y, cuando proceda, un tipo de tarea del servidor. La biblioteca existe con una primera caja paramétrica; la línea de comandos, la tarea del servidor, la exportación a STEP y los disipadores todavía no existen.
 
 ## 🧩 Papel en EH3D
 
@@ -80,7 +80,7 @@ python -I -m unittest discover -s tools -p "test_*.py"
 
 ## 🧪 Pruebas
 
-La base tiene 3 pruebas (`python -I -m unittest discover -s tools -p "test_*.py"`), y pasan. El CI ejecuta la comprobación del repositorio, la de las imágenes y esas pruebas.
+La biblioteca de Rust tiene 17 pruebas (`cargo test`) y la base tiene 3 (`python -I -m unittest discover -s tools -p "test_*.py"`); todas pasan en un ordenador. El CI ejecuta la comprobación del repositorio, la de las imágenes, las pruebas de la base y, para el código de Rust, la comprobación de formato, clippy con advertencias como errores y las pruebas en Linux y Windows.
 
 ## 🏗️ Compilación y publicación
 
@@ -103,7 +103,10 @@ EH3D-PHOENIX-CAD/
 │   ├── DEPENDENCIES.md THREAT_MODEL.md          relaciones con otros repositorios y modelo de amenazas
 │   ├── DECISIONS.md STATUS.md                   decisiones que se aplican aquí y estado honesto
 │   ├── NOT_YET.md RULES.md                      ideas para más adelante y reglas para escribir código
+│   ├── ERROR_CODES.md                           los códigos de diagnóstico PHOENIX-<ÁREA>-<NNN>
 │   └── adr/                                     los registros de decisiones aceptadas
+├── Cargo.toml Cargo.lock                        el espacio de trabajo de Rust y sus dependencias fijadas
+├── crates/                                      el modelo mecánico: caja, operaciones, script, comprobación de encaje
 ├── AGENTS.md                                    reglas para quien cambia el repositorio
 ├── tools/                                       la comprobación del repositorio, sus pruebas y las herramientas de las imágenes
 ├── images/                                      banner y las imágenes de Arquitectura y Estructura del repositorio
@@ -121,11 +124,11 @@ EH3D-PHOENIX-CAD/
 
 **Límites conocidos hoy**
 
-* Solo planificado: no hay código, no se ha ejecutado nada y ningún requisito está implementado.
+* Código inicial: solo existe el modelo de una caja, probado con modelos hechos por sus propias pruebas; no se ha ejecutado nada en una máquina y ningún requisito está validado.
 
 **Siguiente**
 
-* Esperar a que se acepten los contratos de los que depende este proyecto (véase `docs/DEPENDENCIES.md`), escribir después la primera versión con pruebas y sustituir las filas de estado por resultados reales.
+* Escribir el dominio mecánico del formato de proyecto junto con la herramienta de placas y después las operaciones de cambio que vienen de él; luego la exportación a STEP, los disipadores y la línea de comandos, cada uno con sus pruebas.
 
 ## 🌍 Idiomas
 
@@ -134,7 +137,8 @@ El README y los textos existen en inglés, español, francés, italiano, alemán
 ## 🔗 Proyectos relacionados
 
 * [EH3D-DOCS](https://github.com/JuanenRac/EH3D-DOCS): el mapa de la suite, su arquitectura, las convenciones y las comprobaciones compartidas
-* Relaciones planificadas, aún sin construir (EH3D-PHOENIX-PCB, EH3D-COMMON, EH3D-THERMAL-LAB): véase [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)
+* [EH3D-COMMON](https://github.com/JuanenRac/EH3D-COMMON): la identidad de objeto (UUID v7) que usan los agujeros; más adelante el contenedor de proyecto y la crate de diagnóstico
+* Relaciones planificadas, aún sin construir (EH3D-PHOENIX-PCB, EH3D-THERMAL-LAB): véase [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md)
 
 ## 📚 Documentación
 
