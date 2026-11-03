@@ -3,6 +3,7 @@
 All notable changes to this project are documented here.
 
 ## [Unreleased]
+- **Shared checks updated:** the validator also compares the badge and the Version row of the README with the manifest, fails when one of its checks cannot run, and the CHANGELOG step of the workflow reads the base branch from the environment.
 
 - Identify the holes with the object identity of EH3D-COMMON (`ObjectId`, UUID v7) like the objects of the board tool; this repository now depends on EH3D-COMMON (`depends_on` of the manifest and the tag named in `SIBLING_REFS` of the CI).
 - Add the Rust workspace and the crate `eh3d-phoenix-cad`: lengths in integer nanometres with their own range (2^40, larger than the board model), a parametric enclosure with round holes in its faces, structured change operations with an exact inverse that report conflicts (a hole outside its face, holes too close, an id used twice) and leave the model unchanged, an OpenSCAD-style script that is the same text for the same model, a fit check of the envelope of a board, and the codes `PHOENIX-CAD-001` to `PHOENIX-CAD-005` in `docs/ERROR_CODES.md`.
