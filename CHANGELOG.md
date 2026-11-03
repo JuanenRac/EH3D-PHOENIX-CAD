@@ -3,6 +3,8 @@
 All notable changes to this project are documented here.
 
 ## [Unreleased]
+- Add `eh3d_phoenix_cad::step::to_step`: the enclosure as a STEP file (a boundary representation with the inner space as a void and a cylindrical face for each hole), the same text for the same model, tested for its structure (header, references, counts); no CAD program has opened it.
+- Correct the test counter of the README files to 27 tests, 24 of the Rust library and 3 of the base.
 
 ## [0.0.2] - Parametric box with holes, shared object identifiers, reversible operations and the fit check against a board
 

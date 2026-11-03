@@ -5,10 +5,12 @@
 //! * [`enclosure`]: a parametric box with holes in its faces (each with the object identity of
 //!   the suite, a UUID v7) and the structured operations that change it. An operation that is refused leaves the model exactly as it was;
 //! * [`scad`]: the model as an OpenSCAD-style script, the same text for the same model;
+//! * [`step`]: the model as a STEP file (a boundary representation with the inner space as a void),
+//!   the same text for the same model, checked for its structure only;
 //! * [`fit`]: whether an envelope (the outline of a board and its tallest part) fits inside.
 //!
 //! Every failure has a stable code `PHOENIX-CAD-<NNN>` ([`CadError::code`], [`REGISTRY`]).
-//! Nothing here draws, meshes or exports STEP; those are later steps.
+//! Nothing here draws or meshes; the STEP file has not been opened in a CAD program.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -16,6 +18,7 @@
 pub mod enclosure;
 pub mod fit;
 pub mod scad;
+pub mod step;
 
 pub use enclosure::{Enclosure, EnclosureParams, Face, Hole, Id, Operation};
 pub use fit::{check_fit, Envelope, FitReport};
