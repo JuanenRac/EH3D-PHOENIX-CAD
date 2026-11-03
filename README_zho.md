@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/License-GPL%203.0--or--later-blue.svg" alt="GPL 3.0 or later">
   <img src="https://img.shields.io/badge/Stack-Markdown%20%2B%20Python-blue.svg" alt="Markdown and Python">
   <img src="https://img.shields.io/badge/Languages-8-00E5FF.svg" alt="Languages">
-  <img src="https://img.shields.io/badge/Tests-3-2EA043.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-20-2EA043.svg" alt="Tests">
   <img src="https://img.shields.io/badge/Version-0.0.1-0f6cbd.svg" alt="Version">
   <img src="https://img.shields.io/badge/Maturity-scaffolding-FFB020.svg" alt="Maturity">
 </p>
@@ -30,7 +30,7 @@
 |---|---|
 | 版本 | `0.0.1` |
 | 成熟度 | 脚手架 |
-| 测试 | 3 |
+| 测试 | 20 |
 | 技术栈 | Markdown, Python 3.10+ |
 | 真实硬件 | 尚未在硬件上运行 |
 

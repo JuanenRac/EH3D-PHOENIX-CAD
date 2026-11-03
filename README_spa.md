@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/License-GPL%203.0--or--later-blue.svg" alt="GPL 3.0 or later">
   <img src="https://img.shields.io/badge/Stack-Markdown%20%2B%20Python-blue.svg" alt="Markdown and Python">
   <img src="https://img.shields.io/badge/Languages-8-00E5FF.svg" alt="Languages">
-  <img src="https://img.shields.io/badge/Tests-3-2EA043.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-20-2EA043.svg" alt="Tests">
   <img src="https://img.shields.io/badge/Version-0.0.1-0f6cbd.svg" alt="Version">
   <img src="https://img.shields.io/badge/Maturity-scaffolding-FFB020.svg" alt="Maturity">
 </p>
@@ -30,7 +30,7 @@
 |---|---|
 | Versión | `0.0.1` |
 | Madurez | Andamiaje |
-| Pruebas | 3 |
+| Pruebas | 20 |
 | Pila tecnológica | Markdown, Python 3.10+ |
 | En hardware real | Aún no se ha ejecutado en hardware |
 
