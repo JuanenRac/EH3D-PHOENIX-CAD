@@ -102,7 +102,9 @@ EH3D-PHOENIX-CAD/
 │   ├── SCOPE.md REQUIREMENTS.md                 计划内容及其需求
 │   ├── DEPENDENCIES.md THREAT_MODEL.md          与其他仓库的关系和威胁模型
 │   ├── DECISIONS.md STATUS.md                   适用的决策和如实的状态
-│   └── NOT_YET.md RULES.md                      留待以后的想法和编写代码的规则
+│   ├── NOT_YET.md RULES.md                      留待以后的想法和编写代码的规则
+│   └── adr/                                     已接受的决策记录
+├── AGENTS.md                                    修改仓库的人需遵守的规则
 ├── tools/                                       仓库检查、其测试以及图片工具
 ├── images/                                      横幅图以及架构和仓库结构图片
 ├── .github/                                     CI 与仪表板工作流、Issue 和 PR 模板

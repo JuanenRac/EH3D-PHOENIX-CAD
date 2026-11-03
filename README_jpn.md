@@ -102,7 +102,9 @@ EH3D-PHOENIX-CAD/
 │   ├── SCOPE.md REQUIREMENTS.md                 計画内容とその要件
 │   ├── DEPENDENCIES.md THREAT_MODEL.md          他のリポジトリとの関係と脅威モデル
 │   ├── DECISIONS.md STATUS.md                   適用される決定事項と正直な状況
-│   └── NOT_YET.md RULES.md                      後回しにしたアイデアとコードの記述規則
+│   ├── NOT_YET.md RULES.md                      後回しにしたアイデアとコードの記述規則
+│   └── adr/                                     承認された決定の記録
+├── AGENTS.md                                    リポジトリを変更する人のための規則
 ├── tools/                                       リポジトリ チェック、そのテスト、画像のツール
 ├── images/                                      バナーとアーキテクチャ・リポジトリ構成の図
 ├── .github/                                     CI とダッシュボードのワークフロー、Issue と PR のテンプレート

@@ -88,6 +88,19 @@
             "zh": "留待以后的想法和编写代码的规则",
             "pt": "ideias para mais tarde e regras para escrever código"
           }
+        },
+        {
+          "desc": {
+            "en": "the accepted decision records",
+            "es": "los registros de decisiones aceptadas",
+            "de": "die angenommenen Entscheidungsprotokolle",
+            "fr": "les décisions acceptées",
+            "it": "i registri delle decisioni accettate",
+            "ja": "承認された決定の記録",
+            "zh": "已接受的决策记录",
+            "pt": "os registos das decisões aceites"
+          },
+          "name": "adr/"
         }
       ],
       "sub": {
@@ -116,6 +129,19 @@
       "accent": "a",
       "kind": "group",
       "rows": [
+        {
+          "desc": {
+            "en": "rules for anyone who changes the repository",
+            "es": "reglas para quien cambia el repositorio",
+            "de": "Regeln für alle, die das Repository ändern",
+            "fr": "règles pour quiconque modifie le dépôt",
+            "it": "regole per chi modifica il repository",
+            "ja": "リポジトリを変更する人のための規則",
+            "zh": "修改仓库的人需遵守的规则",
+            "pt": "regras para quem altera o repositório"
+          },
+          "name": "AGENTS.md"
+        },
         {
           "desc": {
             "en": "the repository check, its tests and the picture tools",

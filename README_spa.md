@@ -102,7 +102,9 @@ EH3D-PHOENIX-CAD/
 │   ├── SCOPE.md REQUIREMENTS.md                 lo planificado y sus requisitos
 │   ├── DEPENDENCIES.md THREAT_MODEL.md          relaciones con otros repositorios y modelo de amenazas
 │   ├── DECISIONS.md STATUS.md                   decisiones que se aplican aquí y estado honesto
-│   └── NOT_YET.md RULES.md                      ideas para más adelante y reglas para escribir código
+│   ├── NOT_YET.md RULES.md                      ideas para más adelante y reglas para escribir código
+│   └── adr/                                     los registros de decisiones aceptadas
+├── AGENTS.md                                    reglas para quien cambia el repositorio
 ├── tools/                                       la comprobación del repositorio, sus pruebas y las herramientas de las imágenes
 ├── images/                                      banner y las imágenes de Arquitectura y Estructura del repositorio
 ├── .github/                                     flujos de CI y del panel, plantillas de issues y pull requests
