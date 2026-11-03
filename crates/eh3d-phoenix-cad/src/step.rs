@@ -120,8 +120,11 @@ fn hole_place(e: &Enclosure, h: &crate::enclosure::Hole) -> (P, (i8, i8, i8), i6
     ((2 * at.0, 2 * at.1, 2 * at.2), n, t)
 }
 
+/// One face of the box: which face, its four corners in order and the direction its normal points to.
+type FaceSpec = (Face, [usize; 4], (i8, i8, i8));
+
 /// The corners of a box are numbered `x + 2 y + 4 z` with 0 for the minimum and 1 for the maximum.
-const FACES: [(Face, [usize; 4], (i8, i8, i8)); 6] = [
+const FACES: [FaceSpec; 6] = [
     (Face::Bottom, [0, 2, 3, 1], (0, 0, -1)),
     (Face::Top, [4, 5, 7, 6], (0, 0, 1)),
     (Face::Front, [0, 1, 5, 4], (0, -1, 0)),
