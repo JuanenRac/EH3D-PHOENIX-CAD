@@ -3,6 +3,7 @@
 All notable changes to this project are documented here.
 
 ## [Unreleased]
+- Add `eh3d_phoenix_cad::mass`: the volume of the material, the volume of the holes (marked as not exact when a hole reaches a corner, the floor or the lid) and the mass for a density, in integers, with a table of densities in the settings file.
 - Add `eh3d_phoenix_cad::store`: saving a file through a temporary file that is flushed and renamed into place, with as many numbered copies as the settings say, and loading a file under a size limit; code `PHOENIX-CAD-012`.
 - Add `eh3d_phoenix_cad::config` and `eh3d_phoenix_cad::printer`: the settings file with its shipped defaults (copies kept, undo depth, unit shown, printer compensation and a table of metric screws, all outside the code) and the model for fabrication whose holes are widened by the profile of the printer; code `PHOENIX-CAD-011`.
 - Add `eh3d_phoenix_cad::body`: the recipe of an enclosure as a body with a tip, steps that can be suppressed, the state of each step (valid, suppressed, failed with its code, after the tip) and an undo and redo history in named transactions that are all or nothing.

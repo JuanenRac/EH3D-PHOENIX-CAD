@@ -153,6 +153,8 @@ pub struct Settings {
     pub counterbore_extra: Length,
     /// The screws by name (`M3`), in order of name.
     pub screws: BTreeMap<String, Screw>,
+    /// The density in kilograms per cubic metre of each material by name (`PLA`).
+    pub materials: BTreeMap<String, u32>,
 }
 
 impl Settings {
@@ -225,6 +227,19 @@ impl Settings {
             }
             screws.insert(name.to_string(), screw);
         }
+        let mut materials = BTreeMap::new();
+        for key in c.keys() {
+            if let Some(name) = key
+                .strip_prefix("material.")
+                .and_then(|rest| rest.strip_suffix(".density_kg_m3"))
+            {
+                let density = c.number(key)?;
+                if density == 0 {
+                    return Err(CadError::Config(format!("{key} must be positive")));
+                }
+                materials.insert(name.to_string(), density);
+            }
+        }
         Ok(Settings {
             backups,
             undo_depth,
@@ -233,6 +248,7 @@ impl Settings {
             printer,
             counterbore_extra,
             screws,
+            materials,
         })
     }
 }
@@ -254,6 +270,8 @@ mod tests {
         assert_eq!(s.counterbore_extra.get(), 500_000);
         let names: Vec<&str> = s.screws.keys().map(String::as_str).collect();
         assert_eq!(names, vec!["M2", "M2.5", "M3", "M4", "M5", "M6", "M8"]);
+        assert_eq!(s.materials["PLA"], 1240);
+        assert!(s.materials.values().all(|d| *d > 0));
     }
 
     #[test]
@@ -310,6 +328,7 @@ mod tests {
             "[units]\ndecimals = 13\n",
             "[printer]\nfit_clearance = 0.2\n",
             "[screw.M3]\nclearance = 0 mm\n",
+            "[material.PLA]\ndensity_kg_m3 = 0\n",
         ] {
             let err = Settings::with_user_config(text).unwrap_err();
             assert_eq!(err.code(), "PHOENIX-CAD-011", "{text:?}");
