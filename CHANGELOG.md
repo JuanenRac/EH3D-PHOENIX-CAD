@@ -3,6 +3,7 @@
 All notable changes to this project are documented here.
 
 ## [Unreleased]
+- Add `eh3d_phoenix_cad::vars`: named variables for the master dimensions, the binding of the parameters of an enclosure to them, families of variants (small, medium, large) and a hash of the parameters for the graph; code `PHOENIX-CAD-017`.
 - Add `eh3d_phoenix_cad::graph`: a graph of dependencies between objects with a fixed order of calculation, cycles refused, a recalculation that only does what changed (with saved results keyed by the parameters and the inputs), failures that pass to the dependents without stopping the rest, and a Graphviz dump; codes `PHOENIX-CAD-013` to `PHOENIX-CAD-016`.
 - Add `eh3d_phoenix_cad::pattern`: rows, grids and circles of holes (vent grids, screw circles) with exact integer positions, and `Enclosure::apply_all`, which applies a batch of operations all or nothing and returns the operations that undo it.
 - Add `eh3d_phoenix_cad::mass`: the volume of the material, the volume of the holes (marked as not exact when a hole reaches a corner, the floor or the lid) and the mass for a density, in integers, with a table of densities in the settings file.
