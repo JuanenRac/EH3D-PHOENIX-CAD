@@ -36,6 +36,33 @@ pub enum Face {
 }
 
 impl Face {
+    /// The six faces in their fixed order.
+    pub const ALL: [Face; 6] = [
+        Face::Front,
+        Face::Back,
+        Face::Left,
+        Face::Right,
+        Face::Top,
+        Face::Bottom,
+    ];
+
+    /// The face on the other side of the box.
+    pub fn opposite(self) -> Face {
+        match self {
+            Face::Front => Face::Back,
+            Face::Back => Face::Front,
+            Face::Left => Face::Right,
+            Face::Right => Face::Left,
+            Face::Top => Face::Bottom,
+            Face::Bottom => Face::Top,
+        }
+    }
+
+    /// The face with a name given by [`Face::name`], or `None`.
+    pub fn from_name(name: &str) -> Option<Face> {
+        Face::ALL.into_iter().find(|f| f.name() == name)
+    }
+
     /// A stable lower-case name.
     pub fn name(self) -> &'static str {
         match self {

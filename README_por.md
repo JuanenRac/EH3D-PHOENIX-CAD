@@ -11,14 +11,14 @@
   <img src="https://img.shields.io/badge/License-GPL%203.0--or--later-blue.svg" alt="GPL 3.0 or later">
   <img src="https://img.shields.io/badge/Stack-Markdown%20%2B%20Python-blue.svg" alt="Markdown and Python">
   <img src="https://img.shields.io/badge/Languages-8-00E5FF.svg" alt="Languages">
-  <img src="https://img.shields.io/badge/Tests-36-2EA043.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-42-2EA043.svg" alt="Tests">
   <img src="https://img.shields.io/badge/Version-0.0.2-0f6cbd.svg" alt="Version">
   <img src="https://img.shields.io/badge/Maturity-scaffolding-FFB020.svg" alt="Maturity">
 </p>
 
 ---
 
-**Verificação de honestidade - o que funciona hoje:** uma biblioteca Rust sem janela com uma caixa paramétrica: comprimentos em nanómetros inteiros com o seu próprio intervalo, furos redondos nas faces, operações de alteração estruturadas que comunicam os conflitos e deixam o modelo intacto, um script ao estilo OpenSCAD e uma verificação de encaixe contra o envelope de uma placa. Tem 33 testes próprios e passam num computador. Só foi experimentada com modelos feitos pelos seus próprios testes; nada foi desenhado nem executado numa máquina, e o ficheiro STEP que escreve só foi verificado na sua estrutura, e os dissipadores, os esboços e as montagens estão apenas planeados.
+**Verificação de honestidade - o que funciona hoje:** uma biblioteca Rust sem janela com uma caixa paramétrica: comprimentos em nanómetros inteiros com o seu próprio intervalo, furos redondos nas faces, operações de alteração estruturadas que comunicam os conflitos e deixam o modelo intacto, um script ao estilo OpenSCAD e uma verificação de encaixe contra o envelope de uma placa. Tem 39 testes próprios e passam num computador. Só foi experimentada com modelos feitos pelos seus próprios testes; nada foi desenhado nem executado numa máquina, e o ficheiro STEP que escreve só foi verificado na sua estrutura, e os dissipadores, os esboços e as montagens estão apenas planeados.
 
 ---
 
@@ -30,7 +30,7 @@
 |---|---|
 | Versão | `0.0.2` |
 | Maturidade | Estrutura inicial |
-| Testes | 36 |
+| Testes | 42 |
 | Tecnologias | Markdown, Python 3.10+ |
 | Em hardware real | Ainda não executado em hardware |
 
@@ -45,7 +45,7 @@ Cada linha é uma parte deste repositório e a luz diz até onde chega hoje. É 
 | Área | Estado | O que significa aqui |
 |---|---|---|
 | Verificações do repositório | 🟡 | A verificação do repositório, a das imagens e os 3 testes da base correm na CI e passam. |
-| Testes | 🟡 | Os 33 testes da biblioteca Rust e os 3 da base passam num computador. Usam apenas modelos feitos pelos próprios testes. |
+| Testes | 🟡 | Os 39 testes da biblioteca Rust e os 3 da base passam num computador. Usam apenas modelos feitos pelos próprios testes. |
 | Hardware real | 🟠 | Não foi executado em nenhuma máquina nem placa: nada aqui foi experimentado em hardware. |
 | Função planeada | 🟠 | Feita em parte: existem uma caixa paramétrica com furos, um script ao estilo OpenSCAD e uma verificação de encaixe, e um primeiro escritor de STEP verificado só na estrutura; os dissipadores, os esboços e as montagens não foram começados. |
 | Requisitos | 🟠 | 4 de 6 requisitos estão em protótipo (a caixa, o script, as operações de alteração e o intervalo mecânico), 2 estão apenas planeados e nenhum está validado. |
@@ -79,7 +79,7 @@ python -I -m unittest discover -s tools -p "test_*.py"
 
 ## 🧪 Testes
 
-A biblioteca Rust tem 33 testes (`cargo test`) e a base tem 3 (`python -I -m unittest discover -s tools -p "test_*.py"`); todos passam num computador. A CI executa a verificação do repositório, a das imagens, os testes da base e, para o código Rust, a verificação de formato, o clippy com avisos como erros e os testes em Linux e Windows.
+A biblioteca Rust tem 39 testes (`cargo test`) e a base tem 3 (`python -I -m unittest discover -s tools -p "test_*.py"`); todos passam num computador. A CI executa a verificação do repositório, a das imagens, os testes da base e, para o código Rust, a verificação de formato, o clippy com avisos como erros e os testes em Linux e Windows.
 
 ## 🏗️ Compilação e publicação
 

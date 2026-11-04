@@ -8,6 +8,7 @@
 //! * [`step`]: the model as a STEP file (a boundary representation with the inner space as a void),
 //!   the same text for the same model, checked for its structure only;
 //! * [`units`]: angles, counts and ratios in integers, exact rounding, and lengths read and shown in mm, um, in and mil;
+//! * [`names`]: stable names of the faces, the edges and the walls of the holes, which do not depend on the order of anything;
 //! * [`fit`]: whether an envelope (the outline of a board and its tallest part) fits inside.
 //!
 //! Every failure has a stable code `PHOENIX-CAD-<NNN>` ([`CadError::code`], [`REGISTRY`]).
@@ -18,6 +19,7 @@
 
 pub mod enclosure;
 pub mod fit;
+pub mod names;
 pub mod scad;
 pub mod step;
 pub mod units;
@@ -100,6 +102,8 @@ pub enum CadError {
     UnitText(String),
     /// An integer calculation would overflow, or divides by zero.
     Overflow(&'static str),
+    /// A name of a face, edge or hole wall that does not exist or is not written in the canonical way.
+    Reference(String),
 }
 
 impl CadError {
@@ -115,6 +119,7 @@ impl CadError {
             CadError::ValueOutOfRange(_) => "PHOENIX-CAD-007",
             CadError::UnitText(_) => "PHOENIX-CAD-008",
             CadError::Overflow(_) => "PHOENIX-CAD-009",
+            CadError::Reference(_) => "PHOENIX-CAD-010",
         }
     }
 }
@@ -135,6 +140,7 @@ impl fmt::Display for CadError {
             CadError::ValueOutOfRange(what) => write!(f, "{title}: {what}"),
             CadError::UnitText(text) => write!(f, "{title}: {text:?}"),
             CadError::Overflow(what) => write!(f, "{title}: {what}"),
+            CadError::Reference(name) => write!(f, "{title}: {name:?}"),
         }
     }
 }
@@ -152,6 +158,10 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-007", "Count or ratio outside its range"),
     ("PHOENIX-CAD-008", "Number with a unit not understood"),
     ("PHOENIX-CAD-009", "Integer calculation overflows"),
+    (
+        "PHOENIX-CAD-010",
+        "Reference to an element that does not exist",
+    ),
 ];
 
 #[cfg(test)]
@@ -204,6 +214,7 @@ mod tests {
             CadError::ValueOutOfRange("count"),
             CadError::UnitText("x".into()),
             CadError::Overflow("scale"),
+            CadError::Reference("box:face:x".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));

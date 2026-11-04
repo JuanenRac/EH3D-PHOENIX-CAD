@@ -3,6 +3,7 @@
 All notable changes to this project are documented here.
 
 ## [Unreleased]
+- Add `eh3d_phoenix_cad::names`: stable names for the faces, the edges and the walls of the holes of an enclosure, built by rule so that they do not change when other operations are added, removed or reordered, and the code `PHOENIX-CAD-010` for a name that no longer exists.
 - Add `eh3d_phoenix_cad::units`: angles in integer nano-degrees with integer sine and cosine, counts and ratios with their own range, rounding half away from zero, an integer square root, and lengths read and shown in mm, um, in and mil (`1.6 mm`, `62 mil`, `1/16 in`); codes `PHOENIX-CAD-006` to `PHOENIX-CAD-009`.
 - Add `eh3d_phoenix_cad::step::to_step`: the enclosure as a STEP file (a boundary representation with the inner space as a void and a cylindrical face for each hole), the same text for the same model, tested for its structure (header, references, counts); no CAD program has opened it.
 - Correct the test counter of the README files to 27 tests, 24 of the Rust library and 3 of the base.

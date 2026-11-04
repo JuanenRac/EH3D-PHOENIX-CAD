@@ -17,3 +17,4 @@ The table repeats the `REGISTRY` of the crate `eh3d-phoenix-cad` (`src/lib.rs`);
 | PHOENIX-CAD-007 | Count or ratio outside its range | a count that is negative or above a million, or a ratio beyond a thousand times the whole |
 | PHOENIX-CAD-008 | Number with a unit not understood | a text such as `1.6 mm` or `1/16 in` that has no number, no known unit or an invalid fraction |
 | PHOENIX-CAD-009 | Integer calculation overflows | a scaling or a division that does not fit in the integers used, or a division by zero |
+| PHOENIX-CAD-010 | Reference to an element that does not exist | a name of a face, edge or hole wall that is unknown, names a hole that is gone, or is not written in the canonical way; the operation that uses it fails and no other element is chosen in its place |

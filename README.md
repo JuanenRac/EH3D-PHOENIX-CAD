@@ -11,14 +11,14 @@
   <img src="https://img.shields.io/badge/License-GPL%203.0--or--later-blue.svg" alt="GPL 3.0 or later">
   <img src="https://img.shields.io/badge/Stack-Markdown%20%2B%20Python-blue.svg" alt="Markdown and Python">
   <img src="https://img.shields.io/badge/Languages-8-00E5FF.svg" alt="Languages">
-  <img src="https://img.shields.io/badge/Tests-36-2EA043.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-42-2EA043.svg" alt="Tests">
   <img src="https://img.shields.io/badge/Version-0.0.2-0f6cbd.svg" alt="Version">
   <img src="https://img.shields.io/badge/Maturity-scaffolding-FFB020.svg" alt="Maturity">
 </p>
 
 ---
 
-**Honesty check - what actually runs today:** a Rust library without a window with a parametric enclosure: lengths in integer nanometres with their own range, round holes in the faces, structured change operations that report conflicts and leave the model unchanged, an OpenSCAD-style script and a fit check against the envelope of a board. It has 33 tests of its own and they pass on a computer. It has only been tried on models made by its own tests; nothing has been drawn or run on a machine, and the STEP file it writes has only been checked for its structure, and heat sinks, sketches and assemblies are only planned.
+**Honesty check - what actually runs today:** a Rust library without a window with a parametric enclosure: lengths in integer nanometres with their own range, round holes in the faces, structured change operations that report conflicts and leave the model unchanged, an OpenSCAD-style script and a fit check against the envelope of a board. It has 39 tests of its own and they pass on a computer. It has only been tried on models made by its own tests; nothing has been drawn or run on a machine, and the STEP file it writes has only been checked for its structure, and heat sinks, sketches and assemblies are only planned.
 
 ---
 
@@ -30,7 +30,7 @@
 |---|---|
 | Version | `0.0.2` |
 | Maturity | Scaffolding |
-| Tests | 36 |
+| Tests | 42 |
 | Stack | Markdown, Python 3.10+ |
 | On real hardware | Not run on hardware yet |
 
@@ -45,7 +45,7 @@ Each line is one part of this repository and the light says how far it is today.
 | Area | State | What it means here |
 |---|---|---|
 | Repository checks | 🟡 | The repository check, the check of the pictures and the 3 tests of the base run in CI and pass. |
-| Tests | 🟡 | The 33 tests of the Rust library and the 3 of the base pass on a computer. They use only models made by the tests themselves. |
+| Tests | 🟡 | The 39 tests of the Rust library and the 3 of the base pass on a computer. They use only models made by the tests themselves. |
 | Real hardware | 🟠 | Not run on any machine or board: nothing here has been tried on hardware. |
 | Planned function | 🟠 | Partly done: a parametric enclosure with holes, an OpenSCAD-style script and a fit check exist, and so does a first STEP writer checked only for its structure; heat sinks, sketches and assemblies are not started. |
 | Requirements | 🟠 | 4 of 6 requirements are at prototype (the enclosure, the script, the change operations and the mechanical range), 2 are only planned and none is validated. |
@@ -79,7 +79,7 @@ python -I -m unittest discover -s tools -p "test_*.py"
 
 ## 🧪 Testing
 
-The Rust library has 33 tests (`cargo test`) and the base has 3 (`python -I -m unittest discover -s tools -p "test_*.py"`); all pass on a computer. The CI runs the repository check, the check of the pictures, the tests of the base and, for the Rust code, the format check, clippy with warnings as errors and the tests on Linux and Windows.
+The Rust library has 39 tests (`cargo test`) and the base has 3 (`python -I -m unittest discover -s tools -p "test_*.py"`); all pass on a computer. The CI runs the repository check, the check of the pictures, the tests of the base and, for the Rust code, the format check, clippy with warnings as errors and the tests on Linux and Windows.
 
 ## 🏗️ Build & Release
 
