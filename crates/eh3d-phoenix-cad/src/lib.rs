@@ -14,6 +14,7 @@
 //! * [`printer`]: the profile of a 3D printer and the model for fabrication with compensated holes;
 //! * [`store`]: saving a file atomically with numbered copies, and loading a file under a size limit;
 //! * [`mass`]: the volume of the material and of the holes and the mass for a density, in integers (pi as a ratio of twelve decimals);
+//! * [`pattern`]: rows, grids and circles of holes with exact positions, and batches of operations that apply all or nothing;
 //! * [`fit`]: whether an envelope (the outline of a board and its tallest part) fits inside.
 //!
 //! Every failure has a stable code `PHOENIX-CAD-<NNN>` ([`CadError::code`], [`REGISTRY`]).
@@ -28,6 +29,7 @@ pub mod enclosure;
 pub mod fit;
 pub mod mass;
 pub mod names;
+pub mod pattern;
 pub mod printer;
 pub mod scad;
 pub mod step;
