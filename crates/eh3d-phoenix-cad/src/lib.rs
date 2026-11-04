@@ -18,6 +18,7 @@
 //! * [`graph`]: the graph of dependencies between objects, with a deterministic order of calculation, refused cycles, a recalculation that reuses what did not change, and a Graphviz dump;
 //! * [`vars`]: named variables for the master dimensions, the binding of the parameters of an enclosure to them, and families of variants (small, medium, large);
 //! * [`datum`]: reference frames with an origin and one of the 24 axis-aligned rotations, and the frame of each face of the box;
+//! * [`project`]: the envelope of a project file with a format version, named domains kept byte for byte when unknown, read-only opening when a critical domain is not understood, and migrations from older versions;
 //! * [`fit`]: whether an envelope (the outline of a board and its tallest part) fits inside.
 //!
 //! Every failure has a stable code `PHOENIX-CAD-<NNN>` ([`CadError::code`], [`REGISTRY`]).
@@ -36,6 +37,7 @@ pub mod mass;
 pub mod names;
 pub mod pattern;
 pub mod printer;
+pub mod project;
 pub mod scad;
 pub mod step;
 pub mod store;
@@ -136,6 +138,8 @@ pub enum CadError {
     InUse(String),
     /// A name of a variable or a variant that is not a plain word.
     InvalidName(String),
+    /// A project file that is not well formed, too large or of a newer version.
+    Format(String),
 }
 
 impl CadError {
@@ -159,6 +163,7 @@ impl CadError {
             CadError::Duplicate(_) => "PHOENIX-CAD-015",
             CadError::InUse(_) => "PHOENIX-CAD-016",
             CadError::InvalidName(_) => "PHOENIX-CAD-017",
+            CadError::Format(_) => "PHOENIX-CAD-018",
         }
     }
 }
@@ -187,6 +192,7 @@ impl fmt::Display for CadError {
             CadError::Duplicate(what) => write!(f, "{title}: {what}"),
             CadError::InUse(what) => write!(f, "{title}: {what}"),
             CadError::InvalidName(what) => write!(f, "{title}: {what:?}"),
+            CadError::Format(why) => write!(f, "{title}: {why}"),
         }
     }
 }
@@ -215,6 +221,7 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-015", "Name or id already used"),
     ("PHOENIX-CAD-016", "Object still in use"),
     ("PHOENIX-CAD-017", "Name not valid"),
+    ("PHOENIX-CAD-018", "Project file not valid"),
 ];
 
 #[cfg(test)]
@@ -275,6 +282,7 @@ mod tests {
             CadError::Duplicate("x".into()),
             CadError::InUse("x".into()),
             CadError::InvalidName("x y".into()),
+            CadError::Format("cut".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));

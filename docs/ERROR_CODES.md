@@ -25,3 +25,4 @@ The table repeats the `REGISTRY` of the crate `eh3d-phoenix-cad` (`src/lib.rs`);
 | PHOENIX-CAD-015 | Name or id already used | an object, a variable or a variant added under a name or an id that is taken |
 | PHOENIX-CAD-016 | Object still in use | an object removed while others still depend on it |
 | PHOENIX-CAD-017 | Name not valid | a variable, a variant or a binding named with something other than a letter followed by letters, digits and underscores (up to 64 characters) |
+| PHOENIX-CAD-018 | Project file not valid | a project file with a wrong header, a version that is zero or newer than this program, a domain that is repeated, cut short or badly named, or a size above the limit |
