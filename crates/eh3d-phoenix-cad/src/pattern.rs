@@ -137,6 +137,7 @@ pub fn holes_of_pattern(
                 u,
                 v,
                 diameter,
+                style: crate::enclosure::HoleStyle::Plain,
             },
         })
         .collect())

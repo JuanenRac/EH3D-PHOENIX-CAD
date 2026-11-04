@@ -259,6 +259,32 @@ const TEXTS: &[Row] = &[
             "Tratamento de aresta inválido",
         ],
     ),
+    (
+        "PHOENIX-CAD-020",
+        [
+            "Hole shape not valid",
+            "Forma de agujero no válida",
+            "Bohrungsform ungültig",
+            "Forme de trou non valide",
+            "Forma del foro non valida",
+            "穴の形状が無効です",
+            "孔的形状无效",
+            "Forma de furo inválida",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-021",
+        [
+            "Screw size not in the table",
+            "Tamaño de tornillo que no está en la tabla",
+            "Schraubengröße nicht in der Tabelle",
+            "Taille de vis absente du tableau",
+            "Misura di vite non presente nella tabella",
+            "ねじのサイズが表にありません",
+            "螺钉规格不在表中",
+            "Tamanho de parafuso que não está na tabela",
+        ],
+    ),
 ];
 
 /// The text of a diagnostic in a language (`en`, `es`, `de`, `fr`, `it`, `ja`, `zh` or `pt`), or

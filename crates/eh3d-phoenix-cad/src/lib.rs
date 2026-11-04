@@ -2,7 +2,7 @@
 //!
 //! * [`Length`]: a length in integer nanometres inside the mechanical range (2^40 nm, about 1100 m,
 //!   so a chassis larger than a board is representable: the board model has its own, smaller range);
-//! * [`enclosure`]: a parametric box with holes in its faces (each with the object identity of
+//! * [`enclosure`]: a parametric box with round, countersunk, counterbored, rectangular and oval holes in its faces (each with the object identity of
 //!   the suite, a UUID v7), rounded or chamfered edges, and the structured operations that change it. An operation that is refused leaves the model exactly as it was;
 //! * [`scad`]: the model as an OpenSCAD-style script, the same text for the same model;
 //! * [`step`]: the model as a STEP file (a boundary representation with the inner space as a void),
@@ -68,7 +68,9 @@ pub mod store;
 pub mod units;
 pub mod vars;
 
-pub use enclosure::{Edging, Enclosure, EnclosureParams, Face, Hole, Id, Operation, Treatment};
+pub use enclosure::{
+    Edging, Enclosure, EnclosureParams, Face, Hole, HoleStyle, Id, Operation, Treatment,
+};
 pub use fit::{check_fit, Envelope, FitReport};
 
 use std::fmt;
@@ -166,6 +168,11 @@ pub enum CadError {
     Format(String),
     /// A treatment of the edges that does not fit the box.
     Edging(String),
+    /// A hole shape (countersink, counterbore, rectangle or slot) that does not fit its hole or
+    /// the material.
+    HoleStyle(String),
+    /// A screw size that is not in the table of screws.
+    Screw(String),
 }
 
 impl CadError {
@@ -191,6 +198,8 @@ impl CadError {
             CadError::InvalidName(_) => "PHOENIX-CAD-017",
             CadError::Format(_) => "PHOENIX-CAD-018",
             CadError::Edging(_) => "PHOENIX-CAD-019",
+            CadError::HoleStyle(_) => "PHOENIX-CAD-020",
+            CadError::Screw(_) => "PHOENIX-CAD-021",
         }
     }
 }
@@ -221,6 +230,8 @@ impl fmt::Display for CadError {
             CadError::InvalidName(what) => write!(f, "{title}: {what:?}"),
             CadError::Format(why) => write!(f, "{title}: {why}"),
             CadError::Edging(why) => write!(f, "{title}: {why}"),
+            CadError::HoleStyle(why) => write!(f, "{title}: {why}"),
+            CadError::Screw(name) => write!(f, "{title}: {name:?}"),
         }
     }
 }
@@ -251,6 +262,8 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-017", "Name not valid"),
     ("PHOENIX-CAD-018", "Project file not valid"),
     ("PHOENIX-CAD-019", "Edge treatment not valid"),
+    ("PHOENIX-CAD-020", "Hole shape not valid"),
+    ("PHOENIX-CAD-021", "Screw size not in the table"),
 ];
 
 #[cfg(test)]
@@ -312,6 +325,7 @@ mod tests {
             u: Length::new(u).unwrap(),
             v: mm(17),
             diameter: mm(6),
+            style: crate::enclosure::HoleStyle::Plain,
         };
         let id = eh3d_container::ObjectId::from_parts(1_700_000_000_000, 1, 1).unwrap();
         let before = e.clone();
@@ -353,6 +367,7 @@ mod tests {
                 u: mm(50),
                 v: mm(30),
                 diameter: mm(6),
+                style: crate::enclosure::HoleStyle::Plain,
             },
         })
         .unwrap();
@@ -412,6 +427,8 @@ mod tests {
             CadError::InvalidName("x y".into()),
             CadError::Format("cut".into()),
             CadError::Edging("too big".into()),
+            CadError::HoleStyle("deep".into()),
+            CadError::Screw("M99".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));

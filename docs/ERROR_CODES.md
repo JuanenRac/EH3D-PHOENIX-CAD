@@ -27,3 +27,5 @@ The table repeats the `REGISTRY` of the crate `eh3d-phoenix-cad` (`src/lib.rs`);
 | PHOENIX-CAD-017 | Name not valid | a variable, a variant or a binding named with something other than a letter followed by letters, digits and underscores (up to 64 characters) |
 | PHOENIX-CAD-018 | Project file not valid | a project file with a wrong header, a version that is zero or newer than this program, a domain that is repeated, cut short or badly named, or a size above the limit |
 | PHOENIX-CAD-019 | Edge treatment not valid | a rounded or chamfered edge whose size is larger than half of the box, that reaches the inner space, or whose lid and floor treatments are together higher than the box; the model is left as it was |
+| PHOENIX-CAD-020 | Hole shape not valid | a countersink or counterbore that is not wider than its hole or that is as deep as the material, a counterbore depth that is not positive, a rectangle without height, or a slot shorter than it is wide; the model is left as it was |
+| PHOENIX-CAD-021 | Screw size not in the table | a screw named in a request that the table of screws of the settings does not have |

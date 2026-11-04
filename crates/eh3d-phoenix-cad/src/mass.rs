@@ -5,7 +5,7 @@
 //! same model gives the same figure on every platform. A calculation that does not fit in 128
 //! bits is refused instead of wrapping.
 
-use crate::enclosure::{Enclosure, Face, Hole, Treatment};
+use crate::enclosure::{Enclosure, Face, Hole, HoleStyle, Treatment};
 use crate::units::div_round_half_away;
 use crate::{CadError, Length};
 
@@ -36,6 +36,61 @@ pub fn cylinder_volume_nm3(diameter: Length, height: Length) -> Result<i128, Cad
         .and_then(|x| x.checked_mul(PI_NUM))
         .ok_or(CadError::Overflow("volume"))?;
     div_round_half_away(n, 4 * PI_DEN)
+}
+
+/// The volume of a hole of the given diameter and style that crosses material of the given
+/// thickness, in cubic nanometres: the straight part plus the countersink or the counterbore, or
+/// the rectangle or the slot.
+pub fn hole_volume_nm3(
+    diameter: Length,
+    style: HoleStyle,
+    thickness: Length,
+) -> Result<i128, CadError> {
+    let overflow = || CadError::Overflow("volume");
+    let (d, t) = (i128::from(diameter.get()), i128::from(thickness.get()));
+    match style {
+        HoleStyle::Plain => cylinder_volume_nm3(diameter, thickness),
+        // the cone of 90 degrees over the cylinder: pi (D - d)^2 (D + 2 d) / 24
+        HoleStyle::Countersunk { head_diameter } => {
+            let h = i128::from(head_diameter.get());
+            let n = (h - d)
+                .checked_mul(h - d)
+                .and_then(|x| x.checked_mul(h + 2 * d))
+                .and_then(|x| x.checked_mul(PI_NUM))
+                .ok_or_else(overflow)?;
+            cylinder_volume_nm3(diameter, thickness)?
+                .checked_add(div_round_half_away(n, 24 * PI_DEN)?)
+                .ok_or_else(overflow)
+        }
+        // the ring between the two circles over the depth: pi (D^2 - d^2) k / 4
+        HoleStyle::Counterbored {
+            head_diameter,
+            depth,
+        } => {
+            let h = i128::from(head_diameter.get());
+            let n = (h * h - d * d)
+                .checked_mul(i128::from(depth.get()))
+                .and_then(|x| x.checked_mul(PI_NUM))
+                .ok_or_else(overflow)?;
+            cylinder_volume_nm3(diameter, thickness)?
+                .checked_add(div_round_half_away(n, 4 * PI_DEN)?)
+                .ok_or_else(overflow)
+        }
+        HoleStyle::Rectangular { height } => d
+            .checked_mul(i128::from(height.get()))
+            .and_then(|x| x.checked_mul(t))
+            .ok_or_else(overflow),
+        // a rectangle between the two half circles plus the circle they make together
+        HoleStyle::Oval { length, .. } => {
+            let straight = (i128::from(length.get()) - d)
+                .checked_mul(d)
+                .and_then(|x| x.checked_mul(t))
+                .ok_or_else(overflow)?;
+            straight
+                .checked_add(cylinder_volume_nm3(diameter, thickness)?)
+                .ok_or_else(overflow)
+        }
+    }
 }
 
 /// The mass in whole micrograms of a volume of a material of the given density (kilograms per
@@ -133,28 +188,32 @@ impl Enclosure {
         let (x, y, _) = p.outer();
         let (wall, floor) = (i128::from(p.wall.get()), i128::from(p.floor.get()));
         let inner_h = i128::from(p.inner_height.get());
-        let d = i128::from(hole.diameter.get());
+        let (su, sv) = hole.style.footprint(hole.diameter);
         let (u, v) = (i128::from(hole.u.get()), i128::from(hole.v.get()));
-        // 2 * centre -/+ diameter against 2 * bounds, so a half nanometre never matters
-        let within = |c: i128, lo: i128, hi: i128| 2 * c - d >= 2 * lo && 2 * c + d <= 2 * hi;
+        // 2 * centre -/+ size against 2 * bounds, so a half nanometre never matters
+        let within =
+            |c: i128, lo: i128, hi: i128, e: i128| 2 * c - e >= 2 * lo && 2 * c + e <= 2 * hi;
         let (x, y) = (i128::from(x.get()), i128::from(y.get()));
         match hole.face {
             Face::Front | Face::Back => {
-                within(u, wall, x - wall) && within(v, floor, floor + inner_h)
+                within(u, wall, x - wall, su) && within(v, floor, floor + inner_h, sv)
             }
             Face::Left | Face::Right => {
-                within(u, wall, y - wall) && within(v, floor, floor + inner_h)
+                within(u, wall, y - wall, su) && within(v, floor, floor + inner_h, sv)
             }
-            Face::Top | Face::Bottom => within(u, wall, x - wall) && within(v, wall, y - wall),
+            Face::Top | Face::Bottom => {
+                within(u, wall, x - wall, su) && within(v, wall, y - wall, sv)
+            }
         }
     }
 
-    /// The volume of the holes: each is a cylinder as long as the thin part of its face is thick.
+    /// The volume of the holes: each is as long as the thin part of its face is thick, with its
+    /// countersink or counterbore when it has one.
     pub fn holes_volume(&self) -> Result<Volume, CadError> {
         let mut total: i128 = 0;
         let mut exact = true;
         for hole in self.holes().values() {
-            let v = cylinder_volume_nm3(hole.diameter, self.thin_depth(hole.face))?;
+            let v = hole_volume_nm3(hole.diameter, hole.style, self.thin_depth(hole.face))?;
             total = total.checked_add(v).ok_or(CadError::Overflow("volume"))?;
             exact &= self.hole_in_thin_part(hole);
         }
@@ -229,6 +288,7 @@ mod tests {
                 u: mm(u),
                 v: mm(v),
                 diameter: mm(d),
+                style: crate::enclosure::HoleStyle::Plain,
             },
         })
         .unwrap();
@@ -387,6 +447,103 @@ mod tests {
             751_106_428_108_750_000_000 + 661_333_333_333_333_333_333
         );
         assert!(!both.material_volume_with_holes().unwrap().exact);
+    }
+
+    fn styled(style: HoleStyle, diameter: i64, face: Face) -> Enclosure {
+        let mut e = Enclosure::new(params(3)).unwrap();
+        e.apply(Operation::AddHole {
+            id: ObjectId::from_parts(1_700_000_000_000, 1, 1).unwrap(),
+            hole: Hole {
+                name: "s".into(),
+                face,
+                u: mm(50),
+                v: mm(17),
+                diameter: Length::new(diameter).unwrap(),
+                style,
+            },
+        })
+        .unwrap();
+        e
+    }
+
+    #[test]
+    fn a_countersink_adds_its_cone_to_the_cylinder() {
+        let e = styled(
+            HoleStyle::Countersunk {
+                head_diameter: Length::new(6_300_000).unwrap(),
+            },
+            3_400_000,
+            Face::Front,
+        );
+        let v = e.holes_volume().unwrap();
+        assert_eq!(v.nm3, 32_579_755_714_361_195_417);
+        assert!(v.exact);
+    }
+
+    #[test]
+    fn a_counterbore_adds_its_ring_to_the_cylinder() {
+        let e = styled(
+            HoleStyle::Counterbored {
+                head_diameter: mm(6),
+                depth: mm(1),
+            },
+            3_400_000,
+            Face::Front,
+        );
+        assert_eq!(e.holes_volume().unwrap().nm3, 37_353_536_651_185_100_000);
+    }
+
+    #[test]
+    fn a_rectangular_hole_and_a_slot_have_their_own_volume() {
+        let rect = styled(
+            HoleStyle::Rectangular { height: mm(4) },
+            10_000_000,
+            Face::Front,
+        );
+        assert_eq!(rect.holes_volume().unwrap().nm3, 80 * MM3);
+        let slot = styled(
+            HoleStyle::Oval {
+                length: mm(10),
+                vertical: false,
+            },
+            4_000_000,
+            Face::Front,
+        );
+        assert_eq!(slot.holes_volume().unwrap().nm3, 73_132_741_228_720_000_000);
+        // the slot may run along v as well, with the same volume
+        let upright = styled(
+            HoleStyle::Oval {
+                length: mm(10),
+                vertical: true,
+            },
+            4_000_000,
+            Face::Front,
+        );
+        assert_eq!(
+            upright.holes_volume().unwrap(),
+            slot.holes_volume().unwrap()
+        );
+    }
+
+    #[test]
+    fn a_wide_head_that_reaches_the_floor_is_marked_as_not_exact() {
+        // the countersink is 6.5 mm wide and 4 mm above the bottom, so the opening reaches the floor
+        let mut e = Enclosure::new(params(0)).unwrap();
+        e.apply(Operation::AddHole {
+            id: ObjectId::from_parts(1_700_000_000_000, 1, 1).unwrap(),
+            hole: Hole {
+                name: "s".into(),
+                face: Face::Front,
+                u: mm(50),
+                v: mm(4),
+                diameter: mm(3),
+                style: HoleStyle::Countersunk {
+                    head_diameter: Length::new(6_500_000).unwrap(),
+                },
+            },
+        })
+        .unwrap();
+        assert!(!e.holes_volume().unwrap().exact);
     }
 
     #[test]

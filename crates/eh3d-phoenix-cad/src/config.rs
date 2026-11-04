@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::enclosure::{Face, Hole, HoleStyle};
 use crate::printer::PrinterProfile;
 use crate::units::{parse_length, Unit};
 use crate::{CadError, Length};
@@ -136,6 +137,17 @@ pub struct Screw {
     pub countersink_diameter: Length,
 }
 
+/// The kind of head that a hole made for a screw has to take.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Head {
+    /// A plain hole that the screw passes through.
+    Clearance,
+    /// A countersink for a flat countersunk head.
+    Countersunk,
+    /// A recess for a socket head.
+    Counterbored,
+}
+
 /// The settings with their types.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
@@ -169,6 +181,46 @@ impl Settings {
         let mut config = Config::parse(DEFAULT_CONFIG)?;
         config.overlay(&Config::parse(text)?);
         Settings::from_config(&config)
+    }
+
+    /// A screw of the table, or the error `PHOENIX-CAD-021` when the table does not have it.
+    pub fn screw(&self, name: &str) -> Result<&Screw, CadError> {
+        self.screws
+            .get(name)
+            .ok_or_else(|| CadError::Screw(name.to_string()))
+    }
+
+    /// A hole for a screw of the table, placed with its centre at `at` (`u`, `v`): the diameter is
+    /// the clearance of the screw, the countersink is the diameter of its flat head and the
+    /// counterbore is the diameter of its socket head plus `counterbore_extra`, as deep as the head
+    /// is high. Whether the hole fits the box is checked when it is added to the enclosure.
+    pub fn screw_hole(
+        &self,
+        screw: &str,
+        head: Head,
+        name: &str,
+        face: Face,
+        at: (Length, Length),
+    ) -> Result<Hole, CadError> {
+        let s = self.screw(screw)?;
+        let style = match head {
+            Head::Clearance => HoleStyle::Plain,
+            Head::Countersunk => HoleStyle::Countersunk {
+                head_diameter: s.countersink_diameter,
+            },
+            Head::Counterbored => HoleStyle::Counterbored {
+                head_diameter: s.head_diameter.checked_add(self.counterbore_extra)?,
+                depth: s.head_height,
+            },
+        };
+        Ok(Hole {
+            name: name.to_string(),
+            face,
+            u: at.0,
+            v: at.1,
+            diameter: s.clearance,
+            style,
+        })
     }
 
     /// Reads the typed settings from a complete configuration.
@@ -345,5 +397,77 @@ mod tests {
         assert_eq!(c.get("a.k"), Some("v#w"));
         assert_eq!(c.get("a.j"), Some("1"));
         assert_eq!(c.keys().collect::<Vec<_>>(), vec!["a.j", "a.k"]);
+    }
+
+    #[test]
+    fn a_hole_for_a_screw_takes_its_sizes_from_the_table() {
+        use crate::enclosure::HoleStyle;
+        let s = Settings::defaults();
+        let at = (Length::from_mm(30).unwrap(), Length::from_mm(17).unwrap());
+        let plain = s
+            .screw_hole("M3", Head::Clearance, "m3", Face::Front, at)
+            .unwrap();
+        assert_eq!(plain.diameter.get(), 3_400_000);
+        assert_eq!(plain.style, HoleStyle::Plain);
+        let sunk = s
+            .screw_hole("M3", Head::Countersunk, "m3", Face::Front, at)
+            .unwrap();
+        assert_eq!(
+            sunk.style,
+            HoleStyle::Countersunk {
+                head_diameter: Length::new(6_300_000).unwrap()
+            }
+        );
+        // the socket head of 5.5 mm and the extra of 0.5 mm, as deep as the head is high
+        let bored = s
+            .screw_hole("M3", Head::Counterbored, "m3", Face::Front, at)
+            .unwrap();
+        assert_eq!(
+            bored.style,
+            HoleStyle::Counterbored {
+                head_diameter: Length::new(6_000_000).unwrap(),
+                depth: Length::new(3_000_000).unwrap()
+            }
+        );
+        assert_eq!(bored.u, at.0);
+        let err = s
+            .screw_hole("M99", Head::Clearance, "x", Face::Front, at)
+            .unwrap_err();
+        assert_eq!(err, CadError::Screw("M99".into()));
+        assert_eq!(err.code(), "PHOENIX-CAD-021");
+    }
+
+    #[test]
+    fn a_screw_hole_is_checked_against_the_box_when_it_is_added() {
+        use crate::enclosure::{Enclosure, EnclosureParams, Operation};
+        let mm = |v: i64| Length::from_mm(v).unwrap();
+        let build = |wall: i64| {
+            Enclosure::new(EnclosureParams {
+                inner_length: mm(100),
+                inner_width: mm(60),
+                inner_height: mm(30),
+                wall: mm(wall),
+                floor: mm(wall),
+                lid: mm(wall),
+                edge_margin: mm(3),
+                min_web: mm(2),
+            })
+            .unwrap()
+        };
+        let s = Settings::defaults();
+        let at = (mm(50), mm(17));
+        let id = eh3d_container::ObjectId::from_parts(1_700_000_000_000, 1, 1).unwrap();
+        let hole = s
+            .screw_hole("M3", Head::Counterbored, "m3", Face::Front, at)
+            .unwrap();
+        // the head of an M3 screw is 3 mm high: it does not fit in a wall of 3 mm, it does in 4 mm
+        let err = build(3)
+            .apply(Operation::AddHole {
+                id,
+                hole: hole.clone(),
+            })
+            .unwrap_err();
+        assert_eq!(err.code(), "PHOENIX-CAD-020");
+        assert!(build(4).apply(Operation::AddHole { id, hole }).is_ok());
     }
 }

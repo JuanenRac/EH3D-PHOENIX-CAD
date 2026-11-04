@@ -178,6 +178,7 @@ mod tests {
                 u: mm(u),
                 v: mm(17),
                 diameter: mm(6),
+                style: crate::enclosure::HoleStyle::Plain,
             },
         }
     }

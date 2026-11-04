@@ -36,9 +36,13 @@ impl PrinterProfile {
     /// too close to another is refused with the error of that hole; the design is not changed.
     pub fn for_fabrication(&self, design: &Enclosure) -> Result<Enclosure, CadError> {
         let mut out = Enclosure::new(*design.params())?;
+        out.apply(Operation::SetEdging(*design.edging()))?;
         for (id, hole) in design.holes() {
             let mut hole = hole.clone();
-            hole.diameter = self.fabrication_diameter(hole.diameter)?;
+            let widened = self.fabrication_diameter(hole.diameter)?;
+            // every size across of the hole grows by the same amount as its diameter
+            hole.style = hole.style.grown(widened.checked_sub(hole.diameter)?)?;
+            hole.diameter = widened;
             out.apply(Operation::AddHole { id: *id, hole })?;
         }
         Ok(out)
@@ -89,6 +93,7 @@ mod tests {
                     u: mm(u),
                     v: mm(17),
                     diameter: mm(d),
+                    style: crate::enclosure::HoleStyle::Plain,
                 },
             })
             .unwrap();
@@ -133,5 +138,52 @@ mod tests {
         p.hole_compensation = mm(40);
         let err = p.for_fabrication(&design()).unwrap_err();
         assert!(matches!(err.code(), "PHOENIX-CAD-003" | "PHOENIX-CAD-004"));
+    }
+
+    #[test]
+    fn the_whole_opening_of_a_slot_is_widened_by_the_same_amount_as_its_width() {
+        use crate::enclosure::HoleStyle;
+        let mut e = Enclosure::new(*design().params()).unwrap();
+        e.apply(Operation::AddHole {
+            id: ObjectId::from_parts(1_700_000_000_000, 1, 9).unwrap(),
+            hole: Hole {
+                name: "slot".into(),
+                face: Face::Front,
+                u: mm(40),
+                v: mm(17),
+                diameter: mm(4),
+                style: HoleStyle::Oval {
+                    length: mm(12),
+                    vertical: false,
+                },
+            },
+        })
+        .unwrap();
+        let fab = profile().for_fabrication(&e).unwrap();
+        let hole = fab.holes().values().next().unwrap();
+        // a width of 4 mm is wide enough to get only the compensation of 0.15 mm
+        assert_eq!(hole.diameter, um(4_150));
+        assert_eq!(
+            hole.style,
+            HoleStyle::Oval {
+                length: um(12_150),
+                vertical: false
+            }
+        );
+        // the design is not changed
+        assert_eq!(e.holes().values().next().unwrap().diameter, mm(4));
+    }
+
+    #[test]
+    fn the_edges_of_the_design_are_kept_in_the_model_for_fabrication() {
+        use crate::enclosure::{Edging, Treatment};
+        let mut e = design();
+        let edging = Edging {
+            vertical: Treatment::Round(mm(4)),
+            ..Edging::default()
+        };
+        e.apply(Operation::SetEdging(edging)).unwrap();
+        let fab = profile().for_fabrication(&e).unwrap();
+        assert_eq!(fab.edging(), &edging);
     }
 }
