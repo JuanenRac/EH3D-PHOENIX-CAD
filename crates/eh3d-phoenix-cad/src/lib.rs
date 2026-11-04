@@ -9,6 +9,7 @@
 //!   the same text for the same model, checked for its structure only;
 //! * [`units`]: angles, counts and ratios in integers, exact rounding, and lengths read and shown in mm, um, in and mil;
 //! * [`names`]: stable names of the faces, the edges and the walls of the holes, which do not depend on the order of anything;
+//! * [`body`]: the recipe of an enclosure (base parameters and ordered steps) with a tip, suppressed steps, the state of each step and an undo and redo history in named transactions;
 //! * [`fit`]: whether an envelope (the outline of a board and its tallest part) fits inside.
 //!
 //! Every failure has a stable code `PHOENIX-CAD-<NNN>` ([`CadError::code`], [`REGISTRY`]).
@@ -17,6 +18,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod body;
 pub mod enclosure;
 pub mod fit;
 pub mod names;
