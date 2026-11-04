@@ -3,6 +3,8 @@
 All notable changes to this project are documented here.
 
 ## [Unreleased]
+- Add `eh3d_phoenix_cad::store`: saving a file through a temporary file that is flushed and renamed into place, with as many numbered copies as the settings say, and loading a file under a size limit; code `PHOENIX-CAD-012`.
+- Add `eh3d_phoenix_cad::config` and `eh3d_phoenix_cad::printer`: the settings file with its shipped defaults (copies kept, undo depth, unit shown, printer compensation and a table of metric screws, all outside the code) and the model for fabrication whose holes are widened by the profile of the printer; code `PHOENIX-CAD-011`.
 - Add `eh3d_phoenix_cad::body`: the recipe of an enclosure as a body with a tip, steps that can be suppressed, the state of each step (valid, suppressed, failed with its code, after the tip) and an undo and redo history in named transactions that are all or nothing.
 - Add `eh3d_phoenix_cad::names`: stable names for the faces, the edges and the walls of the holes of an enclosure, built by rule so that they do not change when other operations are added, removed or reordered, and the code `PHOENIX-CAD-010` for a name that no longer exists.
 - Add `eh3d_phoenix_cad::units`: angles in integer nano-degrees with integer sine and cosine, counts and ratios with their own range, rounding half away from zero, an integer square root, and lengths read and shown in mm, um, in and mil (`1.6 mm`, `62 mil`, `1/16 in`); codes `PHOENIX-CAD-006` to `PHOENIX-CAD-009`.

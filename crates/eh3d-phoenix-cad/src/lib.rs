@@ -10,6 +10,9 @@
 //! * [`units`]: angles, counts and ratios in integers, exact rounding, and lengths read and shown in mm, um, in and mil;
 //! * [`names`]: stable names of the faces, the edges and the walls of the holes, which do not depend on the order of anything;
 //! * [`body`]: the recipe of an enclosure (base parameters and ordered steps) with a tip, suppressed steps, the state of each step and an undo and redo history in named transactions;
+//! * [`config`]: the settings file, the one place for tuned values (copies kept, undo depth, unit shown, printer compensation, table of screws);
+//! * [`printer`]: the profile of a 3D printer and the model for fabrication with compensated holes;
+//! * [`store`]: saving a file atomically with numbered copies, and loading a file under a size limit;
 //! * [`fit`]: whether an envelope (the outline of a board and its tallest part) fits inside.
 //!
 //! Every failure has a stable code `PHOENIX-CAD-<NNN>` ([`CadError::code`], [`REGISTRY`]).
@@ -19,11 +22,14 @@
 #![warn(missing_docs)]
 
 pub mod body;
+pub mod config;
 pub mod enclosure;
 pub mod fit;
 pub mod names;
+pub mod printer;
 pub mod scad;
 pub mod step;
+pub mod store;
 pub mod units;
 
 pub use enclosure::{Enclosure, EnclosureParams, Face, Hole, Id, Operation};
@@ -106,6 +112,10 @@ pub enum CadError {
     Overflow(&'static str),
     /// A name of a face, edge or hole wall that does not exist or is not written in the canonical way.
     Reference(String),
+    /// A settings file or value that is not valid.
+    Config(String),
+    /// A file could not be read or written, or is larger than allowed.
+    Io(String),
 }
 
 impl CadError {
@@ -122,6 +132,8 @@ impl CadError {
             CadError::UnitText(_) => "PHOENIX-CAD-008",
             CadError::Overflow(_) => "PHOENIX-CAD-009",
             CadError::Reference(_) => "PHOENIX-CAD-010",
+            CadError::Config(_) => "PHOENIX-CAD-011",
+            CadError::Io(_) => "PHOENIX-CAD-012",
         }
     }
 }
@@ -143,6 +155,8 @@ impl fmt::Display for CadError {
             CadError::UnitText(text) => write!(f, "{title}: {text:?}"),
             CadError::Overflow(what) => write!(f, "{title}: {what}"),
             CadError::Reference(name) => write!(f, "{title}: {name:?}"),
+            CadError::Config(why) => write!(f, "{title}: {why}"),
+            CadError::Io(why) => write!(f, "{title}: {why}"),
         }
     }
 }
@@ -164,6 +178,8 @@ pub const REGISTRY: &[(&str, &str)] = &[
         "PHOENIX-CAD-010",
         "Reference to an element that does not exist",
     ),
+    ("PHOENIX-CAD-011", "Settings not valid"),
+    ("PHOENIX-CAD-012", "File cannot be read or written"),
 ];
 
 #[cfg(test)]
@@ -217,6 +233,8 @@ mod tests {
             CadError::UnitText("x".into()),
             CadError::Overflow("scale"),
             CadError::Reference("box:face:x".into()),
+            CadError::Config("line 1".into()),
+            CadError::Io("disk".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));
