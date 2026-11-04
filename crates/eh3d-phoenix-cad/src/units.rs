@@ -334,6 +334,13 @@ fn parse_rational(s: &str) -> Option<(i128, i128)> {
 /// Reads a length written with its unit: `1.6 mm`, `62 mil`, `1/16 in`, `0,5mm`. The decimal
 /// separator is a point or a comma. The result is rounded half away from zero to the nanometre.
 /// A text without a known unit, or a number that is not understood, is refused.
+///
+/// ```
+/// use eh3d_phoenix_cad::units::parse_length;
+/// assert_eq!(parse_length("1/16 in").unwrap().get(), 1_587_500);
+/// assert_eq!(parse_length("0,5 mm").unwrap().get(), 500_000);
+/// assert_eq!(parse_length("5 km").unwrap_err().code(), "PHOENIX-CAD-008");
+/// ```
 pub fn parse_length(text: &str) -> Result<Length, CadError> {
     let bad = || CadError::UnitText(text.to_string());
     let t = text.trim();

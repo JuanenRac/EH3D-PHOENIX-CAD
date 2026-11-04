@@ -19,7 +19,30 @@
 //! * [`vars`]: named variables for the master dimensions, the binding of the parameters of an enclosure to them, and families of variants (small, medium, large);
 //! * [`datum`]: reference frames with an origin and one of the 24 axis-aligned rotations, and the frame of each face of the box;
 //! * [`project`]: the envelope of a project file with a format version, named domains kept byte for byte when unknown, read-only opening when a critical domain is not understood, and migrations from older versions;
+//! * [`messages`]: the text of every diagnostic in the eight languages of the suite;
 //! * [`fit`]: whether an envelope (the outline of a board and its tallest part) fits inside.
+//!
+//! # Example
+//!
+//! ```
+//! use eh3d_phoenix_cad::units::parse_length;
+//! use eh3d_phoenix_cad::{Enclosure, EnclosureParams, Length};
+//!
+//! let mm = |v| Length::from_mm(v).unwrap();
+//! let enclosure = Enclosure::new(EnclosureParams {
+//!     inner_length: mm(100),
+//!     inner_width: mm(60),
+//!     inner_height: mm(30),
+//!     wall: mm(2),
+//!     floor: mm(2),
+//!     lid: mm(3),
+//!     edge_margin: mm(3),
+//!     min_web: mm(2),
+//! })
+//! .unwrap();
+//! // the outer length is the inner one plus two walls
+//! assert_eq!(enclosure.params().outer().0, parse_length("104 mm").unwrap());
+//! ```
 //!
 //! Every failure has a stable code `PHOENIX-CAD-<NNN>` ([`CadError::code`], [`REGISTRY`]).
 //! Nothing here draws or meshes; the STEP file has not been opened in a CAD program.
@@ -34,6 +57,7 @@ pub mod enclosure;
 pub mod fit;
 pub mod graph;
 pub mod mass;
+pub mod messages;
 pub mod names;
 pub mod pattern;
 pub mod printer;
@@ -259,6 +283,105 @@ mod tests {
                 .find(|l| l.starts_with(&format!("| {code} |")))
                 .unwrap_or_else(|| panic!("{code} is not documented"));
             assert!(row.contains(title), "{code}: {row}");
+        }
+    }
+
+    /// Regressions: each of these once looked like a place where a rule could slip.
+    #[test]
+    fn a_hole_exactly_at_the_margin_is_accepted_and_one_nanometre_nearer_is_refused() {
+        let mm = |v| Length::from_mm(v).unwrap();
+        let mut e = Enclosure::new(EnclosureParams {
+            inner_length: mm(100),
+            inner_width: mm(60),
+            inner_height: mm(30),
+            wall: mm(2),
+            floor: mm(2),
+            lid: mm(3),
+            edge_margin: mm(3),
+            min_web: mm(2),
+        })
+        .unwrap();
+        let hole = |u: i64| Hole {
+            name: "edge".into(),
+            face: Face::Front,
+            u: Length::new(u).unwrap(),
+            v: mm(17),
+            diameter: mm(6),
+        };
+        let id = eh3d_container::ObjectId::from_parts(1_700_000_000_000, 1, 1).unwrap();
+        let before = e.clone();
+        assert!(e
+            .apply(Operation::AddHole {
+                id,
+                hole: hole(6_000_000 - 1)
+            })
+            .is_err());
+        assert_eq!(e, before);
+        assert!(e
+            .apply(Operation::AddHole {
+                id,
+                hole: hole(6_000_000)
+            })
+            .is_ok());
+    }
+
+    #[test]
+    fn removing_the_same_hole_twice_is_an_error_the_second_time() {
+        let mm = |v| Length::from_mm(v).unwrap();
+        let mut e = Enclosure::new(EnclosureParams {
+            inner_length: mm(100),
+            inner_width: mm(60),
+            inner_height: mm(30),
+            wall: mm(2),
+            floor: mm(2),
+            lid: mm(3),
+            edge_margin: mm(3),
+            min_web: mm(2),
+        })
+        .unwrap();
+        let id = eh3d_container::ObjectId::from_parts(1_700_000_000_000, 1, 1).unwrap();
+        e.apply(Operation::AddHole {
+            id,
+            hole: Hole {
+                name: "a".into(),
+                face: Face::Top,
+                u: mm(50),
+                v: mm(30),
+                diameter: mm(6),
+            },
+        })
+        .unwrap();
+        assert!(e.apply(Operation::RemoveHole { id }).is_ok());
+        assert_eq!(
+            e.apply(Operation::RemoveHole { id }).unwrap_err(),
+            CadError::HoleId(id)
+        );
+    }
+
+    #[test]
+    fn what_is_shown_in_any_unit_can_be_read_back_to_the_same_length() {
+        use crate::units::{format_length, parse_length, Unit};
+        for nm in [
+            0i64,
+            1,
+            -1,
+            1_587_500,
+            25_400_000,
+            -999_999_999,
+            123_456_789_012,
+        ] {
+            let l = Length::new(nm).unwrap();
+            for (unit, decimals) in [
+                (Unit::Nanometre, 0),
+                (Unit::Micrometre, 3),
+                (Unit::Millimetre, 6),
+                (Unit::Centimetre, 7),
+                (Unit::Metre, 9),
+            ] {
+                // these decimals show every nanometre exactly in the unit
+                let text = format_length(l, unit, decimals);
+                assert_eq!(parse_length(&text).unwrap(), l, "{text}");
+            }
         }
     }
 

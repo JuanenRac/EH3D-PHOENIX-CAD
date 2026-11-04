@@ -3,6 +3,7 @@
 All notable changes to this project are documented here.
 
 ## [Unreleased]
+- Add `eh3d_phoenix_cad::messages`: the text of every diagnostic in the eight languages of the suite, checked against the registry of codes; add two examples of the API that run as tests and three regression tests.
 - Add `eh3d_phoenix_cad::project`: the envelope of a project file with a format version, named domains that are kept byte for byte when this program does not know them, read-only opening when a critical domain is not understood, a chain of migrations from older versions and a size limit; code `PHOENIX-CAD-018`. What a domain holds is left to the contract of the mechanical domain.
 - Add `eh3d_phoenix_cad::datum`: reference frames with an origin and one of the 24 axis-aligned rotations, exact in integers, and the frame of each face of the enclosure, which places a point of a face where the script places a hole.
 - Add `eh3d_phoenix_cad::vars`: named variables for the master dimensions, the binding of the parameters of an enclosure to them, families of variants (small, medium, large) and a hash of the parameters for the graph; code `PHOENIX-CAD-017`.
