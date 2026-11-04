@@ -246,6 +246,19 @@ const TEXTS: &[Row] = &[
             "Ficheiro de projeto inválido",
         ],
     ),
+    (
+        "PHOENIX-CAD-019",
+        [
+            "Edge treatment not valid",
+            "Tratamiento de arista no válido",
+            "Kantenbehandlung ungültig",
+            "Traitement d'arête non valide",
+            "Trattamento dello spigolo non valido",
+            "エッジ処理が無効です",
+            "边缘处理无效",
+            "Tratamento de aresta inválido",
+        ],
+    ),
 ];
 
 /// The text of a diagnostic in a language (`en`, `es`, `de`, `fr`, `it`, `ja`, `zh` or `pt`), or

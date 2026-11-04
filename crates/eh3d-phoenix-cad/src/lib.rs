@@ -3,7 +3,7 @@
 //! * [`Length`]: a length in integer nanometres inside the mechanical range (2^40 nm, about 1100 m,
 //!   so a chassis larger than a board is representable: the board model has its own, smaller range);
 //! * [`enclosure`]: a parametric box with holes in its faces (each with the object identity of
-//!   the suite, a UUID v7) and the structured operations that change it. An operation that is refused leaves the model exactly as it was;
+//!   the suite, a UUID v7), rounded or chamfered edges, and the structured operations that change it. An operation that is refused leaves the model exactly as it was;
 //! * [`scad`]: the model as an OpenSCAD-style script, the same text for the same model;
 //! * [`step`]: the model as a STEP file (a boundary representation with the inner space as a void),
 //!   the same text for the same model, checked for its structure only;
@@ -68,7 +68,7 @@ pub mod store;
 pub mod units;
 pub mod vars;
 
-pub use enclosure::{Enclosure, EnclosureParams, Face, Hole, Id, Operation};
+pub use enclosure::{Edging, Enclosure, EnclosureParams, Face, Hole, Id, Operation, Treatment};
 pub use fit::{check_fit, Envelope, FitReport};
 
 use std::fmt;
@@ -164,6 +164,8 @@ pub enum CadError {
     InvalidName(String),
     /// A project file that is not well formed, too large or of a newer version.
     Format(String),
+    /// A treatment of the edges that does not fit the box.
+    Edging(String),
 }
 
 impl CadError {
@@ -188,6 +190,7 @@ impl CadError {
             CadError::InUse(_) => "PHOENIX-CAD-016",
             CadError::InvalidName(_) => "PHOENIX-CAD-017",
             CadError::Format(_) => "PHOENIX-CAD-018",
+            CadError::Edging(_) => "PHOENIX-CAD-019",
         }
     }
 }
@@ -217,6 +220,7 @@ impl fmt::Display for CadError {
             CadError::InUse(what) => write!(f, "{title}: {what}"),
             CadError::InvalidName(what) => write!(f, "{title}: {what:?}"),
             CadError::Format(why) => write!(f, "{title}: {why}"),
+            CadError::Edging(why) => write!(f, "{title}: {why}"),
         }
     }
 }
@@ -246,6 +250,7 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-016", "Object still in use"),
     ("PHOENIX-CAD-017", "Name not valid"),
     ("PHOENIX-CAD-018", "Project file not valid"),
+    ("PHOENIX-CAD-019", "Edge treatment not valid"),
 ];
 
 #[cfg(test)]
@@ -406,6 +411,7 @@ mod tests {
             CadError::InUse("x".into()),
             CadError::InvalidName("x y".into()),
             CadError::Format("cut".into()),
+            CadError::Edging("too big".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));

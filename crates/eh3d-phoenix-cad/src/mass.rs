@@ -5,7 +5,7 @@
 //! same model gives the same figure on every platform. A calculation that does not fit in 128
 //! bits is refused instead of wrapping.
 
-use crate::enclosure::{Enclosure, Face, Hole};
+use crate::enclosure::{Enclosure, Face, Hole, Treatment};
 use crate::units::div_round_half_away;
 use crate::{CadError, Length};
 
@@ -45,6 +45,68 @@ pub fn mass_micrograms(volume_nm3: i128, density_kg_m3: u32) -> Result<i128, Cad
         .checked_mul(i128::from(density_kg_m3))
         .ok_or(CadError::Overflow("mass"))?;
     div_round_half_away(n, 1_000_000_000_000_000_000)
+}
+
+/// The volume taken from the four vertical edges by a treatment, for a box `z` high.
+fn vertical_edges_volume(t: Treatment, z: i128) -> Result<i128, CadError> {
+    let overflow = CadError::Overflow("volume");
+    match t {
+        Treatment::Sharp => Ok(0),
+        // four triangles of s^2 / 2 along the height
+        Treatment::Chamfer(s) => {
+            let s = i128::from(s.get());
+            s.checked_mul(s)
+                .and_then(|x| x.checked_mul(z))
+                .and_then(|x| x.checked_mul(2))
+                .ok_or(overflow)
+        }
+        // four corners of s^2 (1 - pi / 4) along the height
+        Treatment::Round(s) => {
+            let s = i128::from(s.get());
+            let n = s
+                .checked_mul(s)
+                .and_then(|x| x.checked_mul(z))
+                .and_then(|x| x.checked_mul(4 * PI_DEN - PI_NUM))
+                .ok_or(overflow)?;
+            div_round_half_away(n, PI_DEN)
+        }
+    }
+}
+
+/// The volume taken from the four edges around the lid (or the floor) by a treatment, for a box
+/// whose length and width add up to `xy`. The strips meet at the corners in a mitre.
+fn rim_edges_volume(t: Treatment, xy: i128) -> Result<i128, CadError> {
+    let overflow = CadError::Overflow("volume");
+    match t {
+        Treatment::Sharp => Ok(0),
+        // c^2 (X + Y) - 4 c^3 / 3
+        Treatment::Chamfer(c) => {
+            let c = i128::from(c.get());
+            let first = c
+                .checked_mul(c)
+                .and_then(|x| x.checked_mul(xy))
+                .and_then(|x| x.checked_mul(3))
+                .ok_or(CadError::Overflow("volume"))?;
+            let second = c
+                .checked_mul(c)
+                .and_then(|x| x.checked_mul(c))
+                .and_then(|x| x.checked_mul(4))
+                .ok_or(overflow)?;
+            div_round_half_away(first - second, 3)
+        }
+        // (X + Y) r^2 (4 - pi) / 2 - 20 r^3 / 3 + 2 pi r^3
+        Treatment::Round(r) => {
+            let r = i128::from(r.get());
+            let r2 = r.checked_mul(r).ok_or(CadError::Overflow("volume"))?;
+            let r3 = r2.checked_mul(r).ok_or(CadError::Overflow("volume"))?;
+            let first = r2
+                .checked_mul(xy)
+                .and_then(|x| x.checked_mul(3 * (4 * PI_DEN - PI_NUM)))
+                .ok_or(CadError::Overflow("volume"))?;
+            let second = r3.checked_mul(12 * PI_NUM - 40 * PI_DEN).ok_or(overflow)?;
+            div_round_half_away(first + second, 6 * PI_DEN)
+        }
+    }
 }
 
 impl Enclosure {
@@ -99,12 +161,37 @@ impl Enclosure {
         Ok(Volume { nm3: total, exact })
     }
 
-    /// The volume of material: the outer box, minus the inner space, minus the holes.
+    /// The volume that rounded and chamfered edges take from the outer box. It is exact when the
+    /// vertical edges are left sharp or when the edges of the lid and of the floor are; when both
+    /// kinds are treated the strips overlap at the corners, the overlap is counted twice and the
+    /// figure says it is not exact.
+    pub fn edging_volume(&self) -> Result<Volume, CadError> {
+        let edging = self.edging();
+        let (x, y, z) = self.params().outer();
+        let xy = i128::from(x.get()) + i128::from(y.get());
+        let vertical = vertical_edges_volume(edging.vertical, i128::from(z.get()))?;
+        let top = rim_edges_volume(edging.top, xy)?;
+        let bottom = rim_edges_volume(edging.bottom, xy)?;
+        let total = vertical
+            .checked_add(top)
+            .and_then(|v| v.checked_add(bottom))
+            .ok_or(CadError::Overflow("volume"))?;
+        let overlap =
+            !edging.vertical.is_sharp() && (!edging.top.is_sharp() || !edging.bottom.is_sharp());
+        Ok(Volume {
+            nm3: total,
+            exact: !overlap,
+        })
+    }
+
+    /// The volume of material: the outer box, minus the inner space, minus the treatment of the
+    /// edges, minus the holes.
     pub fn material_volume_with_holes(&self) -> Result<Volume, CadError> {
         let holes = self.holes_volume()?;
+        let edges = self.edging_volume()?;
         Ok(Volume {
-            nm3: self.material_volume_nm3() - holes.nm3,
-            exact: holes.exact,
+            nm3: self.material_volume_nm3() - edges.nm3 - holes.nm3,
+            exact: holes.exact && edges.exact,
         })
     }
 }
@@ -112,7 +199,7 @@ impl Enclosure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::enclosure::{EnclosureParams, Operation};
+    use crate::enclosure::{Edging, EnclosureParams, Operation, Treatment};
     use eh3d_container::ObjectId;
 
     fn mm(v: i64) -> Length {
@@ -219,6 +306,87 @@ mod tests {
             cylinder_volume_nm3(mm(10), mm(2)).unwrap()
         );
         assert!(top.holes_volume().unwrap().exact);
+    }
+
+    fn edged(edging: Edging) -> Enclosure {
+        let mut e = Enclosure::new(params(3)).unwrap();
+        e.apply(Operation::SetEdging(edging)).unwrap();
+        e
+    }
+
+    const MM3: i128 = 1_000_000_000_000_000_000;
+
+    #[test]
+    fn chamfered_and_rounded_vertical_edges_take_the_volume_of_their_corners() {
+        let chamfer = edged(Edging {
+            vertical: Treatment::Chamfer(mm(3)),
+            ..Edging::default()
+        });
+        // four triangles of 4.5 square millimetres along 35 millimetres
+        let v = chamfer.edging_volume().unwrap();
+        assert_eq!((v.nm3, v.exact), (630 * MM3, true));
+        let round = edged(Edging {
+            vertical: Treatment::Round(mm(5)),
+            ..Edging::default()
+        });
+        // four times 25 (1 - pi / 4) square millimetres along 35 millimetres
+        assert_eq!(
+            round.edging_volume().unwrap().nm3,
+            751_106_428_108_750_000_000
+        );
+        let plain = Enclosure::new(params(3)).unwrap();
+        assert_eq!(plain.edging_volume().unwrap().nm3, 0);
+        assert_eq!(
+            round.material_volume_with_holes().unwrap().nm3,
+            round.material_volume_nm3() - 751_106_428_108_750_000_000
+        );
+    }
+
+    #[test]
+    fn the_edges_of_the_lid_are_mitred_at_the_corners() {
+        let chamfer = edged(Edging {
+            top: Treatment::Chamfer(mm(2)),
+            ..Edging::default()
+        });
+        assert_eq!(
+            chamfer.edging_volume().unwrap().nm3,
+            661_333_333_333_333_333_333
+        );
+        let round = edged(Edging {
+            top: Treatment::Round(mm(2)),
+            bottom: Treatment::Sharp,
+            ..Edging::default()
+        });
+        assert_eq!(
+            round.edging_volume().unwrap().nm3,
+            285_357_017_517_866_666_667
+        );
+        // the floor has the same rim, so treating both takes twice as much
+        let both = edged(Edging {
+            top: Treatment::Round(mm(2)),
+            bottom: Treatment::Round(mm(2)),
+            ..Edging::default()
+        });
+        assert_eq!(
+            both.edging_volume().unwrap().nm3,
+            2 * 285_357_017_517_866_666_667
+        );
+    }
+
+    #[test]
+    fn treating_vertical_edges_and_the_rim_together_is_marked_as_not_exact() {
+        let both = edged(Edging {
+            vertical: Treatment::Round(mm(5)),
+            top: Treatment::Chamfer(mm(2)),
+            bottom: Treatment::Sharp,
+        });
+        let v = both.edging_volume().unwrap();
+        assert!(!v.exact);
+        assert_eq!(
+            v.nm3,
+            751_106_428_108_750_000_000 + 661_333_333_333_333_333_333
+        );
+        assert!(!both.material_volume_with_holes().unwrap().exact);
     }
 
     #[test]

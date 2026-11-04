@@ -58,6 +58,20 @@ impl Face {
         }
     }
 
+    /// The faces that meet this one at its four sides, in the order: the side at the smallest `u`,
+    /// the side at the largest `u`, the side at the smallest `v` and the side at the largest `v`
+    /// (`u` to the right and `v` up as seen from outside).
+    pub fn neighbours(self) -> [Face; 4] {
+        match self {
+            Face::Front => [Face::Left, Face::Right, Face::Bottom, Face::Top],
+            Face::Back => [Face::Right, Face::Left, Face::Bottom, Face::Top],
+            Face::Left => [Face::Back, Face::Front, Face::Bottom, Face::Top],
+            Face::Right => [Face::Front, Face::Back, Face::Bottom, Face::Top],
+            Face::Top => [Face::Left, Face::Right, Face::Front, Face::Back],
+            Face::Bottom => [Face::Left, Face::Right, Face::Back, Face::Front],
+        }
+    }
+
     /// The face with a name given by [`Face::name`], or `None`.
     pub fn from_name(name: &str) -> Option<Face> {
         Face::ALL.into_iter().find(|f| f.name() == name)
@@ -134,6 +148,127 @@ impl EnclosureParams {
     }
 }
 
+/// What is done to the edges of the box that form a group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Treatment {
+    /// The edge is left sharp.
+    #[default]
+    Sharp,
+    /// The edge is rounded with a quarter of a circle of this radius.
+    Round(Length),
+    /// The edge is cut flat; the cut is this far from the edge along both faces.
+    Chamfer(Length),
+}
+
+impl Treatment {
+    /// The radius or the size of the cut; zero for a sharp edge.
+    pub fn size(self) -> Length {
+        match self {
+            Treatment::Sharp => Length::ZERO,
+            Treatment::Round(s) | Treatment::Chamfer(s) => s,
+        }
+    }
+
+    /// Whether the edge is left sharp.
+    pub fn is_sharp(self) -> bool {
+        self == Treatment::Sharp
+    }
+
+    /// Whether a point of the inner space that is `a` and `b` away from the two faces of an edge
+    /// stays inside the material once the edge is treated.
+    fn keeps_material(self, a: i128, b: i128) -> bool {
+        match self {
+            Treatment::Sharp => true,
+            Treatment::Chamfer(s) => a + b > i128::from(s.get()),
+            Treatment::Round(s) => {
+                let r = i128::from(s.get());
+                a >= r || b >= r || (r - a) * (r - a) + (r - b) * (r - b) < r * r
+            }
+        }
+    }
+}
+
+/// The treatment of the three groups of edges of the box: the four vertical edges, the four edges
+/// around the lid and the four edges around the floor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Edging {
+    /// The four edges along Z (between two side faces).
+    pub vertical: Treatment,
+    /// The four edges between the lid and the side faces.
+    pub top: Treatment,
+    /// The four edges between the floor and the side faces.
+    pub bottom: Treatment,
+}
+
+impl Edging {
+    /// The treatment of the edge between two faces (which must not be opposite faces).
+    pub fn treatment_of(&self, a: Face, b: Face) -> Treatment {
+        if a == Face::Top || b == Face::Top {
+            self.top
+        } else if a == Face::Bottom || b == Face::Bottom {
+            self.bottom
+        } else {
+            self.vertical
+        }
+    }
+
+    /// Whether every edge is left sharp.
+    pub fn is_sharp(&self) -> bool {
+        self.vertical.is_sharp() && self.top.is_sharp() && self.bottom.is_sharp()
+    }
+
+    /// Checks the treatments against the box: every size is positive, no treatment is larger than
+    /// half of the box, the treatments of the lid and of the floor fit in its height, and none of
+    /// them reaches the inner space.
+    pub fn check(&self, p: &EnclosureParams) -> Result<(), CadError> {
+        let (x, y, z) = p.outer();
+        let plan = i128::from(x.get().min(y.get()));
+        let (wall, floor, lid) = (
+            i128::from(p.wall.get()),
+            i128::from(p.floor.get()),
+            i128::from(p.lid.get()),
+        );
+        for (what, t, a, b) in [
+            ("vertical edges", self.vertical, wall, wall),
+            ("edges of the lid", self.top, wall, lid),
+            ("edges of the floor", self.bottom, wall, floor),
+        ] {
+            if t.is_sharp() {
+                continue;
+            }
+            if t.size().get() <= 0 {
+                return Err(CadError::NotPositive("edge treatment"));
+            }
+            if 2 * i128::from(t.size().get()) > plan {
+                return Err(CadError::Edging(format!(
+                    "{what}: larger than half the box"
+                )));
+            }
+            if !t.keeps_material(a, b) {
+                return Err(CadError::Edging(format!("{what}: reach the inner space")));
+            }
+        }
+        if i128::from(self.top.size().get()) + i128::from(self.bottom.size().get())
+            > i128::from(z.get())
+        {
+            return Err(CadError::Edging(
+                "lid and floor: higher than the box".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The size of a face of a box with these parameters: its width (along u) and its height (along v).
+fn face_size_of(params: &EnclosureParams, face: Face) -> (Length, Length) {
+    let (x, y, z) = params.outer();
+    match face {
+        Face::Front | Face::Back => (x, z),
+        Face::Left | Face::Right => (y, z),
+        Face::Top | Face::Bottom => (x, y),
+    }
+}
+
 /// A round hole in a face.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hole {
@@ -173,12 +308,15 @@ pub enum Operation {
     },
     /// Replaces the parameters of the enclosure. Every hole must still be valid.
     SetParams(EnclosureParams),
+    /// Replaces the treatment of the edges. It must fit the box and every hole must still be valid.
+    SetEdging(Edging),
 }
 
 /// The enclosure: its parameters and its holes by id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Enclosure {
     params: EnclosureParams,
+    edging: Edging,
     holes: BTreeMap<Id, Hole>,
 }
 
@@ -188,6 +326,7 @@ impl Enclosure {
         params.check()?;
         Ok(Enclosure {
             params,
+            edging: Edging::default(),
             holes: BTreeMap::new(),
         })
     }
@@ -197,6 +336,11 @@ impl Enclosure {
         &self.params
     }
 
+    /// The treatment of the edges.
+    pub fn edging(&self) -> &Edging {
+        &self.edging
+    }
+
     /// The holes by id (ordered by id, so every listing is the same).
     pub fn holes(&self) -> &BTreeMap<Id, Hole> {
         &self.holes
@@ -204,16 +348,11 @@ impl Enclosure {
 
     /// The size of a face: its width (along u) and its height (along v).
     pub fn face_size(&self, face: Face) -> (Length, Length) {
-        let (x, y, z) = self.params.outer();
-        match face {
-            Face::Front | Face::Back => (x, z),
-            Face::Left | Face::Right => (y, z),
-            Face::Top | Face::Bottom => (x, y),
-        }
+        face_size_of(&self.params, face)
     }
 
     /// The volume of material of the empty box in cubic nanometres: the outer box minus the inner
-    /// space. Holes are not subtracted.
+    /// space. Holes and the treatment of the edges are not subtracted.
     pub fn material_volume_nm3(&self) -> i128 {
         let (x, y, z) = self.params.outer();
         let outer = i128::from(x.get()) * i128::from(y.get()) * i128::from(z.get());
@@ -224,12 +363,22 @@ impl Enclosure {
     }
 
     fn check_hole(&self, hole: &Hole, ignoring: Option<Id>) -> Result<(), CadError> {
-        self.check_hole_in(&self.params, &self.holes, hole, ignoring)
+        Self::check_hole_in(&self.params, &self.edging, &self.holes, hole, ignoring)
+    }
+
+    /// Every hole against the given parameters and edging, one after the other.
+    fn check_all(&self, params: &EnclosureParams, edging: &Edging) -> Result<(), CadError> {
+        let mut accepted: BTreeMap<Id, Hole> = BTreeMap::new();
+        for (id, hole) in &self.holes {
+            Self::check_hole_in(params, edging, &accepted, hole, None)?;
+            accepted.insert(*id, hole.clone());
+        }
+        Ok(())
     }
 
     fn check_hole_in(
-        &self,
         params: &EnclosureParams,
+        edging: &Edging,
         holes: &BTreeMap<Id, Hole>,
         hole: &Hole,
         ignoring: Option<Id>,
@@ -237,18 +386,55 @@ impl Enclosure {
         if hole.diameter.get() <= 0 {
             return Err(CadError::NotPositive("hole diameter"));
         }
-        let probe = Enclosure {
-            params: *params,
-            holes: BTreeMap::new(),
-        };
-        let (w, h) = probe.face_size(hole.face);
+        let (w, h) = face_size_of(params, hole.face);
         let r = i128::from(hole.diameter.get());
-        let m = i128::from(params.edge_margin.get());
         let (u, v) = (i128::from(hole.u.get()), i128::from(hole.v.get()));
+        // the distance to an edge that is rounded or chamfered is at least the size of the
+        // treatment, because the face is not flat there
+        let [u_low, u_high, v_low, v_high] = hole.face.neighbours();
+        let margin_to = |side: Face| {
+            i128::from(
+                params
+                    .edge_margin
+                    .get()
+                    .max(edging.treatment_of(hole.face, side).size().get()),
+            )
+        };
         // 2 * (distance from the centre to an edge) >= diameter + 2 * margin
-        let inside = |c: i128, size: i128| 2 * c >= r + 2 * m && 2 * (size - c) >= r + 2 * m;
-        if !inside(u, i128::from(w.get())) || !inside(v, i128::from(h.get())) {
+        let inside = |c: i128, size: i128, low: Face, high: Face| {
+            2 * c >= r + 2 * margin_to(low) && 2 * (size - c) >= r + 2 * margin_to(high)
+        };
+        if !inside(u, i128::from(w.get()), u_low, u_high)
+            || !inside(v, i128::from(h.get()), v_low, v_high)
+        {
             return Err(CadError::HoleOutsideFace(hole.name.clone()));
+        }
+        // the lid and the floor have the rounded or chamfered corners of the vertical edges
+        if matches!(hole.face, Face::Top | Face::Bottom) {
+            let (wu, hv) = (i128::from(w.get()), i128::from(h.get()));
+            let r2 = r + 2 * i128::from(params.edge_margin.get());
+            let s = i128::from(edging.vertical.size().get());
+            for (cu, cv) in [(u, v), (wu - u, v), (u, hv - v), (wu - u, hv - v)] {
+                let clear = match edging.vertical {
+                    Treatment::Sharp => true,
+                    // the circle of radius r2 / 2 inside the arc of radius s centred at (s, s)
+                    Treatment::Round(_) => {
+                        cu >= s
+                            || cv >= s
+                            || (2 * s >= r2
+                                && 4 * ((s - cu) * (s - cu) + (s - cv) * (s - cv))
+                                    <= (2 * s - r2) * (2 * s - r2))
+                    }
+                    // at least r2 / 2 from the line u + v = s
+                    Treatment::Chamfer(_) => {
+                        let d = cu + cv - s;
+                        d > 0 && 2 * d * d >= r2 * r2
+                    }
+                };
+                if !clear {
+                    return Err(CadError::HoleOutsideFace(hole.name.clone()));
+                }
+            }
         }
         let web = i128::from(params.min_web.get());
         for (other_id, other) in holes {
@@ -292,15 +478,19 @@ impl Enclosure {
             }
             Operation::SetParams(params) => {
                 params.check()?;
+                self.edging.check(&params)?;
                 // every hole must still be valid against the new parameters, one after the other
-                let mut accepted: BTreeMap<Id, Hole> = BTreeMap::new();
-                for (id, hole) in &self.holes {
-                    self.check_hole_in(&params, &accepted, hole, None)?;
-                    accepted.insert(*id, hole.clone());
-                }
+                self.check_all(&params, &self.edging)?;
                 let old = self.params;
                 self.params = params;
                 Ok(Operation::SetParams(old))
+            }
+            Operation::SetEdging(edging) => {
+                edging.check(&self.params)?;
+                self.check_all(&self.params, &edging)?;
+                let old = self.edging;
+                self.edging = edging;
+                Ok(Operation::SetEdging(old))
             }
         }
     }
@@ -499,5 +689,154 @@ mod tests {
             CadError::NotPositive("lid")
         );
         assert_eq!(e, before);
+    }
+
+    fn rounded(vertical: i64) -> Edging {
+        Edging {
+            vertical: Treatment::Round(mm(vertical)),
+            ..Edging::default()
+        }
+    }
+
+    #[test]
+    fn an_edge_treatment_must_fit_the_box_and_stay_out_of_the_inner_space() {
+        let mut e = Enclosure::new(params()).unwrap();
+        let before = e.clone();
+        // larger than half of the 64 mm width
+        let err = e.apply(Operation::SetEdging(rounded(40))).unwrap_err();
+        assert_eq!(err.code(), "PHOENIX-CAD-019");
+        // a chamfer of 5 mm cuts through a wall of 2 mm at the inner corner
+        let cut = Edging {
+            vertical: Treatment::Chamfer(mm(5)),
+            ..Edging::default()
+        };
+        assert_eq!(
+            e.apply(Operation::SetEdging(cut)).unwrap_err().code(),
+            "PHOENIX-CAD-019"
+        );
+        // a size of zero is not a treatment
+        let zero = Edging {
+            top: Treatment::Chamfer(Length::ZERO),
+            ..Edging::default()
+        };
+        assert_eq!(
+            e.apply(Operation::SetEdging(zero)).unwrap_err(),
+            CadError::NotPositive("edge treatment")
+        );
+        assert_eq!(e, before, "a refused operation leaves the model unchanged");
+        // a rounding of 5 mm leaves the corner of the inner space inside the material
+        assert!(e.apply(Operation::SetEdging(rounded(5))).is_ok());
+        assert!(!e.edging().is_sharp());
+    }
+
+    #[test]
+    fn the_treatments_of_the_lid_and_of_the_floor_must_fit_in_the_height() {
+        let tall_wall = EnclosureParams {
+            inner_length: mm(100),
+            inner_width: mm(60),
+            inner_height: mm(10),
+            wall: mm(20),
+            floor: mm(2),
+            lid: mm(2),
+            edge_margin: mm(3),
+            min_web: mm(2),
+        };
+        let mut e = Enclosure::new(tall_wall).unwrap();
+        let both = Edging {
+            top: Treatment::Chamfer(mm(10)),
+            bottom: Treatment::Chamfer(mm(10)),
+            ..Edging::default()
+        };
+        // each is valid alone, together they are higher than the 14 mm box
+        let top_only = Edging {
+            bottom: Treatment::Sharp,
+            ..both
+        };
+        assert!(e.apply(Operation::SetEdging(top_only)).is_ok());
+        assert_eq!(
+            e.apply(Operation::SetEdging(both)).unwrap_err().code(),
+            "PHOENIX-CAD-019"
+        );
+    }
+
+    #[test]
+    fn holes_keep_away_from_a_treated_edge_by_the_size_of_the_treatment() {
+        let mut e = Enclosure::new(params()).unwrap();
+        // 6 mm hole centred 7 mm from the left edge: fine with the margin of 3 mm
+        e.apply(add("a", hole(Face::Front, 7, 17, 6))).unwrap();
+        let before = e.clone();
+        // once the vertical edges are rounded by 5 mm the hole would need 5 + 3 mm of room
+        assert_eq!(
+            e.apply(Operation::SetEdging(rounded(5))).unwrap_err(),
+            CadError::HoleOutsideFace("a".into())
+        );
+        assert_eq!(e, before);
+        let mut e = Enclosure::new(params()).unwrap();
+        e.apply(Operation::SetEdging(rounded(5))).unwrap();
+        assert!(e.apply(add("a", hole(Face::Front, 7, 17, 6))).is_err());
+        assert!(e.apply(add("a", hole(Face::Front, 8, 17, 6))).is_ok());
+    }
+
+    #[test]
+    fn a_hole_of_the_lid_stays_inside_the_rounded_or_chamfered_corner() {
+        let mut p = params();
+        p.edge_margin = mm(1);
+        let at = |u: i64, v: i64| {
+            let mut h = hole(Face::Top, 0, 0, 6);
+            h.name = "t".into();
+            h.u = Length::new(u).unwrap();
+            h.v = Length::new(v).unwrap();
+            Operation::AddHole {
+                id: id_of("t"),
+                hole: h,
+            }
+        };
+        let mut e = Enclosure::new(p).unwrap();
+        e.apply(Operation::SetEdging(rounded(6))).unwrap();
+        // a hole of 6 mm with 1 mm of margin has a radius of 4 mm to keep clear of the arc
+        // of radius 6 mm whose centre is at (6, 6): 4.5 mm is too near the corner, 5 mm fits
+        assert!(e.apply(at(4_500_000, 4_500_000)).is_err());
+        assert!(e.apply(at(5_000_000, 5_000_000)).is_ok());
+        let mut c = Enclosure::new(p).unwrap();
+        c.apply(Operation::SetEdging(Edging {
+            vertical: Treatment::Chamfer(mm(3)),
+            ..Edging::default()
+        }))
+        .unwrap();
+        // the cut runs through (3, 0) and (0, 3); the hole needs 4 mm from it, so u + v >= 3 + 4 * sqrt(2)
+        assert!(c.apply(at(4_000_000, 4_000_000)).is_err());
+        assert!(c.apply(at(4_400_000, 4_400_000)).is_ok());
+    }
+
+    #[test]
+    fn the_edging_has_an_exact_inverse_and_the_parameters_cannot_break_it() {
+        let mut e = Enclosure::new(params()).unwrap();
+        let start = e.clone();
+        let undo = e.apply(Operation::SetEdging(rounded(5))).unwrap();
+        assert_eq!(undo, Operation::SetEdging(Edging::default()));
+        // a thinner wall would let the rounding reach the inner space
+        let mut thin = params();
+        thin.wall = mm(1);
+        let before = e.clone();
+        assert_eq!(
+            e.apply(Operation::SetParams(thin)).unwrap_err().code(),
+            "PHOENIX-CAD-019"
+        );
+        assert_eq!(e, before);
+        e.apply(undo).unwrap();
+        assert_eq!(e, start);
+    }
+
+    #[test]
+    fn the_neighbours_of_a_face_are_four_other_faces_that_are_not_opposite_to_each_other() {
+        for face in Face::ALL {
+            let n = face.neighbours();
+            for f in n {
+                assert_ne!(f, face);
+                assert_ne!(f, face.opposite());
+            }
+            assert_eq!(n[0].opposite(), n[1]);
+            assert_eq!(n[2].opposite(), n[3]);
+        }
     }
 }
