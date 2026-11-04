@@ -20,3 +20,7 @@ The table repeats the `REGISTRY` of the crate `eh3d-phoenix-cad` (`src/lib.rs`);
 | PHOENIX-CAD-010 | Reference to an element that does not exist | a name of a face, edge or hole wall that is unknown, names a hole that is gone, or is not written in the canonical way; the operation that uses it fails and no other element is chosen in its place |
 | PHOENIX-CAD-011 | Settings not valid | a settings file with a line that is not a section, a `key = value` or a comment, a repeated or missing key, or a value outside its limits; the message names the line or the key |
 | PHOENIX-CAD-012 | File cannot be read or written | a file that cannot be created, read, replaced or copied, or that is larger than the limit given to the loader; a failed save leaves the old file as it was |
+| PHOENIX-CAD-013 | Dependency cycle | a dependency that would make an object depend on itself, directly or through others; the graph is left as it was |
+| PHOENIX-CAD-014 | Unknown name or id | an id, a variable, a variant or a domain that does not exist |
+| PHOENIX-CAD-015 | Name or id already used | an object, a variable or a variant added under a name or an id that is taken |
+| PHOENIX-CAD-016 | Object still in use | an object removed while others still depend on it |

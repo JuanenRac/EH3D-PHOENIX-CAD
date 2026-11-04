@@ -15,6 +15,7 @@
 //! * [`store`]: saving a file atomically with numbered copies, and loading a file under a size limit;
 //! * [`mass`]: the volume of the material and of the holes and the mass for a density, in integers (pi as a ratio of twelve decimals);
 //! * [`pattern`]: rows, grids and circles of holes with exact positions, and batches of operations that apply all or nothing;
+//! * [`graph`]: the graph of dependencies between objects, with a deterministic order of calculation, refused cycles, a recalculation that reuses what did not change, and a Graphviz dump;
 //! * [`fit`]: whether an envelope (the outline of a board and its tallest part) fits inside.
 //!
 //! Every failure has a stable code `PHOENIX-CAD-<NNN>` ([`CadError::code`], [`REGISTRY`]).
@@ -27,6 +28,7 @@ pub mod body;
 pub mod config;
 pub mod enclosure;
 pub mod fit;
+pub mod graph;
 pub mod mass;
 pub mod names;
 pub mod pattern;
@@ -120,6 +122,14 @@ pub enum CadError {
     Config(String),
     /// A file could not be read or written, or is larger than allowed.
     Io(String),
+    /// A dependency that would make an object depend on itself.
+    Cycle(String),
+    /// A name or an id that no object, variable or domain has.
+    UnknownName(String),
+    /// A name or an id that is already taken.
+    Duplicate(String),
+    /// An object that others still depend on.
+    InUse(String),
 }
 
 impl CadError {
@@ -138,6 +148,10 @@ impl CadError {
             CadError::Reference(_) => "PHOENIX-CAD-010",
             CadError::Config(_) => "PHOENIX-CAD-011",
             CadError::Io(_) => "PHOENIX-CAD-012",
+            CadError::Cycle(_) => "PHOENIX-CAD-013",
+            CadError::UnknownName(_) => "PHOENIX-CAD-014",
+            CadError::Duplicate(_) => "PHOENIX-CAD-015",
+            CadError::InUse(_) => "PHOENIX-CAD-016",
         }
     }
 }
@@ -161,6 +175,10 @@ impl fmt::Display for CadError {
             CadError::Reference(name) => write!(f, "{title}: {name:?}"),
             CadError::Config(why) => write!(f, "{title}: {why}"),
             CadError::Io(why) => write!(f, "{title}: {why}"),
+            CadError::Cycle(what) => write!(f, "{title}: {what}"),
+            CadError::UnknownName(what) => write!(f, "{title}: {what}"),
+            CadError::Duplicate(what) => write!(f, "{title}: {what}"),
+            CadError::InUse(what) => write!(f, "{title}: {what}"),
         }
     }
 }
@@ -184,6 +202,10 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ),
     ("PHOENIX-CAD-011", "Settings not valid"),
     ("PHOENIX-CAD-012", "File cannot be read or written"),
+    ("PHOENIX-CAD-013", "Dependency cycle"),
+    ("PHOENIX-CAD-014", "Unknown name or id"),
+    ("PHOENIX-CAD-015", "Name or id already used"),
+    ("PHOENIX-CAD-016", "Object still in use"),
 ];
 
 #[cfg(test)]
@@ -239,6 +261,10 @@ mod tests {
             CadError::Reference("box:face:x".into()),
             CadError::Config("line 1".into()),
             CadError::Io("disk".into()),
+            CadError::Cycle("x".into()),
+            CadError::UnknownName("x".into()),
+            CadError::Duplicate("x".into()),
+            CadError::InUse("x".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));
