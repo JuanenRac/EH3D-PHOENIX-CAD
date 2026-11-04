@@ -362,8 +362,9 @@ mod tests {
     macro_rules! sum {
         ($g:expr, $calls:expr) => {{
             let params: BTreeMap<Id, u64> = $g.nodes.iter().map(|(i, n)| (*i, n.params)).collect();
-            |i: Id, inputs: &[&u64]| -> Result<u64, CadError> {
-                $calls.push(i);
+            let log = &mut $calls;
+            move |i: Id, inputs: &[&u64]| -> Result<u64, CadError> {
+                log.push(i);
                 Ok(params[&i] + inputs.iter().copied().sum::<u64>())
             }
         }};
