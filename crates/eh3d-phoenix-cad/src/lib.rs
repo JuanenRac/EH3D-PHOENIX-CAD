@@ -17,6 +17,7 @@
 //! * [`pattern`]: rows, grids and circles of holes with exact positions, and batches of operations that apply all or nothing;
 //! * [`graph`]: the graph of dependencies between objects, with a deterministic order of calculation, refused cycles, a recalculation that reuses what did not change, and a Graphviz dump;
 //! * [`vars`]: named variables for the master dimensions, the binding of the parameters of an enclosure to them, and families of variants (small, medium, large);
+//! * [`datum`]: reference frames with an origin and one of the 24 axis-aligned rotations, and the frame of each face of the box;
 //! * [`fit`]: whether an envelope (the outline of a board and its tallest part) fits inside.
 //!
 //! Every failure has a stable code `PHOENIX-CAD-<NNN>` ([`CadError::code`], [`REGISTRY`]).
@@ -27,6 +28,7 @@
 
 pub mod body;
 pub mod config;
+pub mod datum;
 pub mod enclosure;
 pub mod fit;
 pub mod graph;
