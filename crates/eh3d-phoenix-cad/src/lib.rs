@@ -7,6 +7,7 @@
 //! * [`scad`]: the model as an OpenSCAD-style script, the same text for the same model;
 //! * [`step`]: the model as a STEP file (a boundary representation with the inner space as a void),
 //!   the same text for the same model, checked for its structure only;
+//! * [`units`]: angles, counts and ratios in integers, exact rounding, and lengths read and shown in mm, um, in and mil;
 //! * [`fit`]: whether an envelope (the outline of a board and its tallest part) fits inside.
 //!
 //! Every failure has a stable code `PHOENIX-CAD-<NNN>` ([`CadError::code`], [`REGISTRY`]).
@@ -19,6 +20,7 @@ pub mod enclosure;
 pub mod fit;
 pub mod scad;
 pub mod step;
+pub mod units;
 
 pub use enclosure::{Enclosure, EnclosureParams, Face, Hole, Id, Operation};
 pub use fit::{check_fit, Envelope, FitReport};
@@ -90,6 +92,14 @@ pub enum CadError {
     HolesOverlap(String, String),
     /// A hole id is used twice, or an operation names a hole that does not exist.
     HoleId(eh3d_container::ObjectId),
+    /// An angle is outside the range of angles.
+    AngleOutOfRange(i64),
+    /// A count or a ratio is outside its range.
+    ValueOutOfRange(&'static str),
+    /// A text with a number and a unit is not understood.
+    UnitText(String),
+    /// An integer calculation would overflow, or divides by zero.
+    Overflow(&'static str),
 }
 
 impl CadError {
@@ -101,6 +111,10 @@ impl CadError {
             CadError::HoleOutsideFace(_) => "PHOENIX-CAD-003",
             CadError::HolesOverlap(_, _) => "PHOENIX-CAD-004",
             CadError::HoleId(_) => "PHOENIX-CAD-005",
+            CadError::AngleOutOfRange(_) => "PHOENIX-CAD-006",
+            CadError::ValueOutOfRange(_) => "PHOENIX-CAD-007",
+            CadError::UnitText(_) => "PHOENIX-CAD-008",
+            CadError::Overflow(_) => "PHOENIX-CAD-009",
         }
     }
 }
@@ -117,6 +131,10 @@ impl fmt::Display for CadError {
             CadError::HoleOutsideFace(h) => write!(f, "{title}: hole {h}"),
             CadError::HolesOverlap(a, b) => write!(f, "{title}: holes {a} and {b}"),
             CadError::HoleId(id) => write!(f, "{title}: hole {id}"),
+            CadError::AngleOutOfRange(v) => write!(f, "{title}: {v} nano-degrees"),
+            CadError::ValueOutOfRange(what) => write!(f, "{title}: {what}"),
+            CadError::UnitText(text) => write!(f, "{title}: {text:?}"),
+            CadError::Overflow(what) => write!(f, "{title}: {what}"),
         }
     }
 }
@@ -130,6 +148,10 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-003", "Hole outside its face"),
     ("PHOENIX-CAD-004", "Holes too close"),
     ("PHOENIX-CAD-005", "Hole id used twice or unknown"),
+    ("PHOENIX-CAD-006", "Angle outside the range"),
+    ("PHOENIX-CAD-007", "Count or ratio outside its range"),
+    ("PHOENIX-CAD-008", "Number with a unit not understood"),
+    ("PHOENIX-CAD-009", "Integer calculation overflows"),
 ];
 
 #[cfg(test)]
@@ -178,6 +200,10 @@ mod tests {
             CadError::HoleOutsideFace("a".into()),
             CadError::HolesOverlap("a".into(), "b".into()),
             CadError::HoleId(eh3d_container::ObjectId::from_parts(1, 2, 3).unwrap()),
+            CadError::AngleOutOfRange(1),
+            CadError::ValueOutOfRange("count"),
+            CadError::UnitText("x".into()),
+            CadError::Overflow("scale"),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));

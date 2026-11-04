@@ -11,14 +11,14 @@
   <img src="https://img.shields.io/badge/License-GPL%203.0--or--later-blue.svg" alt="GPL 3.0 or later">
   <img src="https://img.shields.io/badge/Stack-Markdown%20%2B%20Python-blue.svg" alt="Markdown and Python">
   <img src="https://img.shields.io/badge/Languages-8-00E5FF.svg" alt="Languages">
-  <img src="https://img.shields.io/badge/Tests-27-2EA043.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-36-2EA043.svg" alt="Tests">
   <img src="https://img.shields.io/badge/Version-0.0.2-0f6cbd.svg" alt="Version">
   <img src="https://img.shields.io/badge/Maturity-scaffolding-FFB020.svg" alt="Maturity">
 </p>
 
 ---
 
-**Ehrlichkeitscheck - was heute tatsächlich läuft:** eine Rust-Bibliothek ohne Fenster mit einem parametrischen Gehäuse: Längen in ganzzahligen Nanometern mit eigenem Bereich, runde Löcher in den Flächen, strukturierte Änderungsoperationen, die Konflikte melden und das Modell unverändert lassen, ein Skript im OpenSCAD-Stil und eine Passprüfung gegen die Hüllgröße einer Platine. Sie hat 24 eigene Tests, die auf einem Computer bestehen. Sie wurde nur mit Modellen aus ihren eigenen Tests erprobt; nichts wurde gezeichnet oder auf einer Maschine ausgeführt, und die STEP-Datei, die sie schreibt, wurde nur auf ihre Struktur geprüft, und Kühlkörper, Skizzen und Baugruppen sind nur geplant.
+**Ehrlichkeitscheck - was heute tatsächlich läuft:** eine Rust-Bibliothek ohne Fenster mit einem parametrischen Gehäuse: Längen in ganzzahligen Nanometern mit eigenem Bereich, runde Löcher in den Flächen, strukturierte Änderungsoperationen, die Konflikte melden und das Modell unverändert lassen, ein Skript im OpenSCAD-Stil und eine Passprüfung gegen die Hüllgröße einer Platine. Sie hat 33 eigene Tests, die auf einem Computer bestehen. Sie wurde nur mit Modellen aus ihren eigenen Tests erprobt; nichts wurde gezeichnet oder auf einer Maschine ausgeführt, und die STEP-Datei, die sie schreibt, wurde nur auf ihre Struktur geprüft, und Kühlkörper, Skizzen und Baugruppen sind nur geplant.
 
 ---
 
@@ -30,7 +30,7 @@
 |---|---|
 | Version | `0.0.2` |
 | Reifegrad | Gerüst |
-| Tests | 27 |
+| Tests | 36 |
 | Technologie-Stack | Markdown, Python 3.10+ |
 | Auf echter Hardware | Noch nicht auf Hardware ausgeführt |
 
@@ -45,7 +45,7 @@ Jede Zeile ist ein Teil dieses Repositorys, und die Ampel sagt, wie weit er heut
 | Bereich | Stand | Was das hier bedeutet |
 |---|---|---|
 | Repository-Prüfungen | 🟡 | Die Repository-Prüfung, die Prüfung der Bilder und die 3 Tests der Basis laufen in der CI und bestehen. |
-| Tests | 🟡 | Die 24 Tests der Rust-Bibliothek und die 3 der Basis bestehen auf einem Computer. Sie nutzen nur Modelle, die die Tests selbst erzeugen. |
+| Tests | 🟡 | Die 33 Tests der Rust-Bibliothek und die 3 der Basis bestehen auf einem Computer. Sie nutzen nur Modelle, die die Tests selbst erzeugen. |
 | Echte Hardware | 🟠 | Auf keiner Maschine und keiner Platine ausgeführt: nichts hier wurde auf Hardware ausprobiert. |
 | Geplante Funktion | 🟠 | Teilweise fertig: ein parametrisches Gehäuse mit Löchern, ein Skript im OpenSCAD-Stil und eine Passprüfung existieren, dazu ein erster STEP-Schreiber, nur auf seine Struktur geprüft; Kühlkörper, Skizzen und Baugruppen sind nicht begonnen. |
 | Anforderungen | 🟠 | 4 von 6 Anforderungen sind als Prototyp (Gehäuse, Skript, Änderungsoperationen und mechanischer Bereich), 2 nur geplant und keine ist validiert. |
@@ -79,7 +79,7 @@ python -I -m unittest discover -s tools -p "test_*.py"
 
 ## 🧪 Tests
 
-Die Rust-Bibliothek hat 24 Tests (`cargo test`) und die Basis hat 3 (`python -I -m unittest discover -s tools -p "test_*.py"`); alle bestehen auf einem Computer. Die CI führt die Repository-Prüfung, die Prüfung der Bilder, die Tests der Basis und für den Rust-Code die Formatprüfung, clippy mit Warnungen als Fehlern und die Tests unter Linux und Windows aus.
+Die Rust-Bibliothek hat 33 Tests (`cargo test`) und die Basis hat 3 (`python -I -m unittest discover -s tools -p "test_*.py"`); alle bestehen auf einem Computer. Die CI führt die Repository-Prüfung, die Prüfung der Bilder, die Tests der Basis und für den Rust-Code die Formatprüfung, clippy mit Warnungen als Fehlern und die Tests unter Linux und Windows aus.
 
 ## 🏗️ Build und Veröffentlichung
 

@@ -13,3 +13,7 @@ The table repeats the `REGISTRY` of the crate `eh3d-phoenix-cad` (`src/lib.rs`);
 | PHOENIX-CAD-003 | Hole outside its face | a hole that does not lie inside its face with the margin from the edges |
 | PHOENIX-CAD-004 | Holes too close | two holes of one face with less than the minimum web between them |
 | PHOENIX-CAD-005 | Hole id used twice or unknown | an operation that adds an id already used or names a hole that does not exist |
+| PHOENIX-CAD-006 | Angle outside the range | an angle whose absolute value is not below a million degrees |
+| PHOENIX-CAD-007 | Count or ratio outside its range | a count that is negative or above a million, or a ratio beyond a thousand times the whole |
+| PHOENIX-CAD-008 | Number with a unit not understood | a text such as `1.6 mm` or `1/16 in` that has no number, no known unit or an invalid fraction |
+| PHOENIX-CAD-009 | Integer calculation overflows | a scaling or a division that does not fit in the integers used, or a division by zero |
