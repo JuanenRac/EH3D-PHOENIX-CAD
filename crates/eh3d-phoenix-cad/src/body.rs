@@ -64,6 +64,21 @@ impl Body {
         })
     }
 
+    /// A body from its parts, as they were stored: the base parameters, the steps and the tip. The
+    /// base must make a valid enclosure and the tip may not be beyond the last step. The steps are
+    /// not tried here; [`Body::build`] reports what each one does.
+    pub fn from_parts(
+        base: EnclosureParams,
+        steps: Vec<Step>,
+        tip: usize,
+    ) -> Result<Body, CadError> {
+        Enclosure::new(base)?;
+        if tip > steps.len() {
+            return Err(CadError::ValueOutOfRange("tip"));
+        }
+        Ok(Body { base, steps, tip })
+    }
+
     /// The base parameters.
     pub fn base(&self) -> &EnclosureParams {
         &self.base

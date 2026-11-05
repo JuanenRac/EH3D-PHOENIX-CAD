@@ -22,6 +22,7 @@
 //! * [`parametric`]: the parameters of an enclosure as values, variables or expressions that refer to variables, to constants of the settings and to each other, calculated through the graph of dependencies;
 //! * [`datum`]: reference frames with an origin and one of the 24 axis-aligned rotations, and the frame of each face of the box;
 //! * [`project`]: the envelope of a project file with a format version, named domains kept byte for byte when unknown, read-only opening when a critical domain is not understood, and migrations from older versions;
+//! * [`mechanical`]: the mechanical domain of the project file: the recipe of steps, the parameters and expressions, and the interface of the board, read again to the same enclosure, with a migration from the domain of the parameters;
 //! * [`messages`]: the text of every diagnostic in the eight languages of the suite;
 //! * [`fit`]: whether an envelope (the outline of a board and its tallest part) fits inside.
 //!
@@ -61,6 +62,7 @@ pub mod expr;
 pub mod fit;
 pub mod graph;
 pub mod mass;
+pub mod mechanical;
 pub mod messages;
 pub mod mount;
 pub mod names;
