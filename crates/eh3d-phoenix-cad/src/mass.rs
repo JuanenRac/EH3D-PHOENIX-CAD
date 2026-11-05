@@ -244,13 +244,14 @@ impl Enclosure {
     }
 
     /// The volume of material: the outer box, minus the inner space, minus the treatment of the
-    /// edges, minus the holes.
+    /// edges, minus the holes. The posts, the centring lip and the holes of the lid fixing are
+    /// not counted, and a model that has any of them says it is not exact.
     pub fn material_volume_with_holes(&self) -> Result<Volume, CadError> {
         let holes = self.holes_volume()?;
         let edges = self.edging_volume()?;
         Ok(Volume {
             nm3: self.material_volume_nm3() - edges.nm3 - holes.nm3,
-            exact: holes.exact && edges.exact,
+            exact: holes.exact && edges.exact && !self.has_mounting(),
         })
     }
 }
@@ -743,7 +744,9 @@ impl Enclosure {
     /// are exact. Some things are left out or approximated, and then `exact` is false: the
     /// treatment of the edges is not taken from the solid (the volume is the one without it), a
     /// countersink is taken as a cylinder of its mean diameter, a slot as the rectangle that holds
-    /// it, and a hole that is not wholly in the thin part of its face is as long as that part.
+    /// it, and a hole that is not wholly in the thin part of its face is as long as that part. The
+    /// posts, the centring lip and the holes of the lid fixing are not part of the solid, so a model
+    /// that has any of them is never exact.
     pub fn mass_properties(&self, density_kg_m3: u32) -> Result<MassProperties, CadError> {
         let fail = || CadError::Overflow("mass properties");
         let (pieces, exact) = self.mass_pieces()?;
@@ -779,7 +782,7 @@ impl Enclosure {
                 xz: signed(&raw.products[1])?,
                 yz: signed(&raw.products[2])?,
             },
-            exact,
+            exact: exact && !self.has_mounting(),
         })
     }
 }
@@ -1299,5 +1302,52 @@ mod tests {
             light.mass_micrograms,
             mass_micrograms(light.volume_nm3, 1000).unwrap()
         );
+    }
+
+    #[test]
+    fn posts_and_the_lid_fixing_are_not_in_the_figures_and_the_figures_say_so() {
+        use crate::mount::{BoreKind, Lid, LidFixing, Post};
+        let plain = Enclosure::new(params(3)).unwrap();
+        assert!(plain.material_volume_with_holes().unwrap().exact);
+        assert!(plain.mass_properties(1240).unwrap().exact);
+        let post = Post {
+            name: "p".into(),
+            board_hole: None,
+            x: mm(25),
+            y: mm(15),
+            outer_diameter: mm(8),
+            height: mm(6),
+            kind: BoreKind::Insert,
+            bore_diameter: Length::new(4_200_000).unwrap(),
+            bore_depth: mm(5),
+            base: None,
+        };
+        let mut with_post = plain.clone();
+        with_post
+            .apply(Operation::AddPost {
+                id: ObjectId::from_parts(1_700_000_000_000, 1, 1).unwrap(),
+                post,
+            })
+            .unwrap();
+        // the volume is still the one of the box: the post is left out, and it is said
+        let v = with_post.material_volume_with_holes().unwrap();
+        assert_eq!(v.nm3, plain.material_volume_nm3());
+        assert!(!v.exact);
+        assert!(!with_post.mass_properties(1240).unwrap().exact);
+        let mut with_lid = plain.clone();
+        with_lid
+            .apply(Operation::SetLid(Some(Lid {
+                fixing: LidFixing::Auto { inset: mm(6) },
+                screw: "M3".into(),
+                hole_diameter: Length::new(3_400_000).unwrap(),
+                style: HoleStyle::Plain,
+                clearance: Length::new(200_000).unwrap(),
+                lip: None,
+            })))
+            .unwrap();
+        assert!(!with_lid.mass_properties(1240).unwrap().exact);
+        // taking the fixing away makes the figures exact again
+        with_lid.apply(Operation::SetLid(None)).unwrap();
+        assert!(with_lid.mass_properties(1240).unwrap().exact);
     }
 }

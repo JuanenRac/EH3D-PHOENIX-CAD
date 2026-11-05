@@ -27,6 +27,59 @@ pub const MAX_BACKUPS: u32 = 99;
 /// The most transactions that the history may keep.
 pub const MAX_UNDO_DEPTH: usize = 10_000;
 
+/// The limits of the domain, read from the settings file (`[mechanical]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MechanicalLimits {
+    /// The most bytes of the domain.
+    pub max_bytes: usize,
+    /// The most steps.
+    pub max_steps: usize,
+    /// The longest name, in bytes, before it is escaped.
+    pub max_name_bytes: usize,
+    /// The most points of the outline of the board.
+    pub max_outline_points: usize,
+    /// The most mounting holes of the board.
+    pub max_board_holes: usize,
+}
+
+impl MechanicalLimits {
+    /// Limits checked against the hard caps: each one is at least 1 and at most its cap.
+    pub fn new(
+        max_bytes: u32,
+        max_steps: u32,
+        max_name_bytes: u32,
+        max_outline_points: u32,
+        max_board_holes: u32,
+    ) -> Result<MechanicalLimits, CadError> {
+        let mut out = [0usize; 5];
+        for (i, (key, value, cap)) in [
+            ("max_bytes", max_bytes, 1u32 << 28),
+            ("max_steps", max_steps, 1_000_000),
+            ("max_name_bytes", max_name_bytes, 4_096),
+            ("max_outline_points", max_outline_points, 1_000_000),
+            ("max_board_holes", max_board_holes, 100_000),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if value == 0 || value > cap {
+                return Err(CadError::Config(format!(
+                    "mechanical.{key} must be from 1 to {cap}"
+                )));
+            }
+            out[i] = usize::try_from(value)
+                .map_err(|_| CadError::Config(format!("mechanical.{key} is too large")))?;
+        }
+        Ok(MechanicalLimits {
+            max_bytes: out[0],
+            max_steps: out[1],
+            max_name_bytes: out[2],
+            max_outline_points: out[3],
+            max_board_holes: out[4],
+        })
+    }
+}
+
 /// A parsed settings file: values by `section.key`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Config {
@@ -142,6 +195,44 @@ pub struct Screw {
     pub countersink_diameter: Length,
 }
 
+/// What a post for a screw of the table needs: the outer diameter of the post and the bore for a
+/// threaded insert or for the thread of a self-tapping screw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fixing {
+    /// The outer diameter of the post.
+    pub post_diameter: Length,
+    /// The diameter of the bore for a threaded insert.
+    pub insert_diameter: Length,
+    /// The depth of the bore for a threaded insert.
+    pub insert_depth: Length,
+    /// The diameter of the pilot hole for a self-tapping screw.
+    pub pilot_diameter: Length,
+    /// The depth of the pilot hole.
+    pub pilot_depth: Length,
+}
+
+/// The values that every post shares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PostSettings {
+    /// The least wall between the bore and the outside of a post.
+    pub min_wall: Length,
+    /// Added to the diameter of a post for the diameter of its reinforced foot.
+    pub base_extra: Length,
+    /// The height of the reinforced foot.
+    pub base_height: Length,
+}
+
+/// The values of the screwed lid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LidSettings {
+    /// The thickness of the centring lip.
+    pub lip_thickness: Length,
+    /// How far the centring lip hangs below the lid.
+    pub lip_depth: Length,
+    /// The distance from a corner screw to the two walls of its corner.
+    pub corner_inset: Length,
+}
+
 /// The kind of head that a hole made for a screw has to take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Head {
@@ -170,10 +261,18 @@ pub struct Settings {
     pub counterbore_extra: Length,
     /// The screws by name (`M3`), in order of name.
     pub screws: BTreeMap<String, Screw>,
+    /// The posts for each screw of the table that has an entry (`[fixing.M3]`), by name.
+    pub fixings: BTreeMap<String, Fixing>,
+    /// The values that every post shares.
+    pub posts: PostSettings,
+    /// The values of the screwed lid.
+    pub lid: LidSettings,
     /// The density in kilograms per cubic metre of each material by name (`PLA`).
     pub materials: BTreeMap<String, u32>,
     /// The limits of the language of expressions.
     pub expr: ExprLimits,
+    /// The limits of the mechanical domain of the project file.
+    pub mechanical: MechanicalLimits,
     /// The named values that expressions can use: the sizes of the screws, the compensation of the
     /// printer and the `[constants]` of the settings.
     pub constants: Constants,
@@ -256,6 +355,14 @@ impl Settings {
     /// A screw of the table, or the error `PHOENIX-CAD-021` when the table does not have it.
     pub fn screw(&self, name: &str) -> Result<&Screw, CadError> {
         self.screws
+            .get(name)
+            .ok_or_else(|| CadError::Screw(name.to_string()))
+    }
+
+    /// The post sizes of a screw of the table, or the error `PHOENIX-CAD-021` when the screw is not
+    /// in the table or has no `[fixing.<screw>]` entry.
+    pub fn fixing(&self, name: &str) -> Result<&Fixing, CadError> {
+        self.fixings
             .get(name)
             .ok_or_else(|| CadError::Screw(name.to_string()))
     }
@@ -349,6 +456,72 @@ impl Settings {
             }
             screws.insert(name.to_string(), screw);
         }
+        let mut fixings = BTreeMap::new();
+        for key in c.keys() {
+            let name = match key
+                .strip_prefix("fixing.")
+                .and_then(|rest| rest.strip_suffix(".post_diameter"))
+            {
+                Some(name) => name,
+                None => continue,
+            };
+            if !screws.contains_key(name) {
+                return Err(CadError::Config(format!(
+                    "fixing.{name} has no screw.{name}"
+                )));
+            }
+            let get = |field: &str| c.length(&format!("fixing.{name}.{field}"));
+            let fixing = Fixing {
+                post_diameter: get("post_diameter")?,
+                insert_diameter: get("insert_diameter")?,
+                insert_depth: get("insert_depth")?,
+                pilot_diameter: get("pilot_diameter")?,
+                pilot_depth: get("pilot_depth")?,
+            };
+            for (what, v) in [
+                ("post_diameter", fixing.post_diameter),
+                ("insert_diameter", fixing.insert_diameter),
+                ("insert_depth", fixing.insert_depth),
+                ("pilot_diameter", fixing.pilot_diameter),
+                ("pilot_depth", fixing.pilot_depth),
+            ] {
+                if v.get() <= 0 {
+                    return Err(CadError::Config(format!(
+                        "fixing.{name}.{what} must be positive"
+                    )));
+                }
+            }
+            if fixing.insert_diameter >= fixing.post_diameter
+                || fixing.pilot_diameter >= fixing.post_diameter
+            {
+                return Err(CadError::Config(format!(
+                    "fixing.{name}: the bores must be narrower than the post"
+                )));
+            }
+            fixings.insert(name.to_string(), fixing);
+        }
+        let posts = PostSettings {
+            min_wall: c.length("posts.min_wall")?,
+            base_extra: c.length("posts.base_extra")?,
+            base_height: c.length("posts.base_height")?,
+        };
+        let lid = LidSettings {
+            lip_thickness: c.length("lid.lip_thickness")?,
+            lip_depth: c.length("lid.lip_depth")?,
+            corner_inset: c.length("lid.corner_inset")?,
+        };
+        for (what, v) in [
+            ("posts.min_wall", posts.min_wall),
+            ("posts.base_extra", posts.base_extra),
+            ("posts.base_height", posts.base_height),
+            ("lid.lip_thickness", lid.lip_thickness),
+            ("lid.lip_depth", lid.lip_depth),
+            ("lid.corner_inset", lid.corner_inset),
+        ] {
+            if v.get() <= 0 {
+                return Err(CadError::Config(format!("{what} must be positive")));
+            }
+        }
         let mut materials = BTreeMap::new();
         for key in c.keys() {
             if let Some(name) = key
@@ -368,6 +541,13 @@ impl Settings {
             c.number("expr.max_steps")?,
             c.number("expr.max_exponent")?,
         )?;
+        let mechanical = MechanicalLimits::new(
+            c.number("mechanical.max_bytes")?,
+            c.number("mechanical.max_steps")?,
+            c.number("mechanical.max_name_bytes")?,
+            c.number("mechanical.max_outline_points")?,
+            c.number("mechanical.max_board_holes")?,
+        )?;
         let constants = build_constants(c, &screws, &printer, counterbore_extra, &expr)?;
         Ok(Settings {
             backups,
@@ -377,8 +557,12 @@ impl Settings {
             printer,
             counterbore_extra,
             screws,
+            fixings,
+            posts,
+            lid,
             materials,
             expr,
+            mechanical,
             constants,
         })
     }
@@ -618,5 +802,98 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code(), "PHOENIX-CAD-020");
         assert!(build(4).apply(Operation::AddHole { id, hole }).is_ok());
+    }
+
+    #[test]
+    fn the_posts_the_lid_and_the_limits_of_the_domain_are_in_the_settings() {
+        let s = Settings::defaults();
+        let names: Vec<&str> = s.fixings.keys().map(String::as_str).collect();
+        assert_eq!(names, vec!["M2", "M2.5", "M3", "M4", "M5", "M6", "M8"]);
+        let m3 = s.fixing("M3").unwrap();
+        assert_eq!(m3.post_diameter.get(), 8_000_000);
+        assert_eq!(m3.insert_diameter.get(), 4_200_000);
+        assert_eq!(m3.insert_depth.get(), 5_000_000);
+        assert_eq!(m3.pilot_diameter.get(), 2_500_000);
+        assert_eq!(m3.pilot_depth.get(), 8_000_000);
+        assert_eq!(s.fixing("M2.5").unwrap().post_diameter.get(), 6_500_000);
+        assert_eq!(s.fixing("M8").unwrap().insert_diameter.get(), 10_000_000);
+        assert_eq!(s.posts.min_wall.get(), 1_200_000);
+        assert_eq!(s.posts.base_extra.get(), 4_000_000);
+        assert_eq!(s.posts.base_height.get(), 2_000_000);
+        assert_eq!(s.lid.lip_thickness.get(), 1_200_000);
+        assert_eq!(s.lid.lip_depth.get(), 3_000_000);
+        assert_eq!(s.lid.corner_inset.get(), 6_000_000);
+        assert_eq!(
+            s.mechanical,
+            MechanicalLimits::new(16_777_216, 10_000, 256, 10_000, 1_000).unwrap()
+        );
+        let err = s.fixing("M99").unwrap_err();
+        assert_eq!(err, CadError::Screw("M99".into()));
+        assert_eq!(err.code(), "PHOENIX-CAD-021");
+    }
+
+    #[test]
+    fn the_table_of_posts_is_consistent_with_the_table_of_screws() {
+        let s = Settings::defaults();
+        assert_eq!(s.fixings.len(), s.screws.len());
+        for (name, fixing) in &s.fixings {
+            let screw = &s.screws[name];
+            // the pilot hole is narrower than the thread, the insert is wider than the thread, and
+            // the wall of the post is at least the least wall around either bore
+            assert!(fixing.pilot_diameter < screw.nominal, "{name}");
+            assert!(fixing.insert_diameter > screw.nominal, "{name}");
+            let least = 2 * s.posts.min_wall.get();
+            assert!(fixing.post_diameter.get() - fixing.insert_diameter.get() >= least);
+            assert!(fixing.post_diameter.get() - fixing.pilot_diameter.get() >= least);
+        }
+    }
+
+    #[test]
+    fn a_user_file_can_add_a_post_entry_for_a_screw_of_its_own_and_change_the_values() {
+        let own = "[screw.M3.5]\nnominal = 3.5 mm\nclearance = 3.9 mm\nhead_diameter = 6 mm\nhead_height = 3.5 mm\ncountersink_diameter = 7.3 mm\n\n[fixing.M3.5]\npost_diameter = 9 mm\ninsert_diameter = 5 mm\ninsert_depth = 5 mm\npilot_diameter = 3 mm\npilot_depth = 8 mm\n\n[lid]\ncorner_inset = 7 mm\n\n[mechanical]\nmax_steps = 50\n";
+        let s = Settings::with_user_config(own).unwrap();
+        assert_eq!(s.fixings.len(), 8);
+        assert_eq!(s.fixing("M3.5").unwrap().post_diameter.get(), 9_000_000);
+        assert_eq!(s.lid.corner_inset.get(), 7_000_000);
+        assert_eq!(s.lid.lip_depth.get(), 3_000_000);
+        assert_eq!(s.mechanical.max_steps, 50);
+        assert_eq!(s.mechanical.max_bytes, 16_777_216);
+    }
+
+    #[test]
+    fn values_of_the_posts_the_lid_and_the_domain_that_make_no_sense_are_refused() {
+        for text in [
+            "[fixing.M99]\npost_diameter = 5 mm\n",
+            "[fixing.M3]\ninsert_diameter = 8 mm\n",
+            "[fixing.M3]\npilot_diameter = 9 mm\n",
+            "[fixing.M3]\ninsert_depth = 0 mm\n",
+            "[fixing.M3]\npost_diameter = 4 mm\n",
+            "[posts]\nmin_wall = 0 mm\n",
+            "[posts]\nbase_extra = 0 mm\n",
+            "[posts]\nbase_height = 0 mm\n",
+            "[lid]\nlip_thickness = 0 mm\n",
+            "[lid]\nlip_depth = 0 mm\n",
+            "[lid]\ncorner_inset = 0 mm\n",
+            "[lid]\ncorner_inset = 6\n",
+            "[mechanical]\nmax_bytes = 0\n",
+            "[mechanical]\nmax_bytes = 268435457\n",
+            "[mechanical]\nmax_steps = 0\n",
+            "[mechanical]\nmax_steps = 1000001\n",
+            "[mechanical]\nmax_name_bytes = 4097\n",
+            "[mechanical]\nmax_outline_points = 1000001\n",
+            "[mechanical]\nmax_board_holes = 100001\n",
+            "[mechanical]\nmax_board_holes = many\n",
+        ] {
+            let err = Settings::with_user_config(text).unwrap_err();
+            assert_eq!(err.code(), "PHOENIX-CAD-011", "{text:?}: {err}");
+        }
+        let err = Settings::with_user_config("[fixing.M99]\npost_diameter = 5 mm\n").unwrap_err();
+        assert!(
+            err.to_string().contains("fixing.M99 has no screw.M99"),
+            "{err}"
+        );
+        // the caps themselves are allowed
+        let top = "[mechanical]\nmax_bytes = 268435456\nmax_steps = 1000000\nmax_name_bytes = 4096\nmax_outline_points = 1000000\nmax_board_holes = 100000\n";
+        assert!(Settings::with_user_config(top).is_ok());
     }
 }

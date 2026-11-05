@@ -14,6 +14,7 @@
 //! * [`printer`]: the profile of a 3D printer and the model for fabrication with compensated holes;
 //! * [`store`]: saving a file atomically with numbered copies, and loading a file under a size limit;
 //! * [`mass`]: the volume of the material and of the holes, the mass for a density, the centre of mass and the moments of inertia, in integers (pi as a ratio of twelve decimals);
+//! * [`mount`]: posts that rise from the floor (made from the mounting holes of a board, with a bore for an insert or a self-tapping screw and an optional foot) and a lid that is screwed onto them, with the checks of collisions and heights;
 //! * [`pattern`]: rows, grids and circles of holes with exact positions, and batches of operations that apply all or nothing;
 //! * [`graph`]: the graph of dependencies between objects, with a deterministic order of calculation, refused cycles, a recalculation that reuses what did not change, and a Graphviz dump;
 //! * [`vars`]: named variables for the master dimensions, the binding of the parameters of an enclosure to them, and families of variants (small, medium, large);
@@ -61,6 +62,7 @@ pub mod fit;
 pub mod graph;
 pub mod mass;
 pub mod messages;
+pub mod mount;
 pub mod names;
 pub mod parametric;
 pub mod pattern;
@@ -76,6 +78,7 @@ pub use enclosure::{
     Edging, Enclosure, EnclosureParams, Face, Hole, HoleStyle, Id, Operation, Treatment,
 };
 pub use fit::{check_fit, Envelope, FitReport};
+pub use mount::{Lid, LidFixing, Post};
 
 use std::fmt;
 
@@ -206,6 +209,14 @@ pub enum CadError {
         /// Where it happened.
         pos: usize,
     },
+    /// A post whose sizes do not make a post.
+    PostShape(String),
+    /// A post that meets a wall, another post or a hole in the floor.
+    PostPlace(String),
+    /// A post that is not lower than the space above it.
+    PostHeight(String),
+    /// A fixing of the lid that does not fit the box.
+    LidFixing(String),
 }
 
 impl CadError {
@@ -238,6 +249,10 @@ impl CadError {
             CadError::ExprEval { .. } => "PHOENIX-CAD-024",
             CadError::ExprLimit { .. } => "PHOENIX-CAD-025",
             CadError::ExprOverflow { .. } => "PHOENIX-CAD-026",
+            CadError::PostShape(_) => "PHOENIX-CAD-027",
+            CadError::PostPlace(_) => "PHOENIX-CAD-028",
+            CadError::PostHeight(_) => "PHOENIX-CAD-029",
+            CadError::LidFixing(_) => "PHOENIX-CAD-030",
         }
     }
 }
@@ -253,7 +268,7 @@ impl fmt::Display for CadError {
             CadError::NotPositive(what) => write!(f, "{title}: {what}"),
             CadError::HoleOutsideFace(h) => write!(f, "{title}: hole {h}"),
             CadError::HolesOverlap(a, b) => write!(f, "{title}: holes {a} and {b}"),
-            CadError::HoleId(id) => write!(f, "{title}: hole {id}"),
+            CadError::HoleId(id) => write!(f, "{title}: {id}"),
             CadError::AngleOutOfRange(v) => write!(f, "{title}: {v} nano-degrees"),
             CadError::ValueOutOfRange(what) => write!(f, "{title}: {what}"),
             CadError::UnitText(text) => write!(f, "{title}: {text:?}"),
@@ -278,6 +293,10 @@ impl fmt::Display for CadError {
                 write!(f, "{title}: {what} (column {})", pos + 1)
             }
             CadError::ExprOverflow { pos } => write!(f, "{title} (column {})", pos + 1),
+            CadError::PostShape(why)
+            | CadError::PostPlace(why)
+            | CadError::PostHeight(why)
+            | CadError::LidFixing(why) => write!(f, "{title}: {why}"),
         }
     }
 }
@@ -290,7 +309,7 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-002", "Parameter is not positive"),
     ("PHOENIX-CAD-003", "Hole outside its face"),
     ("PHOENIX-CAD-004", "Holes too close"),
-    ("PHOENIX-CAD-005", "Hole id used twice or unknown"),
+    ("PHOENIX-CAD-005", "Hole or post id used twice or unknown"),
     ("PHOENIX-CAD-006", "Angle outside the range"),
     ("PHOENIX-CAD-007", "Count or ratio outside its range"),
     ("PHOENIX-CAD-008", "Number with a unit not understood"),
@@ -315,6 +334,10 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-024", "Expression cannot be evaluated"),
     ("PHOENIX-CAD-025", "Expression limit exceeded"),
     ("PHOENIX-CAD-026", "Expression arithmetic overflows"),
+    ("PHOENIX-CAD-027", "Post shape not valid"),
+    ("PHOENIX-CAD-028", "Post meets a wall, a post or a hole"),
+    ("PHOENIX-CAD-029", "Post too high for the space above it"),
+    ("PHOENIX-CAD-030", "Lid fixing not valid"),
 ];
 
 #[cfg(test)]
@@ -494,6 +517,10 @@ mod tests {
                 what: "depth",
             },
             CadError::ExprOverflow { pos: 4 },
+            CadError::PostShape("bore".into()),
+            CadError::PostPlace("wall".into()),
+            CadError::PostHeight("lid".into()),
+            CadError::LidFixing("inset".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));

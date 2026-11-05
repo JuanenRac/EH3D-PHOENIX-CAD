@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 
 use eh3d_container::ObjectId;
 
+use crate::mount::{lid_holes_of, Lid, Post};
 use crate::units::isqrt_u128;
 use crate::{CadError, Length};
 
@@ -473,14 +474,37 @@ pub enum Operation {
     SetParams(EnclosureParams),
     /// Replaces the treatment of the edges. It must fit the box and every hole must still be valid.
     SetEdging(Edging),
+    /// Adds a post under an id that no post has yet.
+    AddPost {
+        /// The id of the new post.
+        id: Id,
+        /// The post.
+        post: Post,
+    },
+    /// Removes a post.
+    RemovePost {
+        /// The id of the post.
+        id: Id,
+    },
+    /// Replaces a post by another (same id).
+    ReplacePost {
+        /// The id of the post.
+        id: Id,
+        /// The new post.
+        post: Post,
+    },
+    /// Sets how the lid is fixed, or takes the fixing away (`None`).
+    SetLid(Option<Lid>),
 }
 
-/// The enclosure: its parameters and its holes by id.
+/// The enclosure: its parameters, its holes by id, its posts by id and the fixing of its lid.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Enclosure {
     params: EnclosureParams,
     edging: Edging,
     holes: BTreeMap<Id, Hole>,
+    posts: BTreeMap<Id, Post>,
+    lid: Option<Lid>,
 }
 
 impl Enclosure {
@@ -491,6 +515,8 @@ impl Enclosure {
             params,
             edging: Edging::default(),
             holes: BTreeMap::new(),
+            posts: BTreeMap::new(),
+            lid: None,
         })
     }
 
@@ -507,6 +533,47 @@ impl Enclosure {
     /// The holes by id (ordered by id, so every listing is the same).
     pub fn holes(&self) -> &BTreeMap<Id, Hole> {
         &self.holes
+    }
+
+    /// The posts by id (ordered by id, so every listing is the same).
+    pub fn posts(&self) -> &BTreeMap<Id, Post> {
+        &self.posts
+    }
+
+    /// The fixing of the lid, if there is one.
+    pub fn lid(&self) -> Option<&Lid> {
+        self.lid.as_ref()
+    }
+
+    /// Whether the enclosure has posts or a fixing of the lid.
+    pub fn has_mounting(&self) -> bool {
+        !self.posts.is_empty() || self.lid.is_some()
+    }
+
+    /// The holes that the fixing of the lid has over the posts or at the corners, in the top face.
+    /// They are derived every time and never stored.
+    pub fn lid_holes(&self) -> Vec<Hole> {
+        self.derived_lid_holes().unwrap_or_default()
+    }
+
+    /// The holes of the faces and then the holes of the lid fixing.
+    pub fn all_holes(&self) -> Vec<Hole> {
+        let mut all: Vec<Hole> = self.holes.values().cloned().collect();
+        all.extend(self.lid_holes());
+        all
+    }
+
+    fn derived_lid_holes(&self) -> Result<Vec<Hole>, CadError> {
+        match &self.lid {
+            Some(lid) => lid_holes_of(
+                self.params.wall,
+                self.params.inner_length,
+                self.params.inner_width,
+                &self.posts,
+                lid,
+            ),
+            None => Ok(Vec::new()),
+        }
     }
 
     /// The size of a face: its width (along u) and its height (along v).
@@ -526,15 +593,185 @@ impl Enclosure {
     }
 
     fn check_hole(&self, hole: &Hole, ignoring: Option<Id>) -> Result<(), CadError> {
-        Self::check_hole_in(&self.params, &self.edging, &self.holes, hole, ignoring)
+        let derived = self.derived_lid_holes()?;
+        Self::check_hole_in(
+            &self.params,
+            &self.edging,
+            &self.holes,
+            &derived,
+            hole,
+            ignoring,
+        )
     }
 
-    /// Every hole against the given parameters and edging, one after the other.
+    /// Everything against the given parameters and edging: the holes one after the other, then the
+    /// holes of the lid fixing, the posts and the lid.
     fn check_all(&self, params: &EnclosureParams, edging: &Edging) -> Result<(), CadError> {
+        Self::check_state(params, edging, &self.holes, &self.posts, self.lid.as_ref())
+    }
+
+    /// The whole state: every hole against the others, the holes that the lid fixing derives
+    /// against the holes and each other, every post against the walls, the other posts and the
+    /// holes of the floor, and the lid itself.
+    fn check_state(
+        params: &EnclosureParams,
+        edging: &Edging,
+        holes: &BTreeMap<Id, Hole>,
+        posts: &BTreeMap<Id, Post>,
+        lid: Option<&Lid>,
+    ) -> Result<(), CadError> {
+        let derived = match lid {
+            Some(lid) => lid_holes_of(
+                params.wall,
+                params.inner_length,
+                params.inner_width,
+                posts,
+                lid,
+            )?,
+            None => Vec::new(),
+        };
         let mut accepted: BTreeMap<Id, Hole> = BTreeMap::new();
-        for (id, hole) in &self.holes {
-            Self::check_hole_in(params, edging, &accepted, hole, None)?;
+        for (id, hole) in holes {
+            Self::check_hole_in(params, edging, &accepted, &derived, hole, None)?;
             accepted.insert(*id, hole.clone());
+        }
+        let mut earlier: Vec<Hole> = Vec::new();
+        for hole in &derived {
+            Self::check_hole_in(params, edging, holes, &earlier, hole, None)?;
+            earlier.push(hole.clone());
+        }
+        Self::check_posts(params, holes, posts)?;
+        if let Some(lid) = lid {
+            Self::check_lid(params, posts, lid)?;
+        }
+        Ok(())
+    }
+
+    /// Every post against the box: its own shape, its height, the walls, the other posts and the
+    /// holes of the floor. A post may touch a wall or another post; it may not overlap them.
+    fn check_posts(
+        params: &EnclosureParams,
+        holes: &BTreeMap<Id, Hole>,
+        posts: &BTreeMap<Id, Post>,
+    ) -> Result<(), CadError> {
+        let (il, iw, ih) = (
+            i128::from(params.inner_length.get()),
+            i128::from(params.inner_width.get()),
+            i128::from(params.inner_height.get()),
+        );
+        let wall = i128::from(params.wall.get());
+        let outer_y = i128::from(params.outer().1.get());
+        let mut seen: Vec<&Post> = Vec::new();
+        for post in posts.values() {
+            post.check_shape()?;
+            if i128::from(post.height.get()) >= ih {
+                return Err(CadError::PostHeight(format!(
+                    "post {}: not lower than the inner height",
+                    post.name
+                )));
+            }
+            let d = i128::from(post.footprint_diameter().get());
+            let (x, y) = (i128::from(post.x.get()), i128::from(post.y.get()));
+            // twice the distance from the centre to each wall is at least the footprint
+            if 2 * x < d || 2 * (il - x) < d || 2 * y < d || 2 * (iw - y) < d {
+                return Err(CadError::PostPlace(format!(
+                    "post {}: meets a wall",
+                    post.name
+                )));
+            }
+            for other in &seen {
+                let od = i128::from(other.footprint_diameter().get());
+                let (dx, dy) = (x - i128::from(other.x.get()), y - i128::from(other.y.get()));
+                if 4 * (dx * dx + dy * dy) < (d + od) * (d + od) {
+                    return Err(CadError::PostPlace(format!(
+                        "posts {} and {}: overlap",
+                        post.name, other.name
+                    )));
+                }
+            }
+            for hole in holes.values().filter(|h| h.face == Face::Bottom) {
+                let (su, sv) = hole.style.footprint(hole.diameter);
+                let across = if hole.style.is_round() {
+                    su
+                } else {
+                    let sq = u128::try_from(su * su + sv * sv).unwrap_or(0);
+                    i128::try_from(isqrt_u128(sq) + 1).unwrap_or(i128::MAX)
+                };
+                // the hole of the floor in the frame of the inner space
+                let hx = i128::from(hole.u.get()) - wall;
+                let hy = outer_y - i128::from(hole.v.get()) - wall;
+                let (dx, dy) = (x - hx, y - hy);
+                if 4 * (dx * dx + dy * dy) < (d + across) * (d + across) {
+                    return Err(CadError::PostPlace(format!(
+                        "post {}: meets the hole {} of the floor",
+                        post.name, hole.name
+                    )));
+                }
+            }
+            seen.push(post);
+        }
+        Ok(())
+    }
+
+    /// The fixing of the lid against the box: the screw hole and its recess, and the lip.
+    fn check_lid(
+        params: &EnclosureParams,
+        posts: &BTreeMap<Id, Post>,
+        lid: &Lid,
+    ) -> Result<(), CadError> {
+        if lid.hole_diameter.get() <= 0 {
+            return Err(CadError::NotPositive("lid screw hole"));
+        }
+        if lid.clearance.get() < 0 {
+            return Err(CadError::NotPositive("lid clearance"));
+        }
+        if !lid.style.is_round() {
+            return Err(CadError::LidFixing(
+                "the head of a lid screw is round: use a plain hole, a countersink or a counterbore"
+                    .into(),
+            ));
+        }
+        lid.style.check(lid.hole_diameter, params.lid)?;
+        if let Some(lip) = &lid.lip {
+            if lip.thickness.get() <= 0 {
+                return Err(CadError::NotPositive("lip thickness"));
+            }
+            if lip.depth.get() <= 0 {
+                return Err(CadError::NotPositive("lip depth"));
+            }
+            let (il, iw, ih) = (
+                i128::from(params.inner_length.get()),
+                i128::from(params.inner_width.get()),
+                i128::from(params.inner_height.get()),
+            );
+            let depth = i128::from(lip.depth.get());
+            if depth >= ih {
+                return Err(CadError::LidFixing(
+                    "the lip is as deep as the inner space".into(),
+                ));
+            }
+            // the ring starts one clearance inside the walls and is one thickness wide
+            let ring = i128::from(lid.clearance.get()) + i128::from(lip.thickness.get());
+            if 2 * ring >= il.min(iw) {
+                return Err(CadError::LidFixing("the lip leaves no opening".into()));
+            }
+            for post in posts.values() {
+                // a post that reaches the height of the lip must stay inside the ring
+                if i128::from(post.height.get()) > ih - depth {
+                    let d = i128::from(post.outer_diameter.get());
+                    let (x, y) = (i128::from(post.x.get()), i128::from(post.y.get()));
+                    if 2 * x < d + 2 * ring
+                        || 2 * (il - x) < d + 2 * ring
+                        || 2 * y < d + 2 * ring
+                        || 2 * (iw - y) < d + 2 * ring
+                    {
+                        return Err(CadError::LidFixing(format!(
+                            "post {}: meets the centring lip",
+                            post.name
+                        )));
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -543,6 +780,7 @@ impl Enclosure {
         params: &EnclosureParams,
         edging: &Edging,
         holes: &BTreeMap<Id, Hole>,
+        extra: &[Hole],
         hole: &Hole,
         ignoring: Option<Id>,
     ) -> Result<(), CadError> {
@@ -609,21 +847,31 @@ impl Enclosure {
             }
         }
         let web = i128::from(params.min_web.get());
-        for (other_id, other) in holes {
-            if other.face != hole.face || Some(*other_id) == ignoring {
-                continue;
-            }
+        let apart = |other: &Hole| -> bool {
             let (du, dv) = (u - i128::from(other.u.get()), v - i128::from(other.v.get()));
             let (ou, ov) = other.style.footprint(other.diameter);
-            let apart = if hole.style.is_round() && other.style.is_round() {
+            if hole.style.is_round() && other.style.is_round() {
                 // 4 * distance^2 >= (size + other size + 2 * web)^2
                 let need = su + ou + 2 * web;
                 4 * (du * du + dv * dv) >= need * need
             } else {
                 // the rectangles that hold the openings do not come within the web of each other
                 2 * du.abs() >= su + ou + 2 * web || 2 * dv.abs() >= sv + ov + 2 * web
-            };
-            if !apart {
+            }
+        };
+        for (other_id, other) in holes {
+            if other.face != hole.face || Some(*other_id) == ignoring {
+                continue;
+            }
+            if !apart(other) {
+                return Err(CadError::HolesOverlap(
+                    hole.name.clone(),
+                    other.name.clone(),
+                ));
+            }
+        }
+        for other in extra {
+            if other.face == hole.face && !apart(other) {
                 return Err(CadError::HolesOverlap(
                     hole.name.clone(),
                     other.name.clone(),
@@ -642,6 +890,7 @@ impl Enclosure {
                     return Err(CadError::HoleId(id));
                 }
                 self.check_hole(&hole, None)?;
+                self.check_floor_hole_against_posts(id, &hole)?;
                 self.holes.insert(id, hole);
                 Ok(Operation::RemoveHole { id })
             }
@@ -652,6 +901,7 @@ impl Enclosure {
             Operation::ReplaceHole { id, hole } => {
                 let old = self.holes.get(&id).ok_or(CadError::HoleId(id))?.clone();
                 self.check_hole(&hole, Some(id))?;
+                self.check_floor_hole_against_posts(id, &hole)?;
                 self.holes.insert(id, hole);
                 Ok(Operation::ReplaceHole { id, hole: old })
             }
@@ -671,7 +921,56 @@ impl Enclosure {
                 self.edging = edging;
                 Ok(Operation::SetEdging(old))
             }
+            Operation::AddPost { id, post } => {
+                if self.posts.contains_key(&id) {
+                    return Err(CadError::HoleId(id));
+                }
+                let mut posts = self.posts.clone();
+                posts.insert(id, post);
+                self.check_posts_and_lid(&posts, self.lid.as_ref())?;
+                self.posts = posts;
+                Ok(Operation::RemovePost { id })
+            }
+            Operation::RemovePost { id } => {
+                let mut posts = self.posts.clone();
+                let post = posts.remove(&id).ok_or(CadError::HoleId(id))?;
+                self.check_posts_and_lid(&posts, self.lid.as_ref())?;
+                self.posts = posts;
+                Ok(Operation::AddPost { id, post })
+            }
+            Operation::ReplacePost { id, post } => {
+                let old = self.posts.get(&id).ok_or(CadError::HoleId(id))?.clone();
+                let mut posts = self.posts.clone();
+                posts.insert(id, post);
+                self.check_posts_and_lid(&posts, self.lid.as_ref())?;
+                self.posts = posts;
+                Ok(Operation::ReplacePost { id, post: old })
+            }
+            Operation::SetLid(lid) => {
+                self.check_posts_and_lid(&self.posts, lid.as_ref())?;
+                let old = std::mem::replace(&mut self.lid, lid);
+                Ok(Operation::SetLid(old))
+            }
         }
+    }
+
+    /// The whole state with other posts and another lid fixing.
+    fn check_posts_and_lid(
+        &self,
+        posts: &BTreeMap<Id, Post>,
+        lid: Option<&Lid>,
+    ) -> Result<(), CadError> {
+        Self::check_state(&self.params, &self.edging, &self.holes, posts, lid)
+    }
+
+    /// A hole of the floor, added or replaced under `id`, against the posts.
+    fn check_floor_hole_against_posts(&self, id: Id, hole: &Hole) -> Result<(), CadError> {
+        if hole.face != Face::Bottom || self.posts.is_empty() {
+            return Ok(());
+        }
+        let mut holes = self.holes.clone();
+        holes.insert(id, hole.clone());
+        Self::check_posts(&self.params, &holes, &self.posts)
     }
 }
 

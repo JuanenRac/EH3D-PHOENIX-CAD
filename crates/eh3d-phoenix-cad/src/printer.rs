@@ -45,6 +45,21 @@ impl PrinterProfile {
             hole.diameter = widened;
             out.apply(Operation::AddHole { id: *id, hole })?;
         }
+        // the posts keep the bores of the table (an insert or a screw sets the size, not the
+        // printer); the holes of the lid are widened like any other hole
+        for (id, post) in design.posts() {
+            out.apply(Operation::AddPost {
+                id: *id,
+                post: post.clone(),
+            })?;
+        }
+        if let Some(lid) = design.lid() {
+            let mut lid = lid.clone();
+            let widened = self.fabrication_diameter(lid.hole_diameter)?;
+            lid.style = lid.style.grown(widened.checked_sub(lid.hole_diameter)?)?;
+            lid.hole_diameter = widened;
+            out.apply(Operation::SetLid(Some(lid)))?;
+        }
         Ok(out)
     }
 }
@@ -185,5 +200,59 @@ mod tests {
         e.apply(Operation::SetEdging(edging)).unwrap();
         let fab = profile().for_fabrication(&e).unwrap();
         assert_eq!(fab.edging(), &edging);
+    }
+
+    #[test]
+    fn the_posts_keep_their_bores_and_the_holes_of_the_lid_are_widened() {
+        use crate::enclosure::HoleStyle;
+        use crate::mount::{BoreKind, Lid, LidFixing, Post};
+        let mut e = design();
+        let post = Post {
+            name: "p".into(),
+            board_hole: None,
+            x: mm(25),
+            y: mm(45),
+            outer_diameter: mm(8),
+            height: mm(6),
+            kind: BoreKind::Insert,
+            bore_diameter: um(4_200),
+            bore_depth: mm(5),
+            base: None,
+        };
+        e.apply(Operation::AddPost {
+            id: ObjectId::from_parts(1_700_000_000_000, 1, 90).unwrap(),
+            post: post.clone(),
+        })
+        .unwrap();
+        e.apply(Operation::SetLid(Some(Lid {
+            fixing: LidFixing::Auto { inset: mm(6) },
+            screw: "M3".into(),
+            hole_diameter: um(3_400),
+            style: HoleStyle::Countersunk {
+                head_diameter: um(6_300),
+            },
+            clearance: um(200),
+            lip: None,
+        })))
+        .unwrap();
+        let before = e.clone();
+        let f = profile().for_fabrication(&e).unwrap();
+        assert_eq!(e, before, "the design is not changed");
+        assert_eq!(f.posts().values().next(), Some(&post));
+        // 3.4 mm is not narrower than the limit of 3 mm: it gets the compensation of 0.15 mm, and
+        // the head of the countersink grows by the same amount
+        let lid = f.lid().unwrap();
+        assert_eq!(lid.hole_diameter, um(3_550));
+        assert_eq!(
+            lid.style,
+            HoleStyle::Countersunk {
+                head_diameter: um(6_450)
+            }
+        );
+        // the holes it draws follow the widened fixing, over the post
+        let holes = f.lid_holes();
+        assert_eq!(holes.len(), 1);
+        assert_eq!(holes[0].diameter, um(3_550));
+        assert_eq!(holes[0].u, mm(27));
     }
 }
