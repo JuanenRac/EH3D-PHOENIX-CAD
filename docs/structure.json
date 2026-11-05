@@ -103,6 +103,19 @@
           }
         },
         {
+          "name": "EXPRESSIONS.md",
+          "desc": {
+            "en": "the language of the formulas of the parameters",
+            "es": "el lenguaje de las fórmulas de los parámetros",
+            "de": "die Sprache der Formeln der Parameter",
+            "fr": "le langage des formules des paramètres",
+            "it": "il linguaggio delle formule dei parametri",
+            "ja": "パラメータの式の言語",
+            "zh": "参数公式所用的语言",
+            "pt": "a linguagem das fórmulas dos parâmetros"
+          }
+        },
+        {
           "desc": {
             "en": "the accepted decision records",
             "es": "los registros de decisiones aceptadas",

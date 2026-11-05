@@ -11,14 +11,14 @@
   <img src="https://img.shields.io/badge/License-GPL%203.0--or--later-blue.svg" alt="GPL 3.0 or later">
   <img src="https://img.shields.io/badge/Stack-Markdown%20%2B%20Python-blue.svg" alt="Markdown and Python">
   <img src="https://img.shields.io/badge/Languages-8-00E5FF.svg" alt="Languages">
-  <img src="https://img.shields.io/badge/Tests-157-2EA043.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-197-2EA043.svg" alt="Tests">
   <img src="https://img.shields.io/badge/Version-0.0.2-0f6cbd.svg" alt="Version">
   <img src="https://img.shields.io/badge/Maturity-scaffolding-FFB020.svg" alt="Maturity">
 </p>
 
 ---
 
-**Verifica di onestà - cosa funziona oggi:** una libreria Rust senza finestra con un contenitore parametrico: lunghezze in nanometri interi con un proprio intervallo, fori nelle facce (rotondi, svasati, con spianatura per la testa, rettangolari e ovali), spigoli arrotondati e smussati, operazioni di modifica strutturate che segnalano i conflitti e lasciano il modello intatto, uno script in stile OpenSCAD e un controllo di alloggiamento rispetto all'ingombro di una scheda. Ha 154 test propri e passano su un computer. È stata provata solo su modelli creati dai suoi stessi test; nulla è stato disegnato o eseguito su una macchina, e il file STEP che scrive è stato controllato solo nella struttura, e dissipatori, schizzi e assiemi sono solo pianificati.
+**Verifica di onestà - cosa funziona oggi:** una libreria Rust senza finestra con un contenitore parametrico: lunghezze in nanometri interi con un proprio intervallo, fori nelle facce (rotondi, svasati, con spianatura per la testa, rettangolari e ovali), spigoli arrotondati e smussati, parametri scritti come formule con unità su variabili, costanti e altri parametri (frazioni esatte, overflow controllato), operazioni di modifica strutturate che segnalano i conflitti e lasciano il modello intatto, uno script in stile OpenSCAD e un controllo di alloggiamento rispetto all'ingombro di una scheda. Ha 194 test propri e passano su un computer. È stata provata solo su modelli creati dai suoi stessi test; nulla è stato disegnato o eseguito su una macchina, e il file STEP che scrive è stato controllato solo nella struttura, e dissipatori, schizzi e assiemi sono solo pianificati.
 
 ---
 
@@ -30,7 +30,7 @@
 |---|---|
 | Versione | `0.0.2` |
 | Maturità | Impalcatura |
-| Test | 157 |
+| Test | 197 |
 | Stack tecnologico | Markdown, Python 3.10+ |
 | Su hardware reale | Non ancora eseguito su hardware |
 
@@ -45,7 +45,7 @@ Ogni riga è una parte di questo repository e il semaforo dice a che punto è og
 | Area | Stato | Cosa significa qui |
 |---|---|---|
 | Controlli del repository | 🟡 | Il controllo del repository, quello delle immagini e i 3 test della base girano nella CI e passano. |
-| Test | 🟡 | I 154 test della libreria Rust e i 3 della base passano su un computer. Usano solo modelli creati dai test stessi. |
+| Test | 🟡 | I 194 test della libreria Rust e i 3 della base passano su un computer. Usano solo modelli creati dai test stessi. |
 | Hardware reale | 🟠 | Non eseguito su nessuna macchina né scheda: nulla qui è stato provato su hardware. |
 | Funzione pianificata | 🟠 | Fatta in parte: esistono un contenitore parametrico con fori, uno script in stile OpenSCAD e un controllo di alloggiamento, più un primo scrittore STEP controllato solo nella struttura; i dissipatori, gli schizzi e gli assiemi non sono iniziati. |
 | Requisiti | 🟠 | 4 requisiti su 6 sono in prototipo (il contenitore, lo script, le operazioni di modifica e l'intervallo meccanico), 2 sono solo pianificati e nessuno è validato. |
@@ -79,7 +79,7 @@ python -I -m unittest discover -s tools -p "test_*.py"
 
 ## 🧪 Test
 
-La libreria Rust ha 154 test (`cargo test`) e la base ne ha 3 (`python -I -m unittest discover -s tools -p "test_*.py"`); tutti passano su un computer. La CI esegue il controllo del repository, quello delle immagini, i test della base e, per il codice Rust, il controllo del formato, clippy con gli avvisi come errori e i test su Linux e Windows.
+La libreria Rust ha 194 test (`cargo test`) e la base ne ha 3 (`python -I -m unittest discover -s tools -p "test_*.py"`); tutti passano su un computer. La CI esegue il controllo del repository, quello delle immagini, i test della base e, per il codice Rust, il controllo del formato, clippy con gli avvisi come errori e i test su Linux e Windows.
 
 ## 🏗️ Compilazione e rilascio
 
@@ -103,6 +103,7 @@ EH3D-PHOENIX-CAD/
 │   ├── DECISIONS.md STATUS.md                   decisioni applicabili qui e stato onesto
 │   ├── NOT_YET.md RULES.md                      idee per dopo e regole per scrivere il codice
 │   ├── ERROR_CODES.md                           i codici di diagnostica PHOENIX-<AREA>-<NNN>
+│   ├── EXPRESSIONS.md                           il linguaggio delle formule dei parametri
 │   └── adr/                                     i registri delle decisioni accettate
 ├── Cargo.toml Cargo.lock                        il workspace Rust e le sue dipendenze bloccate
 ├── crates/                                      il modello meccanico: contenitore, operazioni, script, controllo di alloggiamento
