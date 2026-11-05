@@ -298,6 +298,58 @@ const TEXTS: &[Row] = &[
             "Forma que esta exportação não desenha",
         ],
     ),
+    (
+        "PHOENIX-CAD-023",
+        [
+            "Expression not valid",
+            "Expresión no válida",
+            "Ausdruck ungültig",
+            "Expression non valide",
+            "Espressione non valida",
+            "式が無効です",
+            "表达式无效",
+            "Expressão inválida",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-024",
+        [
+            "Expression cannot be evaluated",
+            "No se puede evaluar la expresión",
+            "Ausdruck kann nicht ausgewertet werden",
+            "L'expression ne peut pas être évaluée",
+            "Impossibile valutare l'espressione",
+            "式を評価できません",
+            "无法计算表达式",
+            "Não é possível avaliar a expressão",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-025",
+        [
+            "Expression limit exceeded",
+            "Se supera un límite de la expresión",
+            "Grenze des Ausdrucks überschritten",
+            "Limite de l'expression dépassée",
+            "Limite dell'espressione superato",
+            "式の上限を超えました",
+            "超出表达式限制",
+            "Limite da expressão excedido",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-026",
+        [
+            "Expression arithmetic overflows",
+            "La aritmética de la expresión se desborda",
+            "Die Arithmetik des Ausdrucks läuft über",
+            "L'arithmétique de l'expression déborde",
+            "L'aritmetica dell'espressione va in overflow",
+            "式の演算がオーバーフローします",
+            "表达式运算溢出",
+            "A aritmética da expressão excede o limite",
+        ],
+    ),
 ];
 
 /// The text of a diagnostic in a language (`en`, `es`, `de`, `fr`, `it`, `ja`, `zh` or `pt`), or

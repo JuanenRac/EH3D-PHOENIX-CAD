@@ -5,10 +5,15 @@
 //! sections, `key = value` lines and comments. The file that ships with the crate
 //! ([`DEFAULT_CONFIG`]) holds the defaults and documents each key; a user file only needs the keys
 //! it changes. A key that is missing, repeated or not understood is refused with its line number.
+//!
+//! The same file holds the limits of the language of expressions (`[expr]`) and the constants that
+//! expressions can use (`[constants]`, and the sizes of the screws and the compensation of the
+//! printer, which are named by rule: `screw_M3_clearance`, `printer_fit_clearance`).
 
 use std::collections::BTreeMap;
 
 use crate::enclosure::{Face, Hole, HoleStyle};
+use crate::expr::{parse, Constants, ExprLimits, Value};
 use crate::printer::PrinterProfile;
 use crate::units::{parse_length, Unit};
 use crate::{CadError, Length};
@@ -167,6 +172,71 @@ pub struct Settings {
     pub screws: BTreeMap<String, Screw>,
     /// The density in kilograms per cubic metre of each material by name (`PLA`).
     pub materials: BTreeMap<String, u32>,
+    /// The limits of the language of expressions.
+    pub expr: ExprLimits,
+    /// The named values that expressions can use: the sizes of the screws, the compensation of the
+    /// printer and the `[constants]` of the settings.
+    pub constants: Constants,
+}
+
+/// Adds a constant, refusing a name that is already taken or is not a plain word.
+fn add_constant(constants: &mut Constants, name: &str, value: Value) -> Result<(), CadError> {
+    if constants.get(name).is_some() {
+        return Err(CadError::Config(format!(
+            "the constant {name} is defined twice"
+        )));
+    }
+    constants
+        .set(name, value)
+        .map_err(|e| CadError::Config(format!("constant {name}: {e}")))
+}
+
+/// The constants of the settings: the printer, the screws (`screw_M2_5_clearance` for the screw
+/// `M2.5`) and the keys of `[constants]`, which are expressions that may use the first two kinds.
+fn build_constants(
+    c: &Config,
+    screws: &BTreeMap<String, Screw>,
+    printer: &PrinterProfile,
+    counterbore_extra: Length,
+    limits: &ExprLimits,
+) -> Result<Constants, CadError> {
+    let mut built = Constants::new();
+    for (name, value) in [
+        ("counterbore_extra", counterbore_extra),
+        ("printer_hole_compensation", printer.hole_compensation),
+        ("printer_small_hole_limit", printer.small_hole_limit),
+        ("printer_small_hole_extra", printer.small_hole_extra),
+        ("printer_fit_clearance", printer.fit_clearance),
+    ] {
+        add_constant(&mut built, name, Value::from_length(value))?;
+    }
+    for (name, screw) in screws {
+        let id = name.replace(['.', '-'], "_");
+        for (field, value) in [
+            ("nominal", screw.nominal),
+            ("clearance", screw.clearance),
+            ("head_diameter", screw.head_diameter),
+            ("head_height", screw.head_height),
+            ("countersink_diameter", screw.countersink_diameter),
+        ] {
+            add_constant(
+                &mut built,
+                &format!("screw_{id}_{field}"),
+                Value::from_length(value),
+            )?;
+        }
+    }
+    let known = built.clone();
+    for key in c.keys() {
+        if let Some(name) = key.strip_prefix("constants.") {
+            let text = c.need(key)?;
+            let value = parse(text, limits)
+                .and_then(|expr| expr.eval(&known, limits))
+                .map_err(|e| CadError::Config(format!("{key}: {e}")))?;
+            add_constant(&mut built, name, value)?;
+        }
+    }
+    Ok(built)
 }
 
 impl Settings {
@@ -292,6 +362,13 @@ impl Settings {
                 materials.insert(name.to_string(), density);
             }
         }
+        let expr = ExprLimits::new(
+            c.number("expr.max_length")?,
+            c.number("expr.max_depth")?,
+            c.number("expr.max_steps")?,
+            c.number("expr.max_exponent")?,
+        )?;
+        let constants = build_constants(c, &screws, &printer, counterbore_extra, &expr)?;
         Ok(Settings {
             backups,
             undo_depth,
@@ -301,6 +378,8 @@ impl Settings {
             counterbore_extra,
             screws,
             materials,
+            expr,
+            constants,
         })
     }
 }
@@ -324,6 +403,76 @@ mod tests {
         assert_eq!(names, vec!["M2", "M2.5", "M3", "M4", "M5", "M6", "M8"]);
         assert_eq!(s.materials["PLA"], 1240);
         assert!(s.materials.values().all(|d| *d > 0));
+        assert_eq!(
+            s.expr,
+            ExprLimits {
+                max_length: 512,
+                max_depth: 64,
+                max_steps: 10_000,
+                max_exponent: 64
+            }
+        );
+    }
+
+    #[test]
+    fn the_screws_the_printer_and_the_constants_of_the_settings_are_named_values_of_expressions() {
+        let s = Settings::defaults();
+        let nm = |name: &str| s.constants.get(name);
+        let len = |nm: i64| Some(Value::from_length(Length::new(nm).unwrap()));
+        assert_eq!(nm("screw_M3_clearance"), len(3_400_000));
+        assert_eq!(nm("screw_M2_5_nominal"), len(2_500_000));
+        assert_eq!(nm("screw_M8_countersink_diameter"), len(16_800_000));
+        assert_eq!(nm("counterbore_extra"), len(500_000));
+        assert_eq!(nm("printer_fit_clearance"), len(200_000));
+        assert_eq!(nm("printer_hole_compensation"), len(150_000));
+        assert_eq!(nm("nozzle"), len(400_000));
+        assert_eq!(nm("layer_height"), len(200_000));
+        assert_eq!(nm("no_such_constant"), None);
+        // five values for each of the seven screws, four for the printer, one for the counterbore
+        // and the constants of the file
+        assert_eq!(s.constants.len(), 7 * 5 + 5 + 2);
+    }
+
+    #[test]
+    fn a_user_file_adds_constants_that_may_use_the_screws_and_the_printer() {
+        let user = "[constants]\nwall_min = 4 * 0.4 mm\nhole = screw_M3_clearance + printer_hole_compensation\nsides = 4\n\n[expr]\nmax_depth = 10\n";
+        let s = Settings::with_user_config(user).unwrap();
+        let len = |nm: i64| Some(Value::from_length(Length::new(nm).unwrap()));
+        assert_eq!(s.constants.get("wall_min"), len(1_600_000));
+        assert_eq!(s.constants.get("hole"), len(3_550_000));
+        assert_eq!(
+            s.constants.get("sides"),
+            Some(crate::expr::Value::Number(crate::expr::Rat::int(4)))
+        );
+        assert_eq!(s.expr.max_depth, 10);
+        // the file may change a constant of the defaults
+        let s = Settings::with_user_config("[constants]\nnozzle = 0.6 mm\n").unwrap();
+        assert_eq!(s.constants.get("nozzle"), len(600_000));
+    }
+
+    #[test]
+    fn constants_and_limits_that_make_no_sense_are_refused_by_key() {
+        for text in [
+            "[constants]\nbad = 1 +\n",
+            "[constants]\nbad = 1 mm / 0\n",
+            "[constants]\nbad = other\n",
+            "[constants]\nmm = 1 mm\n",
+            "[constants]\nbad.name = 1 mm\n",
+            "[constants]\ncounterbore_extra = 1 mm\n",
+            "[constants]\nscrew_M3_clearance = 1 mm\n",
+            "[expr]\nmax_length = 0\n",
+            "[expr]\nmax_depth = 129\n",
+            "[expr]\nmax_steps = 100000001\n",
+            "[expr]\nmax_exponent = 1025\n",
+            "[expr]\nmax_exponent = many\n",
+            "[screw.M2_5]\nnominal = 2.5 mm\nclearance = 2.9 mm\nhead_diameter = 4.5 mm\nhead_height = 2.5 mm\ncountersink_diameter = 5 mm\n",
+        ] {
+            let err = Settings::with_user_config(text).unwrap_err();
+            assert_eq!(err.code(), "PHOENIX-CAD-011", "{text:?}: {err}");
+        }
+        // a constant cannot use another constant of the same section
+        let err = Settings::with_user_config("[constants]\na = 1 mm\nb = a\n").unwrap_err();
+        assert!(err.to_string().contains("constants.b"), "{err}");
     }
 
     #[test]

@@ -17,6 +17,7 @@
 //! * [`pattern`]: rows, grids and circles of holes with exact positions, and batches of operations that apply all or nothing;
 //! * [`graph`]: the graph of dependencies between objects, with a deterministic order of calculation, refused cycles, a recalculation that reuses what did not change, and a Graphviz dump;
 //! * [`vars`]: named variables for the master dimensions, the binding of the parameters of an enclosure to them, and families of variants (small, medium, large);
+//! * [`expr`]: the language of expressions for the parameters (`2 * wall + 1 mm`, `if(width > 80 mm, 3 mm, 2 mm)`): exact rational numbers of 128 bits with checked overflow, units and angles, functions, limits read from the settings, and errors that say where;
 //! * [`datum`]: reference frames with an origin and one of the 24 axis-aligned rotations, and the frame of each face of the box;
 //! * [`project`]: the envelope of a project file with a format version, named domains kept byte for byte when unknown, read-only opening when a critical domain is not understood, and migrations from older versions;
 //! * [`messages`]: the text of every diagnostic in the eight languages of the suite;
@@ -54,6 +55,7 @@ pub mod body;
 pub mod config;
 pub mod datum;
 pub mod enclosure;
+pub mod expr;
 pub mod fit;
 pub mod graph;
 pub mod mass;
@@ -175,6 +177,33 @@ pub enum CadError {
     Screw(String),
     /// A shape of the model that an export does not draw yet.
     NotExported(String),
+    /// An expression that is not written in the language: `pos` is the column, counted from 0.
+    ExprSyntax {
+        /// Where the problem is.
+        pos: usize,
+        /// What is wrong.
+        why: String,
+    },
+    /// An expression that cannot be calculated (a length added to a number, a division by zero,
+    /// a square root that is not exact).
+    ExprEval {
+        /// Where the problem is.
+        pos: usize,
+        /// What is wrong.
+        why: String,
+    },
+    /// An expression that goes beyond a limit of the settings (length, depth, steps, exponent).
+    ExprLimit {
+        /// Where the limit was reached.
+        pos: usize,
+        /// Which limit.
+        what: &'static str,
+    },
+    /// An expression whose arithmetic does not fit in the numbers used.
+    ExprOverflow {
+        /// Where it happened.
+        pos: usize,
+    },
 }
 
 impl CadError {
@@ -203,6 +232,10 @@ impl CadError {
             CadError::HoleStyle(_) => "PHOENIX-CAD-020",
             CadError::Screw(_) => "PHOENIX-CAD-021",
             CadError::NotExported(_) => "PHOENIX-CAD-022",
+            CadError::ExprSyntax { .. } => "PHOENIX-CAD-023",
+            CadError::ExprEval { .. } => "PHOENIX-CAD-024",
+            CadError::ExprLimit { .. } => "PHOENIX-CAD-025",
+            CadError::ExprOverflow { .. } => "PHOENIX-CAD-026",
         }
     }
 }
@@ -236,6 +269,13 @@ impl fmt::Display for CadError {
             CadError::HoleStyle(why) => write!(f, "{title}: {why}"),
             CadError::Screw(name) => write!(f, "{title}: {name:?}"),
             CadError::NotExported(what) => write!(f, "{title}: {what}"),
+            CadError::ExprSyntax { pos, why } | CadError::ExprEval { pos, why } => {
+                write!(f, "{title}: {why} (column {})", pos + 1)
+            }
+            CadError::ExprLimit { pos, what } => {
+                write!(f, "{title}: {what} (column {})", pos + 1)
+            }
+            CadError::ExprOverflow { pos } => write!(f, "{title} (column {})", pos + 1),
         }
     }
 }
@@ -269,6 +309,10 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-020", "Hole shape not valid"),
     ("PHOENIX-CAD-021", "Screw size not in the table"),
     ("PHOENIX-CAD-022", "Shape not drawn by this export"),
+    ("PHOENIX-CAD-023", "Expression not valid"),
+    ("PHOENIX-CAD-024", "Expression cannot be evaluated"),
+    ("PHOENIX-CAD-025", "Expression limit exceeded"),
+    ("PHOENIX-CAD-026", "Expression arithmetic overflows"),
 ];
 
 #[cfg(test)]
@@ -435,6 +479,19 @@ mod tests {
             CadError::HoleStyle("deep".into()),
             CadError::Screw("M99".into()),
             CadError::NotExported("countersink".into()),
+            CadError::ExprSyntax {
+                pos: 3,
+                why: "a value was expected".into(),
+            },
+            CadError::ExprEval {
+                pos: 0,
+                why: "division by zero".into(),
+            },
+            CadError::ExprLimit {
+                pos: 9,
+                what: "depth",
+            },
+            CadError::ExprOverflow { pos: 4 },
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));

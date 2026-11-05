@@ -4,7 +4,9 @@
 //! A variable is a name and a length. The master dimensions of a design live in one place, and a
 //! parameter of the enclosure that is bound to a variable takes its value from it. A variant is a
 //! set of values that replace some variables; the family gives each variant its own parameters.
-//! There is no formula language here: a parameter is bound to one variable or it is not.
+//! A binding here is to one variable; a parameter that is a formula over several variables, other
+//! parameters and the constants of the settings is an expression, see [`crate::expr`] and
+//! [`crate::parametric`].
 
 use std::collections::BTreeMap;
 
@@ -15,11 +17,16 @@ use crate::{CadError, Length};
 /// The longest name of a variable or a variant.
 pub const MAX_NAME_LEN: usize = 64;
 
-fn check_name(name: &str) -> Result<(), CadError> {
+/// Checks a name of a variable, a variant, a binding or a constant: it starts with a letter, holds
+/// letters, digits and underscores, and is not a word of the language of expressions (`and`, `or`,
+/// `not`, `true`, `false` or a unit such as `mm` or `in`), so that every name can be written in an
+/// expression.
+pub(crate) fn check_name(name: &str) -> Result<(), CadError> {
     let mut chars = name.chars();
     let ok = name.len() <= MAX_NAME_LEN
         && chars.next().is_some_and(|c| c.is_ascii_alphabetic())
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !crate::expr::is_reserved(name);
     if ok {
         Ok(())
     } else {
@@ -335,7 +342,17 @@ mod tests {
     fn names_that_are_not_plain_words_are_refused() {
         let long = "a".repeat(MAX_NAME_LEN + 1);
         let mut v = Variables::new();
-        for name in ["", "1abc", "a b", "a-b", "\u{e9}t\u{e9}", long.as_str()] {
+        for name in [
+            "",
+            "1abc",
+            "a b",
+            "a-b",
+            "\u{e9}t\u{e9}",
+            "mm",
+            "and",
+            "true",
+            long.as_str(),
+        ] {
             assert_eq!(
                 v.set(name, mm(1)).unwrap_err().code(),
                 "PHOENIX-CAD-017",
