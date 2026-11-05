@@ -13,7 +13,7 @@
 //! * [`config`]: the settings file, the one place for tuned values (copies kept, undo depth, unit shown, printer compensation, table of screws);
 //! * [`printer`]: the profile of a 3D printer and the model for fabrication with compensated holes;
 //! * [`store`]: saving a file atomically with numbered copies, and loading a file under a size limit;
-//! * [`mass`]: the volume of the material and of the holes and the mass for a density, in integers (pi as a ratio of twelve decimals);
+//! * [`mass`]: the volume of the material and of the holes, the mass for a density, the centre of mass and the moments of inertia, in integers (pi as a ratio of twelve decimals);
 //! * [`pattern`]: rows, grids and circles of holes with exact positions, and batches of operations that apply all or nothing;
 //! * [`graph`]: the graph of dependencies between objects, with a deterministic order of calculation, refused cycles, a recalculation that reuses what did not change, and a Graphviz dump;
 //! * [`vars`]: named variables for the master dimensions, the binding of the parameters of an enclosure to them, and families of variants (small, medium, large);
@@ -173,6 +173,8 @@ pub enum CadError {
     HoleStyle(String),
     /// A screw size that is not in the table of screws.
     Screw(String),
+    /// A shape of the model that an export does not draw yet.
+    NotExported(String),
 }
 
 impl CadError {
@@ -200,6 +202,7 @@ impl CadError {
             CadError::Edging(_) => "PHOENIX-CAD-019",
             CadError::HoleStyle(_) => "PHOENIX-CAD-020",
             CadError::Screw(_) => "PHOENIX-CAD-021",
+            CadError::NotExported(_) => "PHOENIX-CAD-022",
         }
     }
 }
@@ -232,6 +235,7 @@ impl fmt::Display for CadError {
             CadError::Edging(why) => write!(f, "{title}: {why}"),
             CadError::HoleStyle(why) => write!(f, "{title}: {why}"),
             CadError::Screw(name) => write!(f, "{title}: {name:?}"),
+            CadError::NotExported(what) => write!(f, "{title}: {what}"),
         }
     }
 }
@@ -264,6 +268,7 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-019", "Edge treatment not valid"),
     ("PHOENIX-CAD-020", "Hole shape not valid"),
     ("PHOENIX-CAD-021", "Screw size not in the table"),
+    ("PHOENIX-CAD-022", "Shape not drawn by this export"),
 ];
 
 #[cfg(test)]
@@ -429,6 +434,7 @@ mod tests {
             CadError::Edging("too big".into()),
             CadError::HoleStyle("deep".into()),
             CadError::Screw("M99".into()),
+            CadError::NotExported("countersink".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));

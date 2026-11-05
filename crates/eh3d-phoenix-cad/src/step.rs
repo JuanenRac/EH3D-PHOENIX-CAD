@@ -9,13 +9,19 @@
 //! millimetres with the digits they have (at most six decimals, and seven for a radius of an odd
 //! number of nanometres), never rounded. Entities are numbered in the order they are made.
 //!
+//! Only the box with straight round holes is drawn: [`to_step`] writes that and nothing else, so
+//! for a model with rounded or chamfered edges or with a countersunk, counterbored, rectangular
+//! or oval hole use [`export_step`], which refuses such a model (`PHOENIX-CAD-022`) instead of
+//! writing a file that would not show it. The script of [`crate::scad`] draws all of them.
+//!
 //! The file has only been checked for its structure (header, entity references, counts); no CAD
 //! program has opened it.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use crate::enclosure::{Enclosure, Face};
+use crate::enclosure::{Enclosure, Face, HoleStyle};
+use crate::CadError;
 
 /// A point in twice its nanometre coordinates, so that a radius of half a nanometre is exact.
 type P = (i128, i128, i128);
@@ -327,6 +333,25 @@ pub fn to_step(enclosure: &Enclosure) -> String {
     out
 }
 
+/// The enclosure as STEP text, or the error `PHOENIX-CAD-022` when the model has a shape that the
+/// file does not draw: a rounded or chamfered edge, or a hole that is not a straight round one.
+pub fn export_step(enclosure: &Enclosure) -> Result<String, CadError> {
+    if !enclosure.edging().is_sharp() {
+        return Err(CadError::NotExported("rounded or chamfered edges".into()));
+    }
+    if let Some(hole) = enclosure
+        .holes()
+        .values()
+        .find(|h| h.style != HoleStyle::Plain)
+    {
+        return Err(CadError::NotExported(format!(
+            "the shape of hole {}",
+            hole.name
+        )));
+    }
+    Ok(to_step(enclosure))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -488,5 +513,38 @@ mod tests {
         assert!(text.contains("CARTESIAN_POINT('',(104.,64.,35.))"));
         assert!(text.contains("CARTESIAN_POINT('',(2.,2.,2.))"));
         assert!(text.contains("CARTESIAN_POINT('',(102.,62.,32.))"));
+    }
+
+    #[test]
+    fn a_shape_that_the_file_does_not_draw_is_refused_instead_of_left_out() {
+        let plain = enclosure(&[(Face::Front, 20, 15, 8)]);
+        assert_eq!(export_step(&plain).unwrap(), to_step(&plain));
+        let mut rounded = enclosure(&[]);
+        rounded
+            .apply(Operation::SetEdging(crate::enclosure::Edging {
+                vertical: crate::enclosure::Treatment::Round(mm(5)),
+                ..crate::enclosure::Edging::default()
+            }))
+            .unwrap();
+        let err = export_step(&rounded).unwrap_err();
+        assert_eq!(err.code(), "PHOENIX-CAD-022");
+        let mut slot = enclosure(&[]);
+        slot.apply(Operation::AddHole {
+            id: ObjectId::from_parts(1_700_000_000_000, 1, 1).unwrap(),
+            hole: Hole {
+                name: "slot".into(),
+                face: Face::Front,
+                u: mm(40),
+                v: mm(17),
+                diameter: mm(4),
+                style: HoleStyle::Oval {
+                    length: mm(12),
+                    vertical: false,
+                },
+            },
+        })
+        .unwrap();
+        let err = export_step(&slot).unwrap_err();
+        assert_eq!(err, CadError::NotExported("the shape of hole slot".into()));
     }
 }

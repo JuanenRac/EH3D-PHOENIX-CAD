@@ -285,6 +285,19 @@ const TEXTS: &[Row] = &[
             "Tamanho de parafuso que não está na tabela",
         ],
     ),
+    (
+        "PHOENIX-CAD-022",
+        [
+            "Shape not drawn by this export",
+            "Forma que esta exportación no dibuja",
+            "Form, die dieser Export nicht zeichnet",
+            "Forme que cet export ne dessine pas",
+            "Forma che questa esportazione non disegna",
+            "この書き出しでは描画されない形状です",
+            "此导出不绘制的形状",
+            "Forma que esta exportação não desenha",
+        ],
+    ),
 ];
 
 /// The text of a diagnostic in a language (`en`, `es`, `de`, `fr`, `it`, `ja`, `zh` or `pt`), or
