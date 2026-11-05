@@ -18,6 +18,7 @@
 //! * [`graph`]: the graph of dependencies between objects, with a deterministic order of calculation, refused cycles, a recalculation that reuses what did not change, and a Graphviz dump;
 //! * [`vars`]: named variables for the master dimensions, the binding of the parameters of an enclosure to them, and families of variants (small, medium, large);
 //! * [`expr`]: the language of expressions for the parameters (`2 * wall + 1 mm`, `if(width > 80 mm, 3 mm, 2 mm)`): exact rational numbers of 128 bits with checked overflow, units and angles, functions, limits read from the settings, and errors that say where;
+//! * [`parametric`]: the parameters of an enclosure as values, variables or expressions that refer to variables, to constants of the settings and to each other, calculated through the graph of dependencies;
 //! * [`datum`]: reference frames with an origin and one of the 24 axis-aligned rotations, and the frame of each face of the box;
 //! * [`project`]: the envelope of a project file with a format version, named domains kept byte for byte when unknown, read-only opening when a critical domain is not understood, and migrations from older versions;
 //! * [`messages`]: the text of every diagnostic in the eight languages of the suite;
@@ -61,6 +62,7 @@ pub mod graph;
 pub mod mass;
 pub mod messages;
 pub mod names;
+pub mod parametric;
 pub mod pattern;
 pub mod printer;
 pub mod project;
