@@ -9,10 +9,13 @@
 //! millimetres with the digits they have (at most six decimals, and seven for a radius of an odd
 //! number of nanometres), never rounded. Entities are numbered in the order they are made.
 //!
-//! Only the box with straight round holes is drawn: [`to_step`] writes that and nothing else, so
-//! for a model with rounded or chamfered edges or with a countersunk, counterbored, rectangular
-//! or oval hole use [`export_step`], which refuses such a model (`PHOENIX-CAD-022`) instead of
-//! writing a file that would not show it. The script of [`crate::scad`] draws all of them.
+//! Only the box with straight round holes and straight posts with a plain bore is drawn:
+//! [`to_step`] writes that and nothing else, so for a model with rounded or chamfered edges, with a
+//! countersunk, counterbored, rectangular or oval hole, with the reinforced foot of a post or with
+//! the centring lip of a lid use [`export_step`], which refuses such a model (`PHOENIX-CAD-022`)
+//! instead of writing a file that would not show it. The script of [`crate::scad`] draws all of
+//! them. A post is part of the void: its wall, its top ring, the wall of its bore and the bottom of
+//! the bore close the void, and the floor of the inner space has a circle where the post stands.
 //!
 //! The file has only been checked for its structure (header, entity references, counts); no CAD
 //! program has opened it.
@@ -126,6 +129,19 @@ fn hole_place(e: &Enclosure, h: &crate::enclosure::Hole) -> (P, (i8, i8, i8), i6
     ((2 * at.0, 2 * at.1, 2 * at.2), n, t)
 }
 
+/// The four circles of a post (its foot, its top, the top of its bore and the bottom of its bore)
+/// and the centres and diameters that its faces need.
+struct PostRing {
+    top_centre: P,
+    bore_centre: P,
+    outer: i128,
+    bore: i128,
+    foot_edge: usize,
+    top_edge: usize,
+    bore_top_edge: usize,
+    bore_bottom_edge: usize,
+}
+
 /// One face of the box: which face, its four corners in order and the direction its normal points to.
 type FaceSpec = (Face, [usize; 4], (i8, i8, i8));
 
@@ -224,7 +240,8 @@ pub fn to_step(enclosure: &Enclosure) -> String {
     let mut outer_circles: BTreeMap<Face, Vec<usize>> = BTreeMap::new();
     let mut inner_circles: BTreeMap<Face, Vec<usize>> = BTreeMap::new();
     let mut hole_ends = Vec::new();
-    for hole in enclosure.holes().values() {
+    let all_holes = enclosure.all_holes();
+    for hole in &all_holes {
         let (centre, normal, thickness) = hole_place(enclosure, hole);
         let radius2 = i128::from(hole.diameter.get());
         let inner_centre = (
@@ -238,6 +255,38 @@ pub fn to_step(enclosure: &Enclosure) -> String {
         inner_circles.entry(hole.face).or_default().push(inner);
         hole_ends.push((centre, normal, radius2, outer, inner));
     }
+    // the circles of the posts: the foot is a bound of the floor of the inner space
+    let mut rings: Vec<PostRing> = Vec::new();
+    for post in enclosure.posts().values() {
+        let cx = 2 * i128::from(p.wall.get() + post.x.get());
+        let cy = 2 * i128::from(p.wall.get() + post.y.get());
+        let floor = i128::from(p.floor.get());
+        let top_z = 2 * (floor + i128::from(post.height.get()));
+        let bore_z = 2 * (floor + i128::from(post.height.get() - post.bore_depth.get()));
+        let (outer, bore) = (
+            i128::from(post.outer_diameter.get()),
+            i128::from(post.bore_diameter.get()),
+        );
+        let up = (0, 0, 1);
+        let foot_edge = circle_edge(&mut b, (cx, cy, 2 * floor), up, outer);
+        let top_edge = circle_edge(&mut b, (cx, cy, top_z), up, outer);
+        let bore_top_edge = circle_edge(&mut b, (cx, cy, top_z), up, bore);
+        let bore_bottom_edge = circle_edge(&mut b, (cx, cy, bore_z), up, bore);
+        inner_circles
+            .entry(Face::Bottom)
+            .or_default()
+            .push(foot_edge);
+        rings.push(PostRing {
+            top_centre: (cx, cy, top_z),
+            bore_centre: (cx, cy, bore_z),
+            outer,
+            bore,
+            foot_edge,
+            top_edge,
+            bore_top_edge,
+            bore_bottom_edge,
+        });
+    }
 
     let outer_min = (0, 0, 0);
     let outer_max = (n(x.get()), n(y.get()), n(z.get()));
@@ -248,7 +297,7 @@ pub fn to_step(enclosure: &Enclosure) -> String {
         n(p.floor.get() + p.inner_height.get()),
     );
     let mut faces = box_faces(&mut b, outer_min, outer_max, &outer_circles);
-    let cavity = box_faces(&mut b, inner_min, inner_max, &inner_circles);
+    let mut cavity = box_faces(&mut b, inner_min, inner_max, &inner_circles);
 
     // the wall of each hole: a cylinder between the two circles, its normal pointing to the axis
     for (centre, normal, radius2, outer, inner) in hole_ends {
@@ -266,6 +315,49 @@ pub fn to_step(enclosure: &Enclosure) -> String {
         let b1 = b.add(format!("FACE_OUTER_BOUND('',#{l1},.T.)"));
         let b2 = b.add(format!("FACE_BOUND('',#{l2},.T.)"));
         faces.push(b.add(format!("ADVANCED_FACE('',(#{b1},#{b2}),#{cylinder},.F.)")));
+    }
+
+    // the faces of the posts close the void: the wall of the post and the wall of its bore are
+    // cylinders, the top ring and the bottom of the bore are planes whose normal points down
+    for ring in rings {
+        let along = (0, 0, 1);
+        let down = (0, 0, -1);
+        let across = (1, 0, 0);
+        let wall_axis = b.axis(ring.top_centre, along, across);
+        let wall = b.add(format!(
+            "CYLINDRICAL_SURFACE('',#{wall_axis},{})",
+            real2(ring.outer)
+        ));
+        let l1 = b.loop_of(&[(ring.top_edge, true)]);
+        let l2 = b.loop_of(&[(ring.foot_edge, true)]);
+        let b1 = b.add(format!("FACE_OUTER_BOUND('',#{l1},.T.)"));
+        let b2 = b.add(format!("FACE_BOUND('',#{l2},.T.)"));
+        cavity.push(b.add(format!("ADVANCED_FACE('',(#{b1},#{b2}),#{wall},.F.)")));
+
+        let ring_axis = b.axis(ring.top_centre, down, across);
+        let ring_plane = b.add(format!("PLANE('',#{ring_axis})"));
+        let l3 = b.loop_of(&[(ring.top_edge, false)]);
+        let l4 = b.loop_of(&[(ring.bore_top_edge, false)]);
+        let b3 = b.add(format!("FACE_OUTER_BOUND('',#{l3},.T.)"));
+        let b4 = b.add(format!("FACE_BOUND('',#{l4},.T.)"));
+        cavity.push(b.add(format!("ADVANCED_FACE('',(#{b3},#{b4}),#{ring_plane},.T.)")));
+
+        let bore_axis = b.axis(ring.top_centre, along, across);
+        let bore_wall = b.add(format!(
+            "CYLINDRICAL_SURFACE('',#{bore_axis},{})",
+            real2(ring.bore)
+        ));
+        let l5 = b.loop_of(&[(ring.bore_top_edge, true)]);
+        let l6 = b.loop_of(&[(ring.bore_bottom_edge, true)]);
+        let b5 = b.add(format!("FACE_OUTER_BOUND('',#{l5},.T.)"));
+        let b6 = b.add(format!("FACE_BOUND('',#{l6},.T.)"));
+        cavity.push(b.add(format!("ADVANCED_FACE('',(#{b5},#{b6}),#{bore_wall},.T.)")));
+
+        let bottom_axis = b.axis(ring.bore_centre, down, across);
+        let bottom_plane = b.add(format!("PLANE('',#{bottom_axis})"));
+        let l7 = b.loop_of(&[(ring.bore_bottom_edge, false)]);
+        let b7 = b.add(format!("FACE_OUTER_BOUND('',#{l7},.T.)"));
+        cavity.push(b.add(format!("ADVANCED_FACE('',(#{b7}),#{bottom_plane},.T.)")));
     }
 
     let list = |ids: &[usize]| -> String {
@@ -334,20 +426,30 @@ pub fn to_step(enclosure: &Enclosure) -> String {
 }
 
 /// The enclosure as STEP text, or the error `PHOENIX-CAD-022` when the model has a shape that the
-/// file does not draw: a rounded or chamfered edge, or a hole that is not a straight round one.
+/// file does not draw: a rounded or chamfered edge, a hole that is not a straight round one (the
+/// holes of the lid fixing included), the reinforced foot of a post or the centring lip of a lid.
 pub fn export_step(enclosure: &Enclosure) -> Result<String, CadError> {
     if !enclosure.edging().is_sharp() {
         return Err(CadError::NotExported("rounded or chamfered edges".into()));
     }
     if let Some(hole) = enclosure
-        .holes()
-        .values()
+        .all_holes()
+        .into_iter()
         .find(|h| h.style != HoleStyle::Plain)
     {
         return Err(CadError::NotExported(format!(
             "the shape of hole {}",
             hole.name
         )));
+    }
+    if let Some(post) = enclosure.posts().values().find(|p| p.base.is_some()) {
+        return Err(CadError::NotExported(format!(
+            "the reinforced foot of post {}",
+            post.name
+        )));
+    }
+    if enclosure.lid().is_some_and(|lid| lid.lip.is_some()) {
+        return Err(CadError::NotExported("the centring lip of the lid".into()));
     }
     Ok(to_step(enclosure))
 }
@@ -546,5 +648,174 @@ mod tests {
         .unwrap();
         let err = export_step(&slot).unwrap_err();
         assert_eq!(err, CadError::NotExported("the shape of hole slot".into()));
+    }
+
+    use crate::mount::{Base, BoreKind, Lid, LidFixing, Lip, Post};
+
+    fn a_post(name: &str, x: i64, y: i64) -> Post {
+        Post {
+            name: name.into(),
+            board_hole: None,
+            x: mm(x),
+            y: mm(y),
+            outer_diameter: mm(8),
+            height: mm(6),
+            kind: BoreKind::Insert,
+            bore_diameter: Length::new(4_200_000).unwrap(),
+            bore_depth: mm(5),
+            base: None,
+        }
+    }
+
+    fn add_post(e: &mut Enclosure, n: u64, p: Post) {
+        e.apply(Operation::AddPost {
+            id: ObjectId::from_parts(1_700_000_000_000, n as u16, n + 40).unwrap(),
+            post: p,
+        })
+        .unwrap();
+    }
+
+    fn a_lid(style: HoleStyle, lip: Option<Lip>) -> Lid {
+        Lid {
+            fixing: LidFixing::Auto { inset: mm(6) },
+            screw: "M3".into(),
+            hole_diameter: Length::new(3_400_000).unwrap(),
+            style,
+            clearance: Length::new(200_000).unwrap(),
+            lip,
+        }
+    }
+
+    /// Every entity is numbered in order and refers only to earlier ones.
+    fn assert_references_in_order(text: &str) {
+        let data = text.split("DATA;\n").nth(1).unwrap();
+        let mut defined = 0usize;
+        for line in data.lines().take_while(|l| *l != "ENDSEC;") {
+            let (id, body) = line.split_once('=').unwrap();
+            let id: usize = id.trim_start_matches('#').parse().unwrap();
+            assert_eq!(id, defined + 1, "numbered in order");
+            let mut rest = body;
+            while let Some(i) = rest.find('#') {
+                let digits: String = rest[i + 1..]
+                    .chars()
+                    .take_while(char::is_ascii_digit)
+                    .collect();
+                let target: usize = digits.parse().unwrap();
+                assert!(target <= defined, "{line} refers to a later entity");
+                rest = &rest[i + 1..];
+            }
+            defined = id;
+        }
+    }
+
+    #[test]
+    fn a_post_closes_the_void_with_four_faces_two_cylinders_and_four_circles() {
+        let mut e = enclosure(&[]);
+        add_post(&mut e, 1, a_post("p", 25, 15));
+        let text = to_step(&e);
+        // the box has 12 faces; the post adds its wall, its top ring, the wall of its bore and
+        // the bottom of its bore
+        assert_eq!(count(&text, "ADVANCED_FACE"), 12 + 4);
+        assert_eq!(count(&text, "CYLINDRICAL_SURFACE"), 2);
+        assert_eq!(count(&text, "PLANE"), 12 + 2);
+        // four circles, each a closed edge with its own vertex
+        assert_eq!(count(&text, "CIRCLE"), 4);
+        assert_eq!(count(&text, "EDGE_CURVE"), 24 + 4);
+        assert_eq!(count(&text, "VERTEX_POINT"), 16 + 4);
+        // the foot of the post is a bound of the floor; the wall, the ring and the wall of the
+        // bore each have one more; the four faces of the post have an outer bound each
+        assert_eq!(count(&text, "FACE_BOUND"), 4);
+        assert_eq!(count(&text, "FACE_OUTER_BOUND"), 12 + 4);
+        assert_eq!(count(&text, "CLOSED_SHELL"), 2);
+        assert_eq!(count(&text, "BREP_WITH_VOIDS"), 1);
+        // the centre of the post is at 2 + 25 and 2 + 15 mm; the floor is 2 mm thick, the post 6 mm
+        // high and the bore 5 mm deep, so its bottom is 3 mm above the bottom of the box
+        assert!(text.contains("CARTESIAN_POINT('',(27.,17.,2.))"));
+        assert!(text.contains("CARTESIAN_POINT('',(27.,17.,8.))"));
+        assert!(text.contains("CARTESIAN_POINT('',(27.,17.,3.))"));
+        // the radii: 4 mm for the post, 2.1 mm for the bore
+        let radii: Vec<&str> = text
+            .lines()
+            .filter(|l| l.contains("CYLINDRICAL_SURFACE"))
+            .map(|l| l.rsplit(',').next().unwrap_or(""))
+            .collect();
+        assert_eq!(radii, vec!["4.);", "2.1);"]);
+        assert_references_in_order(&text);
+    }
+
+    #[test]
+    fn each_post_adds_its_own_faces_and_the_text_does_not_depend_on_the_order() {
+        let build = |order: [u64; 3]| {
+            let mut e = enclosure(&[(Face::Front, 20, 15, 8)]);
+            for n in order {
+                add_post(&mut e, n, a_post(&format!("p{n}"), 20 * n as i64, 40));
+            }
+            e
+        };
+        let a = to_step(&build([1, 2, 3]));
+        let b = to_step(&build([3, 1, 2]));
+        assert_eq!(a, b);
+        // the hole of the front adds one face and one cylinder
+        assert_eq!(count(&a, "ADVANCED_FACE"), 12 + 1 + 3 * 4);
+        assert_eq!(count(&a, "CYLINDRICAL_SURFACE"), 1 + 3 * 2);
+        assert_references_in_order(&a);
+    }
+
+    #[test]
+    fn a_post_is_exported_and_what_the_file_cannot_draw_is_refused() {
+        let mut e = enclosure(&[]);
+        add_post(&mut e, 1, a_post("p", 25, 15));
+        assert_eq!(export_step(&e).unwrap(), to_step(&e));
+        // the foot of a post is a cone
+        let mut footed = enclosure(&[]);
+        let mut p = a_post("p", 25, 15);
+        p.base = Some(Base {
+            diameter: mm(12),
+            height: mm(2),
+        });
+        add_post(&mut footed, 1, p);
+        let err = export_step(&footed).unwrap_err();
+        assert_eq!(err.code(), "PHOENIX-CAD-022");
+        assert_eq!(
+            err,
+            CadError::NotExported("the reinforced foot of post p".into())
+        );
+        // the lip is a ring that the file does not draw
+        let mut lipped = enclosure(&[]);
+        let lip = Lip {
+            thickness: Length::new(1_200_000).unwrap(),
+            depth: mm(3),
+        };
+        lipped
+            .apply(Operation::SetLid(Some(a_lid(HoleStyle::Plain, Some(lip)))))
+            .unwrap();
+        assert_eq!(
+            export_step(&lipped).unwrap_err(),
+            CadError::NotExported("the centring lip of the lid".into())
+        );
+    }
+
+    #[test]
+    fn the_holes_of_the_lid_are_drawn_when_they_are_plain_and_refused_when_they_are_not() {
+        let mut plain = enclosure(&[]);
+        plain
+            .apply(Operation::SetLid(Some(a_lid(HoleStyle::Plain, None))))
+            .unwrap();
+        let text = export_step(&plain).unwrap();
+        // the four corner holes, each a cylinder with its face
+        assert_eq!(count(&text, "ADVANCED_FACE"), 12 + 4);
+        assert_eq!(count(&text, "CYLINDRICAL_SURFACE"), 4);
+        assert!(text.contains("CARTESIAN_POINT('',(8.,8.,35.))"));
+        assert_references_in_order(&text);
+        let mut sunk = enclosure(&[]);
+        let head = HoleStyle::Countersunk {
+            head_diameter: Length::new(6_300_000).unwrap(),
+        };
+        sunk.apply(Operation::SetLid(Some(a_lid(head, None))))
+            .unwrap();
+        assert_eq!(
+            export_step(&sunk).unwrap_err(),
+            CadError::NotExported("the shape of hole lid screw front left".into())
+        );
     }
 }

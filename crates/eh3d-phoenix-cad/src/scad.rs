@@ -7,6 +7,7 @@
 use std::fmt::Write as _;
 
 use crate::enclosure::{Enclosure, Face, Hole, HoleStyle, Treatment};
+use crate::mount::{Lid, Lip, Post};
 
 /// A length in nanometres as millimetres, with no trailing zeros: `1500000` is `1.5`.
 pub fn mm_text(nm: i64) -> String {
@@ -302,6 +303,100 @@ fn plain_hole_text(enclosure: &Enclosure, hole: &Hole) -> String {
     out
 }
 
+/// A post: a cylinder that starts a little inside the floor so that the two solids overlap, with
+/// the cone of its foot and the bore cut from its top.
+fn post_text(enclosure: &Enclosure, post: &Post) -> String {
+    let p = enclosure.params();
+    let sunk = p.floor.get().min(1_000_000);
+    let height = post.height.get() + sunk;
+    let mut out = String::new();
+    let _ = writeln!(out, "  // post {}", post.name);
+    let _ = writeln!(
+        out,
+        "  translate([{}, {}, {}]) difference() {{",
+        mm_text(p.wall.get() + post.x.get()),
+        mm_text(p.wall.get() + post.y.get()),
+        mm_text(p.floor.get() - sunk)
+    );
+    out.push_str("    union() {\n");
+    let _ = writeln!(
+        out,
+        "      cylinder(h = {}, d = {}, $fn = {CIRCLE_SEGMENTS});",
+        mm_text(height),
+        mm_text(post.outer_diameter.get())
+    );
+    if let Some(base) = post.base {
+        let _ = writeln!(
+            out,
+            "      translate([0, 0, {}]) cylinder(h = {}, d1 = {}, d2 = {}, $fn = {CIRCLE_SEGMENTS});",
+            mm_text(sunk),
+            mm_text(base.height.get()),
+            mm_text(base.diameter.get()),
+            mm_text(post.outer_diameter.get())
+        );
+    }
+    out.push_str("    }\n");
+    let _ = writeln!(
+        out,
+        "    translate([0, 0, {}]) cylinder(h = {}, d = {}, $fn = {CIRCLE_SEGMENTS});",
+        mm_text(height - post.bore_depth.get()),
+        mm_text(post.bore_depth.get() + 1_000_000),
+        mm_text(post.bore_diameter.get())
+    );
+    out.push_str("  }\n");
+    out
+}
+
+/// The centring lip on the underside of the lid: a rectangular ring, one clearance inside the
+/// walls, that starts a little inside the lid so that the two solids overlap.
+fn lip_text(enclosure: &Enclosure, lid: &Lid, lip: &Lip) -> String {
+    let p = enclosure.params();
+    let (c, t, depth) = (lid.clearance.get(), lip.thickness.get(), lip.depth.get());
+    let (length, width) = (p.inner_length.get() - 2 * c, p.inner_width.get() - 2 * c);
+    let overlap = p.lid.get().min(1_000_000);
+    let mut out = String::new();
+    out.push_str("  // centring lip under the lid\n");
+    let _ = writeln!(
+        out,
+        "  translate([{}, {}, {}]) difference() {{",
+        mm_text(p.wall.get() + c),
+        mm_text(p.wall.get() + c),
+        mm_text(p.floor.get() + p.inner_height.get() - depth)
+    );
+    let _ = writeln!(
+        out,
+        "    cube([{}, {}, {}]);",
+        mm_text(length),
+        mm_text(width),
+        mm_text(depth + overlap)
+    );
+    let _ = writeln!(
+        out,
+        "    translate([{}, {}, -1]) cube([{}, {}, {}]);",
+        mm_text(t),
+        mm_text(t),
+        mm_text(length - 2 * t),
+        mm_text(width - 2 * t),
+        mm_text(depth + overlap + 2_000_000)
+    );
+    out.push_str("  }\n");
+    out
+}
+
+/// What is added to the box after its holes are cut: the posts and the lip.
+fn mounting_text(enclosure: &Enclosure) -> String {
+    let mut out = String::new();
+    for post in enclosure.posts().values() {
+        out.push_str(&post_text(enclosure, post));
+    }
+    if let Some(lid) = enclosure.lid() {
+        if let Some(lip) = &lid.lip {
+            out.push_str(&lip_text(enclosure, lid, lip));
+        }
+    }
+    out
+}
+
 /// The script of the enclosure.
 pub fn to_scad(enclosure: &Enclosure) -> String {
     let p = enclosure.params();
@@ -320,22 +415,32 @@ pub fn to_scad(enclosure: &Enclosure) -> String {
     ] {
         let _ = writeln!(out, "{name} = {};", mm_text(v.get()));
     }
-    out.push_str("difference() {\n");
+    let mut solid = String::new();
+    solid.push_str("difference() {\n");
     let _ = writeln!(
-        out,
+        solid,
         "  cube([{}, {}, {}]);",
         mm_text(x.get()),
         mm_text(y.get()),
         mm_text(z.get())
     );
-    out.push_str(
+    solid.push_str(
         "  translate([wall, wall, floor]) cube([inner_length, inner_width, inner_height]);\n",
     );
-    out.push_str(&edge_cutters(enclosure));
-    for hole in enclosure.holes().values() {
-        out.push_str(&hole_text(enclosure, hole));
+    solid.push_str(&edge_cutters(enclosure));
+    for hole in enclosure.all_holes() {
+        solid.push_str(&hole_text(enclosure, &hole));
     }
-    out.push_str("}\n");
+    solid.push_str("}\n");
+    let added = mounting_text(enclosure);
+    if added.is_empty() {
+        out.push_str(&solid);
+    } else {
+        out.push_str("union() {\n");
+        out.push_str(&solid);
+        out.push_str(&added);
+        out.push_str("}\n");
+    }
     out
 }
 
@@ -576,5 +681,158 @@ mod tests {
             let (_, axes) = hole_frame(&e, &hole(face));
             assert_eq!(axes[2], inward, "{face:?}");
         }
+    }
+
+    use crate::mount::{Base, BoreKind, Lid, LidFixing, Lip, Post};
+
+    fn a_post(name: &str, x: i64, y: i64) -> Post {
+        Post {
+            name: name.into(),
+            board_hole: None,
+            x: mm(x),
+            y: mm(y),
+            outer_diameter: mm(8),
+            height: mm(6),
+            kind: BoreKind::Insert,
+            bore_diameter: Length::new(4_200_000).unwrap(),
+            bore_depth: mm(5),
+            base: None,
+        }
+    }
+
+    fn add_post(e: &mut Enclosure, n: u64, p: Post) {
+        e.apply(Operation::AddPost {
+            id: ObjectId::from_parts(1_700_000_000_000, n as u16, n).unwrap(),
+            post: p,
+        })
+        .unwrap();
+    }
+
+    fn a_lid(lip: Option<Lip>) -> Lid {
+        Lid {
+            fixing: LidFixing::Auto { inset: mm(6) },
+            screw: "M3".into(),
+            hole_diameter: Length::new(3_400_000).unwrap(),
+            style: HoleStyle::Countersunk {
+                head_diameter: Length::new(6_300_000).unwrap(),
+            },
+            clearance: Length::new(200_000).unwrap(),
+            lip,
+        }
+    }
+
+    #[test]
+    fn a_box_without_posts_or_a_lip_is_not_wrapped_in_a_union() {
+        assert!(!to_scad(&enclosure()).contains("union"));
+    }
+
+    #[test]
+    fn a_post_is_a_cylinder_with_its_bore_added_to_the_box() {
+        let mut e = enclosure();
+        add_post(&mut e, 1, a_post("p", 25, 15));
+        let t = to_scad(&e);
+        // 2 mm of wall and 25 mm, 2 mm of wall and 15 mm, and the post starts 1 mm inside the
+        // floor, which is 2 mm thick, so it is 7 mm long; its bore is 5 mm deep, from the top
+        assert!(t.contains("  // post p\n"));
+        assert!(t.contains("  translate([27, 17, 1]) difference() {\n"));
+        assert!(t.contains("      cylinder(h = 7, d = 8, $fn = 64);\n"));
+        assert!(t.contains("    translate([0, 0, 2]) cylinder(h = 6, d = 4.2, $fn = 64);\n"));
+        assert!(!t.contains("d1 ="));
+        assert!(t.contains("union() {\ndifference() {\n"));
+        assert!(t.ends_with("  }\n}\n"));
+    }
+
+    #[test]
+    fn the_foot_of_a_post_is_a_cone_from_the_floor() {
+        let mut e = enclosure();
+        let mut p = a_post("p", 25, 15);
+        p.base = Some(Base {
+            diameter: mm(12),
+            height: mm(2),
+        });
+        add_post(&mut e, 1, p);
+        let t = to_scad(&e);
+        assert!(
+            t.contains("      translate([0, 0, 1]) cylinder(h = 2, d1 = 12, d2 = 8, $fn = 64);\n")
+        );
+    }
+
+    #[test]
+    fn a_post_sinks_only_as_far_as_a_thin_floor_is_thick() {
+        let mut e = Enclosure::new(EnclosureParams {
+            inner_length: mm(100),
+            inner_width: mm(60),
+            inner_height: mm(30),
+            wall: mm(2),
+            floor: Length::new(500_000).unwrap(),
+            lid: mm(3),
+            edge_margin: mm(3),
+            min_web: mm(2),
+        })
+        .unwrap();
+        add_post(&mut e, 1, a_post("p", 25, 15));
+        let t = to_scad(&e);
+        // the post starts at the underside of the floor and is 6 + 0.5 mm long
+        assert!(t.contains("  translate([27, 17, 0]) difference() {\n"));
+        assert!(t.contains("      cylinder(h = 6.5, d = 8, $fn = 64);\n"));
+    }
+
+    #[test]
+    fn the_centring_lip_is_a_ring_under_the_lid_one_clearance_inside_the_walls() {
+        let mut e = enclosure();
+        let lip = Lip {
+            thickness: Length::new(1_200_000).unwrap(),
+            depth: mm(3),
+        };
+        e.apply(Operation::SetLid(Some(a_lid(Some(lip))))).unwrap();
+        let t = to_scad(&e);
+        // 2 + 0.2 mm from the outside; it starts 2 + 30 - 3 mm above the bottom; the box inside
+        // the walls is 100 by 60 mm, 0.4 mm less across the ring; the ring is 1.2 mm wide, so the
+        // opening is 2.4 mm less again; the ring runs 1 mm into the lid
+        assert!(t.contains("  // centring lip under the lid\n"));
+        assert!(t.contains("  translate([2.2, 2.2, 29]) difference() {\n"));
+        assert!(t.contains("    cube([99.6, 59.6, 4]);\n"));
+        assert!(t.contains("    translate([1.2, 1.2, -1]) cube([97.2, 57.2, 6]);\n"));
+        // without the lip there is nothing to add: the four corner holes alone
+        let mut f = enclosure();
+        f.apply(Operation::SetLid(Some(a_lid(None)))).unwrap();
+        assert!(!to_scad(&f).contains("union"));
+    }
+
+    #[test]
+    fn the_holes_of_the_lid_are_drawn_like_the_other_holes() {
+        let mut e = enclosure();
+        e.apply(Operation::SetLid(Some(a_lid(None)))).unwrap();
+        let t = to_scad(&e);
+        assert_eq!(t.matches("// hole lid screw").count(), 4);
+        assert!(t.contains("// hole lid screw front left, top face\n"));
+        // the top face, 8 mm from the left and from the front, on a box 35 mm high
+        assert!(
+            t.contains("multmatrix([[1, 0, 0, 8], [0, 1, 0, 8], [0, 0, -1, 35], [0, 0, 0, 1]]) {")
+        );
+        assert!(t.contains(
+            "multmatrix([[1, 0, 0, 96], [0, 1, 0, 56], [0, 0, -1, 35], [0, 0, 0, 1]]) {"
+        ));
+    }
+
+    #[test]
+    fn the_same_posts_give_the_same_text_whatever_the_order_they_were_added_in() {
+        let build = |order: [u64; 3]| {
+            let mut e = enclosure();
+            for n in order {
+                add_post(&mut e, n, a_post(&format!("p{n}"), 20 * n as i64, 15));
+            }
+            e.apply(Operation::SetLid(Some(a_lid(None)))).unwrap();
+            e
+        };
+        let (a, b) = (build([1, 2, 3]), build([3, 2, 1]));
+        assert_eq!(a, b);
+        assert_eq!(to_scad(&a), to_scad(&b));
+        let t = to_scad(&a);
+        let first = t.find("// post p1").unwrap();
+        let second = t.find("// post p2").unwrap();
+        let third = t.find("// post p3").unwrap();
+        assert!(first < second && second < third);
+        assert_eq!(t.matches("// hole lid screw p").count(), 3);
     }
 }
