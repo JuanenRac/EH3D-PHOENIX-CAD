@@ -255,6 +255,535 @@ impl Enclosure {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Centre of mass and moments of inertia
+// ---------------------------------------------------------------------------------------------
+
+/// An unsigned 256-bit integer (four 64-bit limbs, least significant first). The moments of a box
+/// of a hundred millimetres already need more than 128 bits when written in nanometres, and a
+/// moment must not be rounded before the end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct U256([u64; 4]);
+
+impl U256 {
+    const ZERO: U256 = U256([0; 4]);
+
+    fn from_u128(v: u128) -> U256 {
+        U256([v as u64, (v >> 64) as u64, 0, 0])
+    }
+
+    fn to_u128(self) -> Option<u128> {
+        if self.0[2] != 0 || self.0[3] != 0 {
+            None
+        } else {
+            Some(u128::from(self.0[0]) | (u128::from(self.0[1]) << 64))
+        }
+    }
+
+    fn add(&self, other: &U256) -> Option<U256> {
+        let mut out = [0u64; 4];
+        let mut carry = false;
+        for ((r, a), b) in out.iter_mut().zip(self.0.iter()).zip(other.0.iter()) {
+            let (s1, c1) = a.overflowing_add(*b);
+            let (s2, c2) = s1.overflowing_add(u64::from(carry));
+            *r = s2;
+            carry = c1 || c2;
+        }
+        if carry {
+            None
+        } else {
+            Some(U256(out))
+        }
+    }
+
+    /// The difference, or `None` when `other` is larger.
+    fn sub(&self, other: &U256) -> Option<U256> {
+        let mut out = [0u64; 4];
+        let mut borrow = false;
+        for ((r, a), b) in out.iter_mut().zip(self.0.iter()).zip(other.0.iter()) {
+            let (s1, c1) = a.overflowing_sub(*b);
+            let (s2, c2) = s1.overflowing_sub(u64::from(borrow));
+            *r = s2;
+            borrow = c1 || c2;
+        }
+        if borrow {
+            None
+        } else {
+            Some(U256(out))
+        }
+    }
+
+    fn mul_u64(&self, m: u64) -> Option<U256> {
+        let mut out = [0u64; 4];
+        let mut carry: u128 = 0;
+        for (r, a) in out.iter_mut().zip(self.0.iter()) {
+            let t = u128::from(*a) * u128::from(m) + carry;
+            *r = t as u64;
+            carry = t >> 64;
+        }
+        if carry != 0 {
+            None
+        } else {
+            Some(U256(out))
+        }
+    }
+
+    fn mul_u128(&self, m: u128) -> Option<U256> {
+        let low = self.mul_u64(m as u64)?;
+        let high_factor = (m >> 64) as u64;
+        if high_factor == 0 {
+            return Some(low);
+        }
+        let high = self.mul_u64(high_factor)?;
+        if high.0[3] != 0 {
+            return None;
+        }
+        let shifted = U256([0, high.0[0], high.0[1], high.0[2]]);
+        low.add(&shifted)
+    }
+
+    fn bit(&self, i: usize) -> bool {
+        (self.0[i / 64] >> (i % 64)) & 1 == 1
+    }
+
+    /// The quotient and the remainder of a division by a number below 2^126.
+    fn div_rem_u128(&self, d: u128) -> Option<(U256, u128)> {
+        if d == 0 || d >= 1 << 126 {
+            return None;
+        }
+        let mut quotient = [0u64; 4];
+        let mut rem: u128 = 0;
+        for i in (0..256).rev() {
+            rem = (rem << 1) | u128::from(self.bit(i));
+            if rem >= d {
+                rem -= d;
+                quotient[i / 64] |= 1u64 << (i % 64);
+            }
+        }
+        Some((U256(quotient), rem))
+    }
+
+    /// `self / d` rounded half up.
+    fn round_div(&self, d: u128) -> Option<U256> {
+        let doubled = self.mul_u128(2)?.add(&U256::from_u128(d))?;
+        Some(doubled.div_rem_u128(d.checked_mul(2)?)?.0)
+    }
+}
+
+/// A sum of terms of both signs, kept as the sum of the positive ones and the sum of the negative
+/// ones so that nothing is subtracted before the end.
+#[derive(Debug, Clone, Copy)]
+struct Signed {
+    pos: U256,
+    neg: U256,
+}
+
+impl Signed {
+    const ZERO: Signed = Signed {
+        pos: U256::ZERO,
+        neg: U256::ZERO,
+    };
+
+    fn add(&mut self, negative: bool, magnitude: U256) -> Option<()> {
+        if negative {
+            self.neg = self.neg.add(&magnitude)?;
+        } else {
+            self.pos = self.pos.add(&magnitude)?;
+        }
+        Some(())
+    }
+
+    /// Adds another sum, or takes it away when `negative`.
+    fn merge(&mut self, other: &Signed, negative: bool) -> Option<()> {
+        self.add(negative, other.pos)?;
+        self.add(!negative, other.neg)
+    }
+
+    /// Whether the value is negative, and its size.
+    fn value(&self) -> (bool, U256) {
+        match self.pos.sub(&self.neg) {
+            Some(d) => (false, d),
+            None => (true, self.neg.sub(&self.pos).unwrap_or(U256::ZERO)),
+        }
+    }
+}
+
+/// One part of the solid: a box or a cylinder, added or taken away. Lengths are in half
+/// nanometres so that the centre of every part is a whole number.
+#[derive(Debug, Clone, Copy)]
+struct Piece {
+    /// Whether the part is taken away from the solid.
+    remove: bool,
+    /// The volume in cubic nanometres.
+    volume: i128,
+    /// The centre in half nanometres.
+    centre: [i128; 3],
+    /// 48 times the variance of the part along each axis, in square half nanometres.
+    spread: [i128; 3],
+}
+
+/// Where a hole enters the box.
+struct Place {
+    /// The axis the hole runs along: 0 for X, 1 for Y, 2 for Z.
+    axis: usize,
+    /// Whether the way into the material goes towards larger values of the axis.
+    inward_is_up: bool,
+    /// The position of the face along the axis, in nanometres.
+    face_at: i128,
+    /// The two other axes with the position of the centre of the hole on each, in nanometres:
+    /// first the direction of `u` of the face, then the direction of `v`.
+    across: [(usize, i128); 2],
+}
+
+/// The sums over all the parts.
+struct Sums {
+    volume: i128,
+    m1: [Signed; 3],
+    second: [Signed; 3],
+    products: [Signed; 3],
+}
+
+/// The pairs of axes of the three products.
+const AXIS_PAIRS: [(usize, usize); 3] = [(0, 1), (0, 2), (1, 2)];
+
+impl Sums {
+    fn add_piece(&mut self, p: &Piece) -> Option<()> {
+        let volume_h = p.volume.checked_mul(8)?;
+        self.volume = if p.remove {
+            self.volume.checked_sub(volume_h)?
+        } else {
+            self.volume.checked_add(volume_h)?
+        };
+        let v = U256::from_u128(u128::try_from(volume_h).ok()?);
+        let centre = p.centre.map(|c| u128::try_from(c).ok());
+        let spread = p.spread.map(|s| u128::try_from(s).ok());
+        for (((m1, second), c), s) in self
+            .m1
+            .iter_mut()
+            .zip(self.second.iter_mut())
+            .zip(centre.iter())
+            .zip(spread.iter())
+        {
+            let (c, s) = ((*c)?, (*s)?);
+            m1.add(p.remove, v.mul_u128(c)?)?;
+            let around_origin = 48u128.checked_mul(c.checked_mul(c)?)?.checked_add(s)?;
+            second.add(p.remove, v.mul_u128(around_origin)?)?;
+        }
+        for ((a, b), product) in AXIS_PAIRS.iter().zip(self.products.iter_mut()) {
+            let (ca, cb) = (centre[*a]?, centre[*b]?);
+            let both = 48u128.checked_mul(ca.checked_mul(cb)?)?;
+            product.add(p.remove, v.mul_u128(both)?)?;
+        }
+        Some(())
+    }
+}
+
+/// The result of the sums: the centre in nanometres and the moments about the axes through it,
+/// 48 times too large and in half nanometres to the fifth power.
+struct Raw {
+    volume_h: u128,
+    centre_nm: [i64; 3],
+    diagonal: [U256; 3],
+    products: [(bool, U256); 3],
+}
+
+fn raw_moments(s: &Sums) -> Option<Raw> {
+    let volume_h = u128::try_from(s.volume).ok()?;
+    if volume_h == 0 {
+        return None;
+    }
+    let v = U256::from_u128(volume_h);
+    let mut m1 = [U256::ZERO; 3];
+    let mut centre_nm = [0i64; 3];
+    for ((mag, c), sum) in m1.iter_mut().zip(centre_nm.iter_mut()).zip(s.m1.iter()) {
+        let (negative, magnitude) = sum.value();
+        if negative {
+            return None;
+        }
+        *mag = magnitude;
+        // the centre in nanometres: moment / (2 * volume), rounded to a whole nanometre
+        let q = magnitude.round_div(volume_h.checked_mul(2)?)?;
+        *c = i64::try_from(q.to_u128()?).ok()?;
+    }
+    // the centre as used for the moments, in half nanometres
+    let centre_h = centre_nm.map(|c| 2 * u128::try_from(c).unwrap_or(0));
+    let mut diagonal = [U256::ZERO; 3];
+    for (((out, second), m), c) in diagonal
+        .iter_mut()
+        .zip(s.second.iter())
+        .zip(m1.iter())
+        .zip(centre_h.iter())
+    {
+        let mut acc = Signed::ZERO;
+        acc.merge(second, false)?;
+        acc.add(true, m.mul_u128(96u128.checked_mul(*c)?)?)?;
+        acc.add(false, v.mul_u128(48u128.checked_mul(c.checked_mul(*c)?)?)?)?;
+        let (negative, magnitude) = acc.value();
+        if negative {
+            return None;
+        }
+        *out = magnitude;
+    }
+    let mut products = [(false, U256::ZERO); 3];
+    for (i, (a, b)) in AXIS_PAIRS.iter().enumerate() {
+        let (a, b) = (*a, *b);
+        let mut acc = Signed::ZERO;
+        acc.merge(&s.products[i], false)?;
+        acc.add(true, m1[b].mul_u128(48u128.checked_mul(centre_h[a])?)?)?;
+        acc.add(true, m1[a].mul_u128(48u128.checked_mul(centre_h[b])?)?)?;
+        let both = 48u128.checked_mul(centre_h[a].checked_mul(centre_h[b])?)?;
+        acc.add(false, v.mul_u128(both)?)?;
+        products[i] = acc.value();
+    }
+    Some(Raw {
+        volume_h,
+        centre_nm,
+        diagonal,
+        products,
+    })
+}
+
+/// A moment in micrograms times square millimetres: the size `mag` of a moment 48 times too large
+/// in half nanometres to the fifth power, for a density in kilograms per cubic metre.
+fn moment_ug_mm2(mag: &U256, density_kg_m3: u32) -> Option<i128> {
+    // 48 for the factor, 32 for the half nanometres, 10^18 for the volume and 10^12 for the
+    // square millimetres
+    const DENOMINATOR: u128 = 48 * 32 * 1_000_000_000_000_000_000_000_000_000_000;
+    let n = mag.mul_u128(u128::from(density_kg_m3))?;
+    i128::try_from(n.round_div(DENOMINATOR)?.to_u128()?).ok()
+}
+
+/// The moments of inertia of the solid, in micrograms times square millimetres, about the axes
+/// through the centre of mass that are parallel to X, Y and Z. They are the components of the
+/// inertia tensor: the products of inertia have the sign of the usual tensor (the opposite of the
+/// integral of the product of the coordinates).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Inertia {
+    /// About the axis parallel to X.
+    pub xx: i128,
+    /// About the axis parallel to Y.
+    pub yy: i128,
+    /// About the axis parallel to Z.
+    pub zz: i128,
+    /// The product of inertia of X and Y.
+    pub xy: i128,
+    /// The product of inertia of X and Z.
+    pub xz: i128,
+    /// The product of inertia of Y and Z.
+    pub yz: i128,
+}
+
+/// The mass properties of the enclosure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MassProperties {
+    /// The volume of the solid in cubic nanometres.
+    pub volume_nm3: i128,
+    /// The mass in micrograms.
+    pub mass_micrograms: i128,
+    /// The centre of mass in nanometres from the corner of the outer box with the smallest X, Y
+    /// and Z (the left, front and bottom sides), rounded to a nanometre.
+    pub centre: (Length, Length, Length),
+    /// The moments of inertia about the axes through that centre.
+    pub inertia: Inertia,
+    /// True when the figures describe the model as it is; false when something was left out or
+    /// approximated (see [`Enclosure::mass_properties`]).
+    pub exact: bool,
+}
+
+fn box_piece(remove: bool, lo: [i128; 3], size: [i128; 3]) -> Result<Piece, CadError> {
+    let volume = size[0]
+        .checked_mul(size[1])
+        .and_then(|x| x.checked_mul(size[2]))
+        .ok_or(CadError::Overflow("volume"))?;
+    Ok(Piece {
+        remove,
+        volume,
+        centre: [0, 1, 2].map(|k| 2 * lo[k] + size[k]),
+        spread: size.map(|s| 16 * s * s),
+    })
+}
+
+impl Enclosure {
+    /// Where a hole enters the box, in nanometres.
+    fn hole_place(&self, hole: &Hole) -> Place {
+        let (x, y, z) = self.params().outer();
+        let (x, y, z) = (
+            i128::from(x.get()),
+            i128::from(y.get()),
+            i128::from(z.get()),
+        );
+        let (u, v) = (i128::from(hole.u.get()), i128::from(hole.v.get()));
+        let (axis, inward_is_up, face_at, across) = match hole.face {
+            Face::Front => (1, true, 0, [(0, u), (2, v)]),
+            Face::Back => (1, false, y, [(0, x - u), (2, v)]),
+            Face::Left => (0, true, 0, [(1, y - u), (2, v)]),
+            Face::Right => (0, false, x, [(1, u), (2, v)]),
+            Face::Top => (2, false, z, [(0, u), (1, v)]),
+            Face::Bottom => (2, true, 0, [(0, u), (1, y - v)]),
+        };
+        Place {
+            axis,
+            inward_is_up,
+            face_at,
+            across,
+        }
+    }
+
+    /// A part of a hole: a prism that starts on the face and goes `depth` into the material, with
+    /// the given volume and the given size across along `u` and along `v`.
+    fn hole_piece(
+        place: &Place,
+        remove: bool,
+        depth: i128,
+        volume: i128,
+        sizes: (i128, i128),
+        round: bool,
+    ) -> Piece {
+        let low = if place.inward_is_up {
+            place.face_at
+        } else {
+            place.face_at - depth
+        };
+        let mut centre = [0i128; 3];
+        let mut spread = [0i128; 3];
+        centre[place.axis] = 2 * low + depth;
+        spread[place.axis] = 16 * depth * depth;
+        for ((axis, at), size) in place.across.iter().zip([sizes.0, sizes.1]) {
+            centre[*axis] = 2 * at;
+            // a circle has a variance of a sixteenth of the square of its diameter, a rectangle
+            // of a twelfth of the square of its side
+            spread[*axis] = if round {
+                12 * size * size
+            } else {
+                16 * size * size
+            };
+        }
+        Piece {
+            remove,
+            volume,
+            centre,
+            spread,
+        }
+    }
+
+    /// The parts that make the solid, and whether the figures describe it exactly.
+    fn mass_pieces(&self) -> Result<(Vec<Piece>, bool), CadError> {
+        let p = self.params();
+        let (x, y, z) = p.outer();
+        let n = |l: Length| i128::from(l.get());
+        let mut exact = self.edging().is_sharp();
+        let mut pieces = vec![
+            box_piece(false, [0, 0, 0], [n(x), n(y), n(z)])?,
+            box_piece(
+                true,
+                [n(p.wall), n(p.wall), n(p.floor)],
+                [n(p.inner_length), n(p.inner_width), n(p.inner_height)],
+            )?,
+        ];
+        for hole in self.holes().values() {
+            let place = self.hole_place(hole);
+            let t = self.thin_depth(hole.face);
+            let d = n(hole.diameter);
+            let straight = cylinder_volume_nm3(hole.diameter, t)?;
+            let whole = hole_volume_nm3(hole.diameter, hole.style, t)?;
+            exact &= self.hole_in_thin_part(hole);
+            match hole.style {
+                HoleStyle::Plain => {
+                    pieces.push(Self::hole_piece(&place, true, n(t), straight, (d, d), true));
+                }
+                HoleStyle::Counterbored {
+                    head_diameter,
+                    depth,
+                } => {
+                    let (head, k) = (n(head_diameter), n(depth));
+                    pieces.push(Self::hole_piece(&place, true, n(t), straight, (d, d), true));
+                    // the recess is wider than the hole: take away the wide cylinder and put back
+                    // the part of it that the hole had already taken away
+                    let wide = cylinder_volume_nm3(head_diameter, depth)?;
+                    let narrow = cylinder_volume_nm3(hole.diameter, depth)?;
+                    pieces.push(Self::hole_piece(&place, true, k, wide, (head, head), true));
+                    pieces.push(Self::hole_piece(&place, false, k, narrow, (d, d), true));
+                }
+                HoleStyle::Countersunk { head_diameter } => {
+                    // approximated: the cone is taken as a cylinder of the mean diameter
+                    let head = n(head_diameter);
+                    pieces.push(Self::hole_piece(&place, true, n(t), straight, (d, d), true));
+                    let depth = (head - d + 1) / 2;
+                    let mean = (head + d) / 2;
+                    pieces.push(Self::hole_piece(
+                        &place,
+                        true,
+                        depth,
+                        whole - straight,
+                        (mean, mean),
+                        true,
+                    ));
+                    exact = false;
+                }
+                HoleStyle::Rectangular { .. } => {
+                    let (su, sv) = hole.style.footprint(hole.diameter);
+                    pieces.push(Self::hole_piece(&place, true, n(t), whole, (su, sv), false));
+                }
+                HoleStyle::Oval { .. } => {
+                    // approximated: the slot is taken as the rectangle that holds it
+                    let (su, sv) = hole.style.footprint(hole.diameter);
+                    pieces.push(Self::hole_piece(&place, true, n(t), whole, (su, sv), false));
+                    exact = false;
+                }
+            }
+        }
+        Ok((pieces, exact))
+    }
+
+    /// The volume, the mass, the centre of mass and the moments of inertia of the enclosure for a
+    /// material of the given density (kilograms per cubic metre), in integers.
+    ///
+    /// The solid is the outer box, minus the inner space, minus each hole (a cylinder or a box,
+    /// with the recess of a counterbore), so that every part is a box or a cylinder whose moments
+    /// are exact. Some things are left out or approximated, and then `exact` is false: the
+    /// treatment of the edges is not taken from the solid (the volume is the one without it), a
+    /// countersink is taken as a cylinder of its mean diameter, a slot as the rectangle that holds
+    /// it, and a hole that is not wholly in the thin part of its face is as long as that part.
+    pub fn mass_properties(&self, density_kg_m3: u32) -> Result<MassProperties, CadError> {
+        let fail = || CadError::Overflow("mass properties");
+        let (pieces, exact) = self.mass_pieces()?;
+        let mut sums = Sums {
+            volume: 0,
+            m1: [Signed::ZERO; 3],
+            second: [Signed::ZERO; 3],
+            products: [Signed::ZERO; 3],
+        };
+        for piece in &pieces {
+            sums.add_piece(piece).ok_or_else(fail)?;
+        }
+        let raw = raw_moments(&sums).ok_or_else(fail)?;
+        let scale = |mag: &U256| moment_ug_mm2(mag, density_kg_m3).ok_or_else(fail);
+        let signed = |(negative, mag): &(bool, U256)| -> Result<i128, CadError> {
+            // the product of inertia is the opposite of the integral of the product
+            let v = scale(mag)?;
+            Ok(if *negative { v } else { -v })
+        };
+        let [dx, dy, dz] = raw.diagonal;
+        let sum = |a: &U256, b: &U256| a.add(b).ok_or_else(fail);
+        let volume_nm3 = i128::try_from(raw.volume_h / 8).map_err(|_| fail())?;
+        let [cx, cy, cz] = raw.centre_nm;
+        Ok(MassProperties {
+            volume_nm3,
+            mass_micrograms: mass_micrograms(volume_nm3, density_kg_m3)?,
+            centre: (Length::new(cx)?, Length::new(cy)?, Length::new(cz)?),
+            inertia: Inertia {
+                xx: scale(&sum(&dy, &dz)?)?,
+                yy: scale(&sum(&dx, &dz)?)?,
+                zz: scale(&sum(&dx, &dy)?)?,
+                xy: signed(&raw.products[0])?,
+                xz: signed(&raw.products[1])?,
+                yz: signed(&raw.products[2])?,
+            },
+            exact,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,5 +1086,218 @@ mod tests {
         // a hole of the top that reaches the wall column
         let edge = with_hole(0, Face::Top, 4, 32, 6);
         assert!(!edge.holes_volume().unwrap().exact);
+    }
+
+    #[test]
+    fn wide_integers_multiply_divide_and_refuse_to_overflow() {
+        let x = U256::from_u128((1 << 100) + 12_345);
+        let y: u128 = (1 << 120) + 999;
+        let p = x.mul_u128(y).unwrap();
+        assert_eq!(p.div_rem_u128(y).unwrap(), (x, 0));
+        let more = p.add(&U256::from_u128(5)).unwrap();
+        assert_eq!(more.div_rem_u128(y).unwrap(), (x, 5));
+        assert_eq!(more.sub(&p).unwrap().to_u128(), Some(5));
+        assert!(U256([u64::MAX; 4]).mul_u128(2).is_none());
+        assert!(U256([u64::MAX; 4]).add(&U256::from_u128(1)).is_none());
+        assert!(U256::from_u128(3).sub(&U256::from_u128(4)).is_none());
+        assert!(U256::from_u128(3).div_rem_u128(0).is_none());
+        // rounded half up
+        assert_eq!(U256::from_u128(7).round_div(2).unwrap().to_u128(), Some(4));
+        assert_eq!(U256::from_u128(5).round_div(2).unwrap().to_u128(), Some(3));
+        assert_eq!(U256::from_u128(4).round_div(3).unwrap().to_u128(), Some(1));
+        let mut s = Signed::ZERO;
+        s.add(false, U256::from_u128(3)).unwrap();
+        s.add(true, U256::from_u128(5)).unwrap();
+        assert_eq!(s.value(), (true, U256::from_u128(2)));
+    }
+
+    fn props(e: &Enclosure) -> MassProperties {
+        e.mass_properties(1240).unwrap()
+    }
+
+    fn tensor(m: &MassProperties) -> [i128; 6] {
+        let i = m.inertia;
+        [i.xx, i.yy, i.zz, i.xy, i.xz, i.yz]
+    }
+
+    fn nm(c: (Length, Length, Length)) -> [i64; 3] {
+        [c.0.get(), c.1.get(), c.2.get()]
+    }
+
+    #[test]
+    fn the_empty_box_has_its_centre_and_its_moments_of_inertia() {
+        let m = props(&Enclosure::new(params(3)).unwrap());
+        // 52960 cubic millimetres of a material of 1240 kg/m3
+        assert_eq!(m.volume_nm3, 52_960 * MM3);
+        assert_eq!(m.mass_micrograms, 65_670_400);
+        // the box is symmetric in X and Y; the floor and the lid are not alike in Z
+        assert_eq!(nm(m.centre), [52_000_000, 32_000_000, 19_199_396]);
+        assert_eq!(
+            tensor(&m),
+            [44_144_497_299, 86_871_921_299, 106_009_617_067, 0, 0, 0]
+        );
+        assert!(m.exact);
+    }
+
+    #[test]
+    fn a_hole_moves_the_centre_and_gives_products_of_inertia() {
+        let m = props(&with_hole(3, Face::Front, 50, 17, 10));
+        assert_eq!(m.volume_nm3, 52_802_920_367_320_500_000_000);
+        assert_eq!(nm(m.centre), [52_005_950, 32_092_220, 19_205_939]);
+        assert_eq!(
+            tensor(&m),
+            [
+                43_954_530_782,
+                86_867_760_117,
+                105_819_814_132,
+                12_112_207,
+                859_340,
+                13_319_768
+            ]
+        );
+        assert!(m.exact);
+        // the volume is the one of the holes of the other figures, to the nanometre
+        let by_holes = props(&with_hole(3, Face::Front, 50, 17, 10))
+            .volume_nm3
+            .abs_diff(
+                with_hole(3, Face::Front, 50, 17, 10)
+                    .material_volume_with_holes()
+                    .unwrap()
+                    .nm3,
+            );
+        assert!(by_holes <= 1, "{by_holes}");
+    }
+
+    #[test]
+    fn holes_on_other_faces_are_placed_where_the_script_places_them() {
+        let mut e = with_hole(3, Face::Front, 50, 17, 10);
+        e.apply(Operation::AddHole {
+            id: ObjectId::from_parts(1_700_000_000_000, 2, 2).unwrap(),
+            hole: Hole {
+                name: "back".into(),
+                face: Face::Back,
+                u: mm(30),
+                v: mm(20),
+                diameter: mm(8),
+                style: HoleStyle::Plain,
+            },
+        })
+        .unwrap();
+        let m = props(&e);
+        assert_eq!(m.volume_nm3, 52_702_389_402_405_620_000_000);
+        assert_eq!(nm(m.centre), [51_963_996, 32_033_262, 19_204_424]);
+        assert_eq!(
+            tensor(&m),
+            [
+                43_834_599_657,
+                86_806_267_037,
+                105_639_544_696,
+                97_015_045,
+                3_040_605,
+                16_385_055
+            ]
+        );
+    }
+
+    #[test]
+    fn a_rectangular_hole_and_a_counterbore_are_boxes_and_cylinders_too() {
+        let rect = styled(
+            HoleStyle::Rectangular { height: mm(4) },
+            10_000_000,
+            Face::Left,
+        );
+        // the helper puts the centre at (50, 17), but the left face is 64 mm wide: use u = 20
+        let mut e = Enclosure::new(params(3)).unwrap();
+        let mut hole = rect.holes().values().next().unwrap().clone();
+        hole.u = mm(20);
+        e.apply(Operation::AddHole {
+            id: ObjectId::from_parts(1_700_000_000_000, 1, 1).unwrap(),
+            hole,
+        })
+        .unwrap();
+        let m = props(&e);
+        assert_eq!(m.volume_nm3, 52_880 * MM3);
+        assert_eq!(nm(m.centre), [52_077_156, 31_981_846, 19_202_723]);
+        assert_eq!(
+            tensor(&m),
+            [
+                44_128_751_364,
+                86_612_865_828,
+                105_736_041_376,
+                -60_802_246,
+                11_144_017,
+                -2_622_122
+            ]
+        );
+        assert!(m.exact);
+        let mut top = Enclosure::new(params(3)).unwrap();
+        top.apply(Operation::AddHole {
+            id: ObjectId::from_parts(1_700_000_000_000, 1, 1).unwrap(),
+            hole: Hole {
+                name: "bore".into(),
+                face: Face::Top,
+                u: mm(52),
+                v: mm(32),
+                diameter: Length::new(3_400_000).unwrap(),
+                style: HoleStyle::Counterbored {
+                    head_diameter: mm(6),
+                    depth: mm(1),
+                },
+            },
+        })
+        .unwrap();
+        let m = props(&top);
+        assert_eq!(m.volume_nm3, 52_913_567_260_579_939_800_000);
+        assert_eq!(nm(m.centre), [52_000_000, 32_000_000, 19_186_484]);
+        assert_eq!(
+            tensor(&m),
+            [44_131_884_492, 86_859_308_492, 106_009_426_760, 0, 0, 0]
+        );
+        assert!(m.exact);
+    }
+
+    #[test]
+    fn what_is_left_out_or_approximated_is_said_by_the_exact_flag() {
+        let rounded = edged(Edging {
+            vertical: Treatment::Round(mm(5)),
+            ..Edging::default()
+        });
+        assert!(!props(&rounded).exact);
+        let sunk = styled(
+            HoleStyle::Countersunk {
+                head_diameter: Length::new(6_300_000).unwrap(),
+            },
+            3_400_000,
+            Face::Front,
+        );
+        assert!(!props(&sunk).exact);
+        let slot = styled(
+            HoleStyle::Oval {
+                length: mm(10),
+                vertical: false,
+            },
+            4_000_000,
+            Face::Front,
+        );
+        let m = props(&slot);
+        assert!(!m.exact);
+        // the volume is still the one of the slot
+        assert_eq!(m.volume_nm3, slot.material_volume_with_holes().unwrap().nm3);
+        // a hole that reaches the floor is as long as the thin part, and the figure says so
+        assert!(!props(&with_hole(0, Face::Front, 50, 3, 6)).exact);
+    }
+
+    #[test]
+    fn the_mass_follows_the_density_and_the_moments_follow_the_mass() {
+        let e = Enclosure::new(params(3)).unwrap();
+        let light = e.mass_properties(1000).unwrap();
+        let heavy = e.mass_properties(2000).unwrap();
+        assert_eq!(heavy.mass_micrograms, 2 * light.mass_micrograms);
+        assert!(heavy.inertia.zz.abs_diff(2 * light.inertia.zz) <= 1);
+        assert_eq!(heavy.centre, light.centre);
+        assert_eq!(
+            light.mass_micrograms,
+            mass_micrograms(light.volume_nm3, 1000).unwrap()
+        );
     }
 }
