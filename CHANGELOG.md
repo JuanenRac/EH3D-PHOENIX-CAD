@@ -3,6 +3,10 @@
 All notable changes to this project are documented here.
 
 ## [Unreleased]
+- Add the centre of mass and the moments and products of inertia of the enclosure (`Enclosure::mass_properties`), in integers: every part of the solid is a box or a cylinder with exact moments, summed in 256-bit integers and rounded once at the end; the figure says when something was approximated (a countersink taken as a cylinder of its mean diameter, a slot as the rectangle that holds it, the treatment of the edges left out); code `PHOENIX-CAD-009` when a result does not fit.
+- Draw the new shapes in the script: countersunk, counterbored, rectangular and oval holes, and rounded and chamfered edges cut along their whole length; add `step::export_step`, which writes the STEP file and refuses with `PHOENIX-CAD-022` a model that the file does not draw (rounded or chamfered edges, holes other than straight round ones) instead of leaving the shape out.
+- Add countersunk, counterbored, rectangular and oval holes (`HoleStyle`) with `Settings::screw_hole`, which takes the sizes of a screw from the table of the settings; the printer compensation widens every size across of a hole and keeps the edges; codes `PHOENIX-CAD-020` and `PHOENIX-CAD-021`.
+- Add rounded and chamfered edges of the box (`Edging`: the vertical edges, the edges of the lid and the edges of the floor), with their volume, the names of the new edges and faces, the checks against the box and the holes, and the code `PHOENIX-CAD-019`.
 - Update the requirements, the status and the list of ideas left for later to what the library does now, with the proposals that need a decision.
 - Add `eh3d_phoenix_cad::messages`: the text of every diagnostic in the eight languages of the suite, checked against the registry of codes; add two examples of the API that run as tests and three regression tests.
 - Add `eh3d_phoenix_cad::project`: the envelope of a project file with a format version, named domains that are kept byte for byte when this program does not know them, read-only opening when a critical domain is not understood, a chain of migrations from older versions and a size limit; code `PHOENIX-CAD-018`. What a domain holds is left to the contract of the mechanical domain.
@@ -17,7 +21,7 @@ All notable changes to this project are documented here.
 - Add `eh3d_phoenix_cad::names`: stable names for the faces, the edges and the walls of the holes of an enclosure, built by rule so that they do not change when other operations are added, removed or reordered, and the code `PHOENIX-CAD-010` for a name that no longer exists.
 - Add `eh3d_phoenix_cad::units`: angles in integer nano-degrees with integer sine and cosine, counts and ratios with their own range, rounding half away from zero, an integer square root, and lengths read and shown in mm, um, in and mil (`1.6 mm`, `62 mil`, `1/16 in`); codes `PHOENIX-CAD-006` to `PHOENIX-CAD-009`.
 - Add `eh3d_phoenix_cad::step::to_step`: the enclosure as a STEP file (a boundary representation with the inner space as a void and a cylindrical face for each hole), the same text for the same model, tested for its structure (header, references, counts); no CAD program has opened it.
-- Correct the test counter of the README files to 27 tests, 24 of the Rust library and 3 of the base.
+- Correct the test counter of the README files to 157 tests, 154 of the Rust library and 3 of the base.
 
 ## [0.0.2] - Parametric box with holes, shared object identifiers, reversible operations and the fit check against a board
 
