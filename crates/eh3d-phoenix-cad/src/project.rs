@@ -8,18 +8,33 @@
 //! opened read-only instead of being edited and saved without it.
 //!
 //! A file of an older version is brought to the current one by a chain of migrations; a file of a
-//! newer version is refused. Nothing here says what a domain holds: the mechanical domain of the
-//! project format belongs to a contract that is not accepted yet.
+//! newer version is refused. Nothing here says what most domains hold: the mechanical domain of the
+//! project format belongs to a contract that is not accepted yet. One domain is written here, the
+//! one of the parameters of the enclosure (`mechanical-parameters`): the base values, the
+//! variables and the definition of each parameter as a value, a variable or an expression. It is
+//! a domain of its own, so a file without it opens as before and a file with it opens in an older
+//! program as read-only (it is critical: an older program would not know that a parameter is
+//! a formula).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::CadError;
+use crate::enclosure::EnclosureParams;
+use crate::expr::{parse, ExprLimits};
+use crate::parametric::{ParamModel, Parameter};
+use crate::vars::{Param, Variables};
+use crate::{CadError, Length};
 
 /// The version this program writes.
 pub const FORMAT_VERSION: u32 = 1;
 
 /// The most domains a file may hold.
 pub const MAX_DOMAINS: usize = 1000;
+
+/// The domain of the parameters of the enclosure.
+pub const PARAMETERS_DOMAIN: &str = "mechanical-parameters";
+
+/// The first line of the domain of the parameters; the number is the version of its text.
+const PARAMETERS_HEADER: &str = "parameters 1";
 
 /// The longest name of a domain.
 pub const MAX_DOMAIN_NAME: usize = 64;
@@ -228,6 +243,138 @@ impl Document {
     }
 }
 
+impl Document {
+    /// Writes the parameters of the enclosure and the variables they use in the domain
+    /// [`PARAMETERS_DOMAIN`], which is critical.
+    pub fn set_parameters(&mut self, model: &ParamModel, vars: &Variables) -> Result<(), CadError> {
+        self.set(PARAMETERS_DOMAIN, true, parameters_to_bytes(model, vars))
+    }
+
+    /// Reads the parameters of the enclosure and the variables, or `None` when the file has no such
+    /// domain. The expressions are read under the limits given.
+    pub fn parameters(
+        &self,
+        limits: &ExprLimits,
+    ) -> Result<Option<(ParamModel, Variables)>, CadError> {
+        match self.get(PARAMETERS_DOMAIN) {
+            Some(domain) => parameters_from_bytes(&domain.data, limits).map(Some),
+            None => Ok(None),
+        }
+    }
+}
+
+/// The text of the parameters, the same text for the same model: a header line, the eight base
+/// values in nanometres, the variables in name order and the definition of each parameter that has
+/// one. An expression is written in its canonical form.
+pub fn parameters_to_bytes(model: &ParamModel, vars: &Variables) -> Vec<u8> {
+    let mut out = format!("{PARAMETERS_HEADER}\n");
+    for param in Param::ALL {
+        out.push_str(&format!(
+            "base {} {}\n",
+            param.name(),
+            param.get(model.base()).get()
+        ));
+    }
+    for name in vars.names() {
+        let nm = vars.get(name).map_or(0, Length::get);
+        out.push_str(&format!("variable {name} {nm}\n"));
+    }
+    for (param, parameter) in model.entries() {
+        let name = param.name();
+        match parameter {
+            Parameter::Fixed(length) => {
+                out.push_str(&format!("param {name} value {}\n", length.get()));
+            }
+            Parameter::Variable(variable) => {
+                out.push_str(&format!("param {name} variable {variable}\n"));
+            }
+            Parameter::Expr(expr) => {
+                out.push_str(&format!("param {name} expr {}\n", expr.to_text()));
+            }
+        }
+    }
+    out.into_bytes()
+}
+
+fn nanometres(text: &str, what: &str) -> Result<Length, CadError> {
+    let nm = text
+        .parse::<i64>()
+        .map_err(|_| bad(&format!("the {what} is not a whole number of nanometres")))?;
+    Length::new(nm).map_err(|_| bad(&format!("the {what} is outside the range of lengths")))
+}
+
+/// Reads the text written by [`parameters_to_bytes`]. A text that is not well formed is refused
+/// with `PHOENIX-CAD-018`, and so is an expression that cannot be read under the limits.
+pub fn parameters_from_bytes(
+    bytes: &[u8],
+    limits: &ExprLimits,
+) -> Result<(ParamModel, Variables), CadError> {
+    let text = std::str::from_utf8(bytes).map_err(|_| bad("the parameters are not text"))?;
+    let mut lines = text.lines();
+    if lines.next() != Some(PARAMETERS_HEADER) {
+        return Err(bad("the parameters do not start with their header"));
+    }
+    let zero = Length::ZERO;
+    let mut base = EnclosureParams {
+        inner_length: zero,
+        inner_width: zero,
+        inner_height: zero,
+        wall: zero,
+        floor: zero,
+        lid: zero,
+        edge_margin: zero,
+        min_web: zero,
+    };
+    let mut seen = BTreeSet::new();
+    let mut vars = Variables::new();
+    let mut defined = BTreeSet::new();
+    let mut entries: Vec<(Param, Parameter)> = Vec::new();
+    for line in lines {
+        let parts: Vec<&str> = line.splitn(4, ' ').collect();
+        match parts.as_slice() {
+            ["base", name, value] => {
+                let param = Param::from_name(name).ok_or_else(|| bad("a base value is unknown"))?;
+                if !seen.insert(param) {
+                    return Err(bad("a base value is repeated"));
+                }
+                param.set(&mut base, nanometres(value, "base value")?);
+            }
+            ["variable", name, value] => {
+                vars.set(name, nanometres(value, "variable")?)
+                    .map_err(|e| bad(&format!("variable {name}: {e}")))?;
+            }
+            ["param", name, kind, rest] => {
+                let param = Param::from_name(name).ok_or_else(|| bad("a parameter is unknown"))?;
+                if !defined.insert(param) {
+                    return Err(bad("a parameter is defined twice"));
+                }
+                let parameter = match *kind {
+                    "value" => Parameter::Fixed(nanometres(rest, "value of a parameter")?),
+                    "variable" => Parameter::Variable((*rest).to_string()),
+                    "expr" => Parameter::Expr(
+                        parse(rest, limits).map_err(|e| bad(&format!("parameter {name}: {e}")))?,
+                    ),
+                    _ => {
+                        return Err(bad(
+                            "a parameter is neither a value, a variable nor an expression",
+                        ))
+                    }
+                };
+                entries.push((param, parameter));
+            }
+            _ => return Err(bad("a line of the parameters is not understood")),
+        }
+    }
+    if seen.len() != Param::ALL.len() {
+        return Err(bad("a base value is missing"));
+    }
+    let mut model = ParamModel::new(base)?;
+    for (param, parameter) in entries {
+        model.set(param, parameter)?;
+    }
+    Ok((model, vars))
+}
+
 fn take_line<'a>(bytes: &'a [u8], pos: &mut usize) -> Result<&'a str, CadError> {
     let rest = &bytes[*pos..];
     let end = rest
@@ -397,6 +544,191 @@ mod tests {
         assert!(d.set("d0", true, vec![1]).is_ok());
         assert!(d.remove("d0").is_ok());
         assert_eq!(d.remove("d0").unwrap_err().code(), "PHOENIX-CAD-014");
+    }
+
+    fn mm(v: i64) -> Length {
+        Length::from_mm(v).unwrap()
+    }
+
+    fn parametric_sample() -> (ParamModel, Variables) {
+        let limits = crate::config::Settings::defaults().expr;
+        let mut m = ParamModel::new(EnclosureParams {
+            inner_length: mm(100),
+            inner_width: mm(60),
+            inner_height: mm(30),
+            wall: mm(2),
+            floor: mm(2),
+            lid: mm(3),
+            edge_margin: mm(3),
+            min_web: mm(2),
+        })
+        .unwrap();
+        m.set_expr(Param::Wall, "5 * nozzle", &limits).unwrap();
+        m.set_expr(Param::Floor, "wall", &limits).unwrap();
+        m.set_expr(Param::InnerLength, "length + 2 * wall", &limits)
+            .unwrap();
+        m.set(Param::InnerWidth, Parameter::Variable("width".into()))
+            .unwrap();
+        m.set(Param::Lid, Parameter::Fixed(mm(4))).unwrap();
+        m.set_expr(
+            Param::EdgeMargin,
+            "if(length > 80 mm, screw_M3_clearance, 2.5 mm)",
+            &limits,
+        )
+        .unwrap();
+        let mut vars = Variables::new();
+        vars.set("length", mm(100)).unwrap();
+        vars.set("width", mm(60)).unwrap();
+        (m, vars)
+    }
+
+    #[test]
+    fn the_parameters_are_written_and_read_back_equal_in_a_domain_of_their_own() {
+        let limits = crate::config::Settings::defaults().expr;
+        let (model, vars) = parametric_sample();
+        let mut doc = sample();
+        doc.set_parameters(&model, &vars).unwrap();
+        assert_eq!(doc.version, FORMAT_VERSION);
+        assert!(doc.get(PARAMETERS_DOMAIN).unwrap().critical);
+        let reread = Document::from_bytes(&doc.to_bytes(), BIG).unwrap();
+        let (m2, v2) = reread.parameters(&limits).unwrap().unwrap();
+        assert_eq!(m2, model);
+        assert_eq!(v2, vars);
+        // the other domains are where they were
+        assert_eq!(reread.get("notes"), sample().get("notes"));
+        assert_eq!(reread.names().len(), 4);
+        // the same model is always the same bytes
+        assert_eq!(
+            parameters_to_bytes(&model, &vars),
+            parameters_to_bytes(&m2, &v2)
+        );
+    }
+
+    #[test]
+    fn the_text_of_the_parameters_is_plain_and_the_expressions_are_canonical() {
+        let (model, vars) = parametric_sample();
+        let text = String::from_utf8(parameters_to_bytes(&model, &vars)).unwrap();
+        let expected = "parameters 1\n\
+base inner_length 100000000\n\
+base inner_width 60000000\n\
+base inner_height 30000000\n\
+base wall 2000000\n\
+base floor 2000000\n\
+base lid 3000000\n\
+base edge_margin 3000000\n\
+base min_web 2000000\n\
+variable length 100000000\n\
+variable width 60000000\n\
+param inner_length expr length + 2 * wall\n\
+param inner_width variable width\n\
+param wall expr 5 * nozzle\n\
+param floor expr wall\n\
+param lid value 4000000\n\
+param edge_margin expr if(length > 80 mm, screw_M3_clearance, 2.5 mm)\n";
+        assert_eq!(text, expected);
+    }
+
+    #[test]
+    fn a_file_without_parameters_opens_as_before_and_one_with_them_is_read_only_for_an_old_program()
+    {
+        let limits = crate::config::Settings::defaults().expr;
+        let old = sample();
+        assert_eq!(old.parameters(&limits).unwrap(), None);
+        assert!(
+            !Document::open(&old.to_bytes(), BIG, &["mechanical"])
+                .unwrap()
+                .read_only
+        );
+        let (model, vars) = parametric_sample();
+        let mut doc = sample();
+        doc.set_parameters(&model, &vars).unwrap();
+        let bytes = doc.to_bytes();
+        assert!(
+            !Document::open(&bytes, BIG, &["mechanical", PARAMETERS_DOMAIN])
+                .unwrap()
+                .read_only
+        );
+        assert!(
+            Document::open(&bytes, BIG, &["mechanical"])
+                .unwrap()
+                .read_only
+        );
+        // a program that does not know the domain keeps it byte for byte
+        let mut other = Document::from_bytes(&bytes, BIG).unwrap();
+        other.set("notes", false, b"changed".to_vec()).unwrap();
+        let again = Document::from_bytes(&other.to_bytes(), BIG).unwrap();
+        assert_eq!(again.get(PARAMETERS_DOMAIN), doc.get(PARAMETERS_DOMAIN));
+    }
+
+    #[test]
+    fn parameters_that_are_not_well_formed_are_refused_with_one_code() {
+        let limits = crate::config::Settings::defaults().expr;
+        let (model, vars) = parametric_sample();
+        let good = String::from_utf8(parameters_to_bytes(&model, &vars)).unwrap();
+        let bases = good
+            .lines()
+            .filter(|l| l.starts_with("base "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let with = |extra: &str| format!("parameters 1\n{bases}\n{extra}");
+        for text in [
+            String::new(),
+            "hello\n".to_string(),
+            "parameters 2\n".to_string(),
+            "parameters 1\n".to_string(),
+            with("base wall 5\n"),
+            with("base nothing 5\n"),
+            with("variable length many\n"),
+            with("variable bad-name 5\n"),
+            with("variable length 99999999999999\n"),
+            with("param wall value x\n"),
+            with("param wall sometimes 5\n"),
+            with("param nothing value 5\n"),
+            with("param wall value 5\nparam wall value 6\n"),
+            with("param wall expr 1 +\n"),
+            with("param wall expr 2 ** 3\n"),
+            with("param wall expr floor\nparam floor expr wall\n"),
+            with("something else\n"),
+            good.replace("base lid 3000000\n", ""),
+            good.replace("base wall 2000000", "base wall 0"),
+        ] {
+            let err = parameters_from_bytes(text.as_bytes(), &limits);
+            match err {
+                Err(e) => assert!(
+                    ["PHOENIX-CAD-018", "PHOENIX-CAD-013", "PHOENIX-CAD-002"].contains(&e.code()),
+                    "{text:?}: {e}"
+                ),
+                Ok(_) => panic!("{text:?} was accepted"),
+            }
+        }
+        assert_eq!(
+            parameters_from_bytes(with("param wall expr 1 +\n").as_bytes(), &limits)
+                .unwrap_err()
+                .code(),
+            "PHOENIX-CAD-018"
+        );
+        assert_eq!(
+            parameters_from_bytes(&[0xff, 0xfe], &limits)
+                .unwrap_err()
+                .code(),
+            "PHOENIX-CAD-018"
+        );
+        // every cut of a good text is refused or is a shorter good text, never a panic
+        for n in 0..good.len() {
+            let _ = parameters_from_bytes(&good.as_bytes()[..n], &limits);
+        }
+        assert!(parameters_from_bytes(good.as_bytes(), &limits).is_ok());
+    }
+
+    #[test]
+    fn the_parameters_read_back_calculate_the_same_enclosure() {
+        let s = crate::config::Settings::defaults();
+        let (model, vars) = parametric_sample();
+        let before = model.resolve(&vars, &s.constants, &s.expr).unwrap();
+        let (m2, v2) = parameters_from_bytes(&parameters_to_bytes(&model, &vars), &s.expr).unwrap();
+        assert_eq!(m2.resolve(&v2, &s.constants, &s.expr).unwrap(), before);
+        assert_eq!(before.inner_length, mm(104));
+        assert_eq!(before.edge_margin.get(), 3_400_000);
     }
 
     fn rename_mech(doc: &mut Document) {
