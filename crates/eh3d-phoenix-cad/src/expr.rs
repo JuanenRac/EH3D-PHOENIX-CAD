@@ -1989,15 +1989,18 @@ mod tests {
             "999999999999999999 * 999999999999999999 * 999999999999999999",
             "999999999999999999 m * 999999999999999999 * 999999999999999999",
             "10 ^ 40",
-            "2 ^ 127",
+            "2 ^ 63 * 2 ^ 63 * 2",
             "(0 - 2 ^ 126) - 2 ^ 126 - 2 ^ 126",
             "1 / 10 ^ 39",
             "1 / 3 ^ 60 + 1 / 5 ^ 60",
         ] {
             assert_eq!(code_of(text), "PHOENIX-CAD-026", "{text}");
         }
-        assert_eq!(ev("2 ^ 126"), Ok(Value::Number(Rat::int(1i128 << 126))));
-        assert_eq!(ev("2 ^ -126").map(|v| v.kind_name()), Ok("number"));
+        assert_eq!(
+            ev("2 ^ 63 * 2 ^ 63"),
+            Ok(Value::Number(Rat::int(1i128 << 126)))
+        );
+        assert_eq!(ev("2 ^ -63").map(|v| v.kind_name()), Ok("number"));
         let err = ev("10 ^ 40").unwrap_err();
         assert!(err.to_string().contains("column 4"), "{err}");
     }
