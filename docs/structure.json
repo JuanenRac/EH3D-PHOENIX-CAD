@@ -116,6 +116,19 @@
           }
         },
         {
+          "name": "PROJECT_DOMAIN.md",
+          "desc": {
+            "en": "the recipe of the box in the project file",
+            "es": "la receta de la caja en el archivo de proyecto",
+            "de": "das Rezept des Gehäuses in der Projektdatei",
+            "fr": "la recette du boîtier dans le fichier de projet",
+            "it": "la ricetta del contenitore nel file di progetto",
+            "ja": "プロジェクトファイル内の筐体のレシピ",
+            "zh": "项目文件中的外壳配方",
+            "pt": "a receita da caixa no ficheiro de projeto"
+          }
+        },
+        {
           "desc": {
             "en": "the accepted decision records",
             "es": "los registros de decisiones aceptadas",

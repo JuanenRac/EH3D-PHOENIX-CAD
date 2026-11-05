@@ -11,14 +11,14 @@
   <img src="https://img.shields.io/badge/License-GPL%203.0--or--later-blue.svg" alt="GPL 3.0 or later">
   <img src="https://img.shields.io/badge/Stack-Markdown%20%2B%20Python-blue.svg" alt="Markdown and Python">
   <img src="https://img.shields.io/badge/Languages-8-00E5FF.svg" alt="Languages">
-  <img src="https://img.shields.io/badge/Tests-197-2EA043.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-259-2EA043.svg" alt="Tests">
   <img src="https://img.shields.io/badge/Version-0.0.2-0f6cbd.svg" alt="Version">
   <img src="https://img.shields.io/badge/Maturity-scaffolding-FFB020.svg" alt="Maturity">
 </p>
 
 ---
 
-**Vérification d'honnêteté - ce qui tourne aujourd'hui :** une bibliothèque Rust sans fenêtre avec un boîtier paramétrique : longueurs en nanomètres entiers avec leur propre plage, trous dans les faces (ronds, fraisés, lamés, rectangulaires et ovales), arêtes arrondies et chanfreinées, paramètres écrits comme formules avec unités sur des variables, des constantes et d'autres paramètres (fractions exactes, dépassement contrôlé), opérations de changement structurées qui signalent les conflits et laissent le modèle intact, un script de style OpenSCAD et un contrôle d'ajustement contre l'enveloppe d'une carte. Elle a 194 tests à elle et ils passent sur un ordinateur. Elle n'a été essayée que sur des modèles faits par ses propres tests ; rien n'a été dessiné ni exécuté sur une machine, et le fichier STEP qu'elle écrit n'a été vérifié que dans sa structure, et les dissipateurs, les esquisses et les assemblages sont seulement prévus.
+**Vérification d'honnêteté - ce qui tourne aujourd'hui :** une bibliothèque Rust sans fenêtre avec un boîtier paramétrique : longueurs en nanomètres entiers avec leur propre plage, trous dans les faces (ronds, fraisés, lamés, rectangulaires et ovales), arêtes arrondies et chanfreinées, paramètres écrits comme formules avec unités sur des variables, des constantes et d'autres paramètres (fractions exactes, dépassement contrôlé), opérations de changement structurées qui signalent les conflits et laissent le modèle intact, des colonnettes sous les trous de fixation d'une carte avec un couvercle vissé dessus, la recette du boîtier gardée dans le domaine mécanique du fichier de projet, un script de style OpenSCAD et un contrôle d'ajustement contre l'enveloppe d'une carte. Elle a 256 tests à elle et ils passent sur un ordinateur. Elle n'a été essayée que sur des modèles faits par ses propres tests ; rien n'a été dessiné ni exécuté sur une machine, et le fichier STEP qu'elle écrit n'a été vérifié que dans sa structure, et les dissipateurs, les esquisses et les assemblages sont seulement prévus.
 
 ---
 
@@ -30,7 +30,7 @@
 |---|---|
 | Version | `0.0.2` |
 | Maturité | Échafaudage |
-| Tests | 197 |
+| Tests | 259 |
 | Pile technique | Markdown, Python 3.10+ |
 | Sur du matériel réel | Pas encore exécuté sur du matériel |
 
@@ -45,9 +45,9 @@ Chaque ligne est une partie de ce dépôt et le feu dit où elle en est aujourd'
 | Domaine | État | Ce que cela veut dire ici |
 |---|---|---|
 | Contrôles du dépôt | 🟡 | Le contrôle du dépôt, celui des images et les 3 tests de la base tournent dans la CI et réussissent. |
-| Tests | 🟡 | Les 194 tests de la bibliothèque Rust et les 3 de la base passent sur un ordinateur. Ils n'utilisent que des modèles faits par les tests eux-mêmes. |
+| Tests | 🟡 | Les 256 tests de la bibliothèque Rust et les 3 de la base passent sur un ordinateur. Ils n'utilisent que des modèles faits par les tests eux-mêmes. |
 | Matériel réel | 🟠 | Non exécuté sur une machine ni une carte : rien ici n'a été essayé sur du matériel. |
-| Fonction prévue | 🟠 | En partie faite : un boîtier paramétrique avec trous, un script de style OpenSCAD et un contrôle d'ajustement existent, ainsi qu'un premier écrivain STEP vérifié seulement dans sa structure ; les dissipateurs, les esquisses et les assemblages ne sont pas commencés. |
+| Fonction prévue | 🟠 | En partie faite : un boîtier paramétrique avec trous, colonnettes et couvercle vissé, un script de style OpenSCAD, un contrôle d'ajustement et la recette du boîtier dans le fichier de projet existent, ainsi qu'un premier écrivain STEP vérifié seulement dans sa structure ; les dissipateurs, les esquisses et les assemblages ne sont pas commencés. |
 | Exigences | 🟠 | 4 exigences sur 6 sont au stade de prototype (le boîtier, le script, les opérations de changement et la plage mécanique), 2 sont seulement prévues et aucune n'est validée. |
 
 ## 🎯 Présentation
@@ -79,7 +79,7 @@ python -I -m unittest discover -s tools -p "test_*.py"
 
 ## 🧪 Tests
 
-La bibliothèque Rust a 194 tests (`cargo test`) et la base en a 3 (`python -I -m unittest discover -s tools -p "test_*.py"`) ; tous réussissent sur un ordinateur. La CI exécute le contrôle du dépôt, celui des images, les tests de la base et, pour le code Rust, la vérification du format, clippy avec les avertissements comme erreurs et les tests sous Linux et Windows.
+La bibliothèque Rust a 256 tests (`cargo test`) et la base en a 3 (`python -I -m unittest discover -s tools -p "test_*.py"`) ; tous réussissent sur un ordinateur. La CI exécute le contrôle du dépôt, celui des images, les tests de la base et, pour le code Rust, la vérification du format, clippy avec les avertissements comme erreurs et les tests sous Linux et Windows.
 
 ## 🏗️ Compilation et publication
 
@@ -104,6 +104,7 @@ EH3D-PHOENIX-CAD/
 │   ├── NOT_YET.md RULES.md                      idées pour plus tard et règles d'écriture du code
 │   ├── ERROR_CODES.md                           les codes de diagnostic PHOENIX-<ZONE>-<NNN>
 │   ├── EXPRESSIONS.md                           le langage des formules des paramètres
+│   ├── PROJECT_DOMAIN.md                        la recette du boîtier dans le fichier de projet
 │   └── adr/                                     les décisions acceptées
 ├── Cargo.toml Cargo.lock                        l'espace de travail Rust et ses dépendances verrouillées
 ├── crates/                                      le modèle mécanique : boîtier, opérations, script, contrôle d'ajustement

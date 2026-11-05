@@ -37,3 +37,15 @@ Importing, converting, simulating or validating a design never starts motion, ev
 State: **accepted**.
 
 The real projects of the author are never committed, pasted into issues or sent to a service. Tests use synthetic cases or minimal anonymised reproducers that the owner approved. Scripts that run over a private corpus use redacted mode, which reports only codes, counts, levels and hashes.
+
+## The mechanical domain keeps the recipe
+
+State: **accepted**.
+
+The mechanical domain of the shared project keeps the recipe of the box (parameters, expressions, ordered steps, tip and the interface of the board), not its final shape; the final state is derived from the recipe every time. The text, its version and its limits are in `PROJECT_DOMAIN.md` and the record is `adr/0011-mechanical-domain-recipe.md`.
+
+## The lid is fixed with screws into posts
+
+State: **accepted**.
+
+Posts rise from the floor under the mounting holes of the board, and the lid is screwed into them (or at the four corners when the box has no posts). Every size comes from the table of screws and the table of posts of the settings file, and the gap of the centring lip is the clearance of the printer profile.

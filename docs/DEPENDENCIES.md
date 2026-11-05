@@ -4,7 +4,7 @@ One row per relation with another repository. The kind is conceptual, compile-ti
 
 | From | To | Kind | Contract | Contract state | Minimum version | Tested version | Compatibility test | Change owner | What it blocks | Migration |
 |---|---|---|---|---|---|---|---|---|---|---|
-| EH3D-PHOENIX-CAD | EH3D-PHOENIX-PCB | compile + runtime | project format (mechanical domain) | drafted | not set | not set | to be written with the first code | the owner of the contract | all of it | to be defined |
+| EH3D-PHOENIX-CAD | EH3D-PHOENIX-PCB | compile + runtime | project format (mechanical domain, `docs/PROJECT_DOMAIN.md`) | accepted (record 0011); the board tool has not implemented it | domain version 1 | domain version 1 (tests of this repository only) | the golden texts and the round trips of `mechanical.rs`; none yet on the side of the board tool | the owner of the contract | the board tool reading the interface of the board and writing steps | from `mechanical-parameters`, read and replaced the first time the new domain is written |
 | EH3D-PHOENIX-CAD | EH3D-COMMON | compile | object identity (`ObjectId`, UUID v7) of `eh3d-container`; later the project container and the diagnostic crate | accepted for the identity, drafted for the rest | `eh3d-container` 0.0.1 | the tag named in `SIBLING_REFS` of the CI | the ids of the holes are made and read back in the tests of `eh3d-phoenix-cad` | the owner of the contract | the identity of every mechanical object; reading and writing projects | none yet |
 | EH3D-PHOENIX-CAD | EH3D-THERMAL-LAB | conceptual | geometry for thermal coupling | not written | not set | not set | to be written with the first code | the owner of the contract | nothing here is blocked by it; it is blocked by this | to be defined |
 

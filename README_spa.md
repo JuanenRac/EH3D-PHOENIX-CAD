@@ -11,14 +11,14 @@
   <img src="https://img.shields.io/badge/License-GPL%203.0--or--later-blue.svg" alt="GPL 3.0 or later">
   <img src="https://img.shields.io/badge/Stack-Markdown%20%2B%20Python-blue.svg" alt="Markdown and Python">
   <img src="https://img.shields.io/badge/Languages-8-00E5FF.svg" alt="Languages">
-  <img src="https://img.shields.io/badge/Tests-197-2EA043.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-259-2EA043.svg" alt="Tests">
   <img src="https://img.shields.io/badge/Version-0.0.2-0f6cbd.svg" alt="Version">
   <img src="https://img.shields.io/badge/Maturity-scaffolding-FFB020.svg" alt="Maturity">
 </p>
 
 ---
 
-**Comprobación de honestidad - lo que se ejecuta hoy:** una biblioteca de Rust sin ventana con una caja paramétrica: longitudes en nanómetros enteros con su propio rango, agujeros en las caras (redondos, avellanados, cajeados, rectangulares y ovalados), aristas redondeadas y achaflanadas, parámetros que son fórmulas con unidades sobre variables, constantes y otros parámetros (fracciones exactas, desbordamiento comprobado), operaciones de cambio estructuradas que informan de los conflictos y dejan el modelo intacto, un script al estilo OpenSCAD y una comprobación de encaje contra la envolvente de una placa. Tiene 194 pruebas propias y pasan en un ordenador. Solo se ha probado con modelos hechos por sus propias pruebas; no se ha dibujado nada ni ejecutado en una máquina, y el fichero STEP que escribe solo se ha comprobado en su estructura, y los disipadores, los bocetos y los ensamblajes solo están planificados.
+**Comprobación de honestidad - lo que se ejecuta hoy:** una biblioteca de Rust sin ventana con una caja paramétrica: longitudes en nanómetros enteros con su propio rango, agujeros en las caras (redondos, avellanados, cajeados, rectangulares y ovalados), aristas redondeadas y achaflanadas, parámetros que son fórmulas con unidades sobre variables, constantes y otros parámetros (fracciones exactas, desbordamiento comprobado), operaciones de cambio estructuradas que informan de los conflictos y dejan el modelo intacto, postes bajo los agujeros de montaje de una placa con una tapa atornillada a ellos, la receta de la caja guardada en el dominio mecánico del archivo de proyecto, un script al estilo OpenSCAD y una comprobación de encaje contra la envolvente de una placa. Tiene 256 pruebas propias y pasan en un ordenador. Solo se ha probado con modelos hechos por sus propias pruebas; no se ha dibujado nada ni ejecutado en una máquina, y el fichero STEP que escribe solo se ha comprobado en su estructura, y los disipadores, los bocetos y los ensamblajes solo están planificados.
 
 ---
 
@@ -30,7 +30,7 @@
 |---|---|
 | Versión | `0.0.2` |
 | Madurez | Andamiaje |
-| Pruebas | 197 |
+| Pruebas | 259 |
 | Pila tecnológica | Markdown, Python 3.10+ |
 | En hardware real | Aún no se ha ejecutado en hardware |
 
@@ -45,9 +45,9 @@ Cada línea es una parte de este repositorio y la luz dice hasta dónde llega ho
 | Área | Estado | Qué significa aquí |
 |---|---|---|
 | Comprobaciones del repositorio | 🟡 | La comprobación del repositorio, la de las imágenes y las 3 pruebas de la base se ejecutan en el CI y pasan. |
-| Pruebas | 🟡 | Las 194 pruebas de la biblioteca de Rust y las 3 de la base pasan en un ordenador. Solo usan modelos hechos por las propias pruebas. |
+| Pruebas | 🟡 | Las 256 pruebas de la biblioteca de Rust y las 3 de la base pasan en un ordenador. Solo usan modelos hechos por las propias pruebas. |
 | Hardware real | 🟠 | No se ha ejecutado en ninguna máquina ni placa: nada de aquí se ha probado en hardware. |
-| Función planificada | 🟠 | Hecho en parte: existen una caja paramétrica con agujeros, un script al estilo OpenSCAD y una comprobación de encaje, y hay un primer escritor de STEP comprobado solo en su estructura; los disipadores, los bocetos y los ensamblajes no se han empezado. |
+| Función planificada | 🟠 | Hecho en parte: existen una caja paramétrica con agujeros, postes y una tapa atornillada, un script al estilo OpenSCAD, una comprobación de encaje y la receta de la caja en el archivo de proyecto, y hay un primer escritor de STEP comprobado solo en su estructura; los disipadores, los bocetos y los ensamblajes no se han empezado. |
 | Requisitos | 🟠 | 4 de 6 requisitos están en prototipo (la caja, el script, las operaciones de cambio y el rango mecánico), 2 solo están planificados y ninguno está validado. |
 
 ## 🎯 Resumen
@@ -79,7 +79,7 @@ python -I -m unittest discover -s tools -p "test_*.py"
 
 ## 🧪 Pruebas
 
-La biblioteca de Rust tiene 194 pruebas (`cargo test`) y la base tiene 3 (`python -I -m unittest discover -s tools -p "test_*.py"`); todas pasan en un ordenador. El CI ejecuta la comprobación del repositorio, la de las imágenes, las pruebas de la base y, para el código de Rust, la comprobación de formato, clippy con advertencias como errores y las pruebas en Linux y Windows.
+La biblioteca de Rust tiene 256 pruebas (`cargo test`) y la base tiene 3 (`python -I -m unittest discover -s tools -p "test_*.py"`); todas pasan en un ordenador. El CI ejecuta la comprobación del repositorio, la de las imágenes, las pruebas de la base y, para el código de Rust, la comprobación de formato, clippy con advertencias como errores y las pruebas en Linux y Windows.
 
 ## 🏗️ Compilación y publicación
 
@@ -104,6 +104,7 @@ EH3D-PHOENIX-CAD/
 │   ├── NOT_YET.md RULES.md                      ideas para más adelante y reglas para escribir código
 │   ├── ERROR_CODES.md                           los códigos de diagnóstico PHOENIX-<ÁREA>-<NNN>
 │   ├── EXPRESSIONS.md                           el lenguaje de las fórmulas de los parámetros
+│   ├── PROJECT_DOMAIN.md                        la receta de la caja en el archivo de proyecto
 │   └── adr/                                     los registros de decisiones aceptadas
 ├── Cargo.toml Cargo.lock                        el espacio de trabajo de Rust y sus dependencias fijadas
 ├── crates/                                      el modelo mecánico: caja, operaciones, script, comprobación de encaje
