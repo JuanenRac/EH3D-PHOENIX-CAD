@@ -2009,7 +2009,7 @@ mod tests {
         assert!(long.len() > lim.max_length as usize);
         assert_eq!(code_of(&long), "PHOENIX-CAD-025");
         // as long as the limit is allowed
-        let exact = "1".repeat(1) + &" ".repeat(lim.max_length as usize - 1);
+        let exact = String::from("1") + &" ".repeat(lim.max_length as usize - 1);
         assert_eq!(exact.len(), lim.max_length as usize);
         assert!(parse(&exact, &lim).is_ok());
         let more = format!("{exact} ");
