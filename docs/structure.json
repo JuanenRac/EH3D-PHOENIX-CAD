@@ -129,6 +129,19 @@
           }
         },
         {
+          "name": "SKETCH.md",
+          "desc": {
+            "en": "the 2D sketch: constraints, solver and file",
+            "es": "el croquis 2D: restricciones, solucionador y archivo",
+            "de": "die 2D-Skizze: Bedingungen, Löser und Datei",
+            "fr": "l'esquisse 2D : contraintes, solveur et fichier",
+            "it": "lo schizzo 2D: vincoli, risolutore e file",
+            "ja": "2D スケッチ：拘束、ソルバー、ファイル",
+            "zh": "2D 草图：约束、求解器和文件",
+            "pt": "o esboço 2D: restrições, solucionador e ficheiro"
+          }
+        },
+        {
           "desc": {
             "en": "the accepted decision records",
             "es": "los registros de decisiones aceptadas",
