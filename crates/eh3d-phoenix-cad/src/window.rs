@@ -8,7 +8,10 @@
 
 use crate::body::{Built, Step, StepState};
 use crate::config::Settings;
-use crate::enclosure::{Edging, Enclosure, EnclosureParams, Face, Hole, Operation, Treatment};
+use crate::enclosure::{
+    Edging, Enclosure, EnclosureParams, Face, Hole, HoleStyle, Id, Operation, Treatment,
+};
+use crate::expr::{parse, Constants, Names, Value};
 use crate::fit::{check_fit, Envelope, FitReport};
 use crate::history::History;
 use crate::lang::{fill, Lang, Msg};
@@ -52,6 +55,48 @@ pub enum Selection {
     Screw(usize),
     /// The envelope that is checked against the box.
     Fit,
+    /// The sheet of variables.
+    Sheet,
+}
+
+/// A step that the person can add from the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewStep {
+    /// A hole in a face.
+    Hole,
+    /// A post on the floor.
+    Post,
+    /// The treatment of the edges.
+    Edging,
+}
+
+/// A row of the sheet of variables.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SheetRow {
+    /// The name of the variable.
+    pub name: String,
+    /// The value as text, in the unit of the settings.
+    pub text: String,
+    /// The value that was calculated.
+    pub value: Length,
+    /// The parameters of the box that depend on the variable, directly or through other
+    /// parameters, in the order of the fields.
+    pub used_by: Vec<Param>,
+}
+
+/// The names an expression of a variable sees: the other variables, then the constants.
+struct VariableNames<'a> {
+    vars: &'a Variables,
+    constants: &'a Constants,
+}
+
+impl Names for VariableNames<'_> {
+    fn lookup(&self, name: &str) -> Option<Value> {
+        self.vars
+            .get(name)
+            .map(Value::from_length)
+            .or_else(|| self.constants.get(name))
+    }
 }
 
 impl Selection {
@@ -63,7 +108,11 @@ impl Selection {
             | Selection::Edging(i)
             | Selection::Lid(i)
             | Selection::Other(i) => Some(i),
-            Selection::Nothing | Selection::Body | Selection::Screw(_) | Selection::Fit => None,
+            Selection::Nothing
+            | Selection::Body
+            | Selection::Screw(_)
+            | Selection::Fit
+            | Selection::Sheet => None,
         }
     }
 }
@@ -611,6 +660,14 @@ impl Window {
                 mark: Mark::Normal,
             }],
         }];
+        groups.push(TreeGroup {
+            title: Msg::GroupVariables,
+            items: vec![TreeItem {
+                selection: Selection::Sheet,
+                label: format!("{} ({})", Msg::SheetTitle.tr(lang), self.mech.vars.len()),
+                mark: Mark::Normal,
+            }],
+        });
         for (title, items) in [
             (Msg::GroupHoles, holes),
             (Msg::GroupPosts, posts),
@@ -643,7 +700,7 @@ impl Window {
             | Selection::Lid(i)
             | Selection::Other(i) => i < self.mech.steps.len(),
             Selection::Screw(k) => k < self.built.enclosure.lid_holes().len(),
-            Selection::Nothing | Selection::Body | Selection::Fit => true,
+            Selection::Nothing | Selection::Body | Selection::Fit | Selection::Sheet => true,
         };
         self.selection = if valid { selection } else { Selection::Body };
         self.refresh_fields();
@@ -1095,6 +1152,369 @@ impl Window {
     }
 
     // -----------------------------------------------------------------------------------------
+    // The sheet of variables
+    // -----------------------------------------------------------------------------------------
+
+    /// The rows of the sheet of variables, in the order of the names.
+    pub fn sheet(&self) -> Vec<SheetRow> {
+        self.mech
+            .vars
+            .names()
+            .into_iter()
+            .filter_map(|name| {
+                let value = self.mech.vars.get(name)?;
+                Some(SheetRow {
+                    name: name.to_string(),
+                    text: self.unit_text(value),
+                    value,
+                    used_by: self.dependents_of(name),
+                })
+            })
+            .collect()
+    }
+
+    /// The parameters whose value depends on a variable: the ones that name it and, going on, the
+    /// ones whose formula names one of those.
+    fn dependents_of(&self, variable: &str) -> Vec<Param> {
+        let shadowed = Param::from_name(variable).is_some();
+        let mut found: Vec<Param> = Vec::new();
+        loop {
+            let before = found.len();
+            for (param, definition) in self.mech.model.entries() {
+                if found.contains(&param) {
+                    continue;
+                }
+                let uses = match definition {
+                    Parameter::Fixed(_) => false,
+                    Parameter::Variable(name) => name == variable,
+                    Parameter::Expr(expr) => expr.names().iter().any(|(name, _)| {
+                        (name == variable && !shadowed)
+                            || Param::from_name(name).is_some_and(|p| found.contains(&p))
+                    }),
+                };
+                if uses {
+                    found.push(param);
+                }
+            }
+            if found.len() == before {
+                break;
+            }
+        }
+        found.sort();
+        found
+    }
+
+    /// The words that name the parameters a row is used by, or that it is not used.
+    pub fn used_by_text(&self, row: &SheetRow) -> String {
+        if row.used_by.is_empty() {
+            return Msg::VariableUnused.tr(self.lang).to_string();
+        }
+        let labels: Vec<&str> = row
+            .used_by
+            .iter()
+            .map(|p| param_msg(*p).tr(self.lang))
+            .collect();
+        labels.join(", ")
+    }
+
+    /// What a text typed for a variable calculates to: a length with or without its unit, or a
+    /// formula over the variables and the constants of the settings.
+    pub fn variable_value(&self, text: &str) -> Result<Length, CadError> {
+        let t = text.trim();
+        if let Ok(length) = self.parse_text(t) {
+            return Ok(length);
+        }
+        let formula = if t.chars().any(char::is_alphabetic) {
+            t.to_string()
+        } else {
+            format!("({t}) * 1 {}", self.settings.unit.suffix())
+        };
+        let names = VariableNames {
+            vars: &self.mech.vars,
+            constants: &self.settings.constants,
+        };
+        parse(&formula, &self.settings.expr)?.eval_length(&names, &self.settings.expr)
+    }
+
+    /// Gives a variable a value or a formula, creating the variable when there is none. The
+    /// parameters that use it are calculated again; when the model does not accept the new value
+    /// nothing changes.
+    pub fn set_variable(&mut self, name: &str, text: &str) {
+        if self.read_only_refusal() {
+            return;
+        }
+        let result = self.variable_change(name.trim(), text, false);
+        self.finish(result);
+    }
+
+    /// Adds a variable that does not exist yet.
+    pub fn add_variable(&mut self, name: &str, text: &str) {
+        if self.read_only_refusal() {
+            return;
+        }
+        let result = self.variable_change(name.trim(), text, true);
+        self.finish(result);
+    }
+
+    fn variable_change(&mut self, name: &str, text: &str, new: bool) -> Result<(), CadError> {
+        if new && self.mech.vars.get(name).is_some() {
+            return Err(CadError::Duplicate(name.to_string()));
+        }
+        let value = self.variable_value(text)?;
+        let mut next = self.mech.clone();
+        next.vars.set(name, value)?;
+        let shown = vec![name.to_string(), self.unit_text(value)];
+        let title = fill(Msg::VariableChanged.tr(self.lang), &[&shown[0], &shown[1]]);
+        self.change(
+            &title,
+            Status::Done(Msg::VariableChanged, shown),
+            next,
+            None,
+        )
+    }
+
+    /// Takes a variable away. A variable that a parameter still uses is refused, and the box
+    /// stays as it was.
+    pub fn remove_variable(&mut self, name: &str) {
+        if self.read_only_refusal() {
+            return;
+        }
+        let result = self.variable_removal(name);
+        self.finish(result);
+    }
+
+    fn variable_removal(&mut self, name: &str) -> Result<(), CadError> {
+        let mut next = self.mech.clone();
+        next.vars.remove(name)?;
+        if !self.dependents_of(name).is_empty() {
+            return Err(CadError::InUse(name.to_string()));
+        }
+        let title = fill(Msg::VariableRemoved.tr(self.lang), &[name]);
+        let done = Status::Done(Msg::VariableRemoved, vec![name.to_string()]);
+        self.change(&title, done, next, None)
+    }
+
+    /// Says in the status bar that the project is read-only and answers true when it is.
+    fn read_only_refusal(&mut self) -> bool {
+        if self.read_only {
+            self.status = Status::Problem(Msg::ReadOnlyBadge, Vec::new());
+        }
+        self.read_only
+    }
+
+    /// Tells a refusal in the status bar and brings the fields up to date.
+    fn finish(&mut self, result: Result<(), CadError>) {
+        if let Err(e) = result {
+            self.status = Status::Problem(Msg::Refused, vec![error_text(&e, self.lang)]);
+        }
+        self.refresh_fields();
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Adding and removing steps
+    // -----------------------------------------------------------------------------------------
+
+    /// Every id the recipe uses, for a step, a hole of the board or a post made for one.
+    fn used_ids(&self) -> Vec<Id> {
+        let mut ids = Vec::new();
+        for step in &self.mech.steps {
+            match &step.op {
+                Operation::AddHole { id, .. }
+                | Operation::ReplaceHole { id, .. }
+                | Operation::RemoveHole { id }
+                | Operation::RemovePost { id } => ids.push(*id),
+                Operation::AddPost { id, post } | Operation::ReplacePost { id, post } => {
+                    ids.push(*id);
+                    ids.extend(post.board_hole);
+                }
+                _ => {}
+            }
+        }
+        if let Some(board) = &self.mech.board {
+            ids.extend(board.holes.iter().map(|h| h.id));
+        }
+        ids
+    }
+
+    /// An id that nothing in the recipe uses, the same for the same recipe.
+    fn fresh_id(&self) -> Result<Id, CadError> {
+        let used = self.used_ids();
+        let start = 0x1000 + self.mech.steps.len() as u64;
+        for n in start..start + 0x1000 {
+            let id = Id::from_parts(1_700_000_000_000, (n & 0x0fff) as u16, n)
+                .map_err(|_| CadError::ValueOutOfRange("id"))?;
+            if !used.contains(&id) {
+                return Ok(id);
+            }
+        }
+        Err(CadError::ValueOutOfRange("id"))
+    }
+
+    /// The operation of a new step and its name, for the `attempt`-th position tried.
+    fn new_operation(&self, kind: NewStep, attempt: u32) -> Result<(Operation, String), CadError> {
+        let d = &self.ui.new_step;
+        let moved = d
+            .pitch
+            .get()
+            .checked_mul(i64::from(attempt))
+            .ok_or(CadError::Overflow("pitch"))?;
+        let shift = Length::new(moved)?;
+        match kind {
+            NewStep::Hole => {
+                let count = self
+                    .mech
+                    .steps
+                    .iter()
+                    .filter(|s| matches!(s.op, Operation::AddHole { .. }))
+                    .count();
+                let name = fill(Msg::NameHole.tr(self.lang), &[&(count + 1).to_string()]);
+                let hole = Hole {
+                    name: name.clone(),
+                    face: d.hole_face,
+                    u: d.hole_u.checked_add(shift)?,
+                    v: d.hole_v,
+                    diameter: d.hole_diameter,
+                    style: HoleStyle::Plain,
+                };
+                Ok((
+                    Operation::AddHole {
+                        id: self.fresh_id()?,
+                        hole,
+                    },
+                    name,
+                ))
+            }
+            NewStep::Post => {
+                let count = self
+                    .mech
+                    .steps
+                    .iter()
+                    .filter(|s| matches!(s.op, Operation::AddPost { .. }))
+                    .count();
+                let name = fill(Msg::NamePost.tr(self.lang), &[&(count + 1).to_string()]);
+                let post = Post {
+                    name: name.clone(),
+                    board_hole: None,
+                    x: d.post_x.checked_add(shift)?,
+                    y: d.post_y,
+                    outer_diameter: d.post_outer,
+                    height: d.post_height,
+                    kind: d.post_kind,
+                    bore_diameter: d.post_bore_diameter,
+                    bore_depth: d.post_bore_depth,
+                    base: None,
+                };
+                Ok((
+                    Operation::AddPost {
+                        id: self.fresh_id()?,
+                        post,
+                    },
+                    name,
+                ))
+            }
+            NewStep::Edging => {
+                if self
+                    .mech
+                    .steps
+                    .iter()
+                    .any(|s| matches!(s.op, Operation::SetEdging(_)))
+                {
+                    return Err(CadError::Duplicate("edges".to_string()));
+                }
+                let edging = Edging {
+                    vertical: Treatment::Round(self.ui.edge_size),
+                    top: Treatment::Sharp,
+                    bottom: Treatment::Sharp,
+                };
+                Ok((
+                    Operation::SetEdging(edging),
+                    Msg::NameEdging.tr(self.lang).to_string(),
+                ))
+            }
+        }
+    }
+
+    /// Adds a step at the tip of the history and selects it. A hole or a post starts where the
+    /// settings say and moves along until the model accepts it; when no position is accepted
+    /// nothing changes. The addition is one entry of the history.
+    pub fn add_step(&mut self, kind: NewStep) {
+        if self.read_only_refusal() {
+            return;
+        }
+        let result = self.step_addition(kind);
+        self.finish(result);
+    }
+
+    fn step_addition(&mut self, kind: NewStep) -> Result<(), CadError> {
+        let tries = match kind {
+            NewStep::Edging => 1,
+            NewStep::Hole | NewStep::Post => self.ui.new_step.tries,
+        };
+        let mut last = refusal();
+        for attempt in 0..tries {
+            let (op, label) = self.new_operation(kind, attempt)?;
+            let mut next = self.mech.clone();
+            let index = next.tip.min(next.steps.len());
+            next.steps.insert(
+                index,
+                Step {
+                    name: label.clone(),
+                    op,
+                    suppressed: false,
+                },
+            );
+            next.tip = index + 1;
+            let title = fill(Msg::StepAdded.tr(self.lang), &[&label]);
+            let done = Status::Done(Msg::StepAdded, vec![label]);
+            match self.change(&title, done, next, Some(index)) {
+                Ok(()) => {
+                    if let Some(step) = self.mech.steps.get(index) {
+                        self.selection = the_selection_of(index, step);
+                    }
+                    return Ok(());
+                }
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
+    }
+
+    /// Removes the selected step. A step that others need (a hole that a later step replaces, for
+    /// one) is refused and the recipe stays as it was.
+    pub fn remove_step(&mut self) {
+        if self.read_only_refusal() {
+            return;
+        }
+        let result = self.step_removal();
+        self.finish(result);
+    }
+
+    fn step_removal(&mut self) -> Result<(), CadError> {
+        let index = self.selection.step().ok_or_else(refusal)?;
+        let step = self.mech.steps.get(index).ok_or_else(refusal)?;
+        let label = step_label(step);
+        let mut next = self.mech.clone();
+        next.steps.remove(index);
+        if index < next.tip {
+            next.tip -= 1;
+        }
+        let built = next.build(&self.settings.constants, &self.settings.expr)?;
+        let failed = built
+            .states
+            .iter()
+            .filter(|s| matches!(s, StepState::Failed(_)))
+            .count();
+        if failed > self.info.failed {
+            return Err(CadError::InUse(label));
+        }
+        let title = fill(Msg::StepRemoved.tr(self.lang), &[&label]);
+        let done = Status::Done(Msg::StepRemoved, vec![label]);
+        self.change(&title, done, next, None)?;
+        self.selection = Selection::Body;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------------------------
     // History
     // -----------------------------------------------------------------------------------------
 
@@ -1494,6 +1914,7 @@ mod tests {
             sizes,
             [
                 (Msg::GroupBox, 1),
+                (Msg::GroupVariables, 1),
                 (Msg::GroupHoles, 2),
                 (Msg::GroupPosts, 4),
                 (Msg::GroupEdges, 1),
@@ -1646,7 +2067,7 @@ mod tests {
         w.toggle_suppressed();
         assert!(w.selected_suppressed());
         assert_eq!(w.states()[1], StepState::Suppressed);
-        assert_eq!(w.tree()[1].items[1].mark, Mark::Suppressed);
+        assert_eq!(w.tree()[2].items[1].mark, Mark::Suppressed);
         assert_eq!(w.enclosure().holes().len(), 1);
         w.undo();
         assert_eq!(w.enclosure().holes().len(), 2);
@@ -1868,5 +2289,354 @@ mod tests {
             error_text(&CadError::ExprOverflow { pos: 3 }, Lang::En),
             "PHOENIX-CAD-026 Expression arithmetic overflows"
         );
+    }
+
+    /// The recipe of a window put straight into it, built again (a test sets up what the
+    /// window never makes by itself).
+    fn rebuild(w: &mut Window) {
+        w.built = w
+            .mech
+            .build(&w.settings.constants, &w.settings.expr)
+            .unwrap();
+        w.refresh();
+    }
+
+    fn hole_of(w: &Window, index: usize) -> Hole {
+        match &w.mech.steps[index].op {
+            Operation::AddHole { hole, .. } => hole.clone(),
+            other => panic!("not a hole: {other:?}"),
+        }
+    }
+
+    fn post_of(w: &Window, index: usize) -> Post {
+        match &w.mech.steps[index].op {
+            Operation::AddPost { post, .. } => post.clone(),
+            other => panic!("not a post: {other:?}"),
+        }
+    }
+
+    fn problem(w: &Window) -> bool {
+        w.status.is_problem()
+    }
+
+    #[test]
+    fn the_sheet_lists_the_variables_and_the_parameters_that_use_them() {
+        let w = example();
+        let rows = w.sheet();
+        let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["length", "width"]);
+        assert_eq!(rows[0].text, "100.000 mm");
+        assert_eq!(rows[0].value, mm_len(100));
+        assert_eq!(rows[0].used_by, [Param::InnerLength]);
+        assert_eq!(rows[1].used_by, [Param::InnerWidth]);
+        assert_eq!(w.used_by_text(&rows[0]), "Inner length");
+        let groups = w.tree();
+        assert_eq!(groups[1].title, Msg::GroupVariables);
+        assert_eq!(groups[1].items[0].selection, Selection::Sheet);
+        assert_eq!(groups[1].items[0].label, "Sheet of variables (2)");
+    }
+
+    #[test]
+    fn the_sheet_is_selected_without_fields_or_a_step() {
+        let mut w = example();
+        w.select(Selection::Sheet);
+        assert_eq!(w.selection, Selection::Sheet);
+        assert_eq!(w.selection.step(), None);
+        assert!(w.fields.is_empty());
+    }
+
+    #[test]
+    fn a_variable_that_is_changed_recalculates_what_depends_on_it() {
+        let mut w = example();
+        w.set_variable("length", "120 mm");
+        // the inner length 120 and two walls of 2 mm
+        assert_eq!(w.info.inner[0], mm_len(120));
+        assert_eq!(w.info.outer[0], mm_len(124));
+        assert_eq!(
+            w.status,
+            Status::Done(
+                Msg::VariableChanged,
+                vec!["length".to_string(), "120.000 mm".to_string()]
+            )
+        );
+        assert_eq!(w.sheet()[0].value, mm_len(120));
+        assert!(w.dirty && w.can_undo());
+        w.undo();
+        assert_eq!(w.info.inner[0], mm_len(100));
+        assert_eq!(w.sheet()[0].value, mm_len(100));
+        assert_eq!(
+            w.status,
+            Status::Done(
+                Msg::Undone,
+                vec!["Variable length = 120.000 mm".to_string()]
+            )
+        );
+        w.redo();
+        assert_eq!(w.info.inner[0], mm_len(120));
+    }
+
+    #[test]
+    fn a_variable_can_be_a_formula_over_the_others_and_over_numbers() {
+        let mut w = example();
+        // 60 * 2 + 10 = 130
+        w.set_variable("length", "width * 2 + 10 mm");
+        assert_eq!(w.sheet()[0].value, mm_len(130));
+        assert_eq!(w.info.inner[0], mm_len(130));
+        // a formula of numbers only is in the unit of the settings: 100 / 2 + 70 = 120
+        w.set_variable("length", "100 / 2 + 70");
+        assert_eq!(w.sheet()[0].value, mm_len(120));
+        assert_eq!(w.sheet()[0].text, "120.000 mm");
+        // a value in another unit: 5 in = 127 mm
+        w.set_variable("length", "5 in");
+        assert_eq!(w.sheet()[0].value, mm_len(127));
+    }
+
+    #[test]
+    fn a_value_the_model_refuses_leaves_the_variable_as_it_was() {
+        let mut w = example();
+        let before = w.mech.clone();
+        for text in ["0 mm", "nothing + 1 mm", "width +", "2 +* 3"] {
+            w.set_variable("length", text);
+            assert!(problem(&w), "{text}");
+            assert_eq!(w.mech, before, "{text}");
+        }
+        assert!(!w.dirty && !w.can_undo());
+        // a name that is not a word
+        w.add_variable("2fast", "5 mm");
+        assert!(problem(&w));
+        assert_eq!(w.mech, before);
+    }
+
+    #[test]
+    fn a_variable_is_added_used_and_removed_only_when_nothing_needs_it() {
+        let mut w = example();
+        w.add_variable("gap", "5 mm");
+        let names: Vec<String> = w.sheet().into_iter().map(|r| r.name).collect();
+        assert_eq!(names, ["gap", "length", "width"]);
+        assert_eq!(w.used_by_text(&w.sheet()[0]), "not used");
+        // adding it again is refused and the value stays
+        w.add_variable("gap", "9 mm");
+        assert!(problem(&w));
+        assert_eq!(w.sheet()[0].value, mm_len(5));
+        // the wall takes its value from the variable, the lid from the wall
+        w.select(Selection::Body);
+        set(&mut w, Key::Param(Param::Wall), "gap");
+        set(&mut w, Key::Param(Param::Lid), "wall + 1 mm");
+        assert_eq!(w.info.outer, [mm_len(110), mm_len(70), mm_len(30 + 2 + 6)]);
+        assert_eq!(w.sheet()[0].used_by, [Param::Wall, Param::Lid]);
+        w.remove_variable("gap");
+        assert!(problem(&w));
+        assert_eq!(w.sheet()[0].name, "gap");
+        // changing the variable moves the wall and the lid: 3 and 4 mm (the floor stays 2 mm)
+        w.set_variable("gap", "3 mm");
+        assert_eq!(w.info.outer, [mm_len(106), mm_len(66), mm_len(30 + 2 + 4)]);
+        // a variable nothing uses goes, and comes back with undo
+        w.add_variable("spare", "1 mm");
+        assert_eq!(w.sheet().len(), 4);
+        w.remove_variable("spare");
+        assert_eq!(w.sheet().len(), 3);
+        w.undo();
+        assert_eq!(w.sheet().len(), 4);
+        // one that does not exist is refused
+        w.remove_variable("ghost");
+        assert!(problem(&w));
+    }
+
+    #[test]
+    fn a_hole_is_added_where_the_settings_say_and_moves_along_when_taken() {
+        let mut w = fresh();
+        w.add_step(NewStep::Hole);
+        assert_eq!(w.mech.steps.len(), 1);
+        assert_eq!(w.mech.tip, 1);
+        assert_eq!(w.selection, Selection::Hole(0));
+        assert_eq!(
+            w.status,
+            Status::Done(Msg::StepAdded, vec!["Hole 1".to_string()])
+        );
+        let first = hole_of(&w, 0);
+        assert_eq!(first.name, "Hole 1");
+        assert_eq!(first.face, Face::Front);
+        assert_eq!(
+            (first.u, first.v, first.diameter),
+            (mm_len(14), mm_len(15), mm_len(6))
+        );
+        assert_eq!(w.fields.len(), 5);
+        assert!(w.dirty && w.can_undo());
+        // the same place is taken: the next try is one pitch (12 mm) along
+        w.add_step(NewStep::Hole);
+        assert_eq!(w.mech.steps.len(), 2);
+        assert_eq!(hole_of(&w, 1).u, mm_len(26));
+        assert_eq!(w.selection, Selection::Hole(1));
+        assert_eq!(w.enclosure().holes().len(), 2);
+        let ids: Vec<Id> = w
+            .mech
+            .steps
+            .iter()
+            .filter_map(|s| match &s.op {
+                Operation::AddHole { id, .. } => Some(*id),
+                _ => None,
+            })
+            .collect();
+        assert_ne!(ids[0], ids[1]);
+        // one undo takes back one addition, and redo brings it again
+        w.undo();
+        assert_eq!(w.mech.steps.len(), 1);
+        assert_eq!(w.selection, Selection::Body);
+        assert_eq!(w.enclosure().holes().len(), 1);
+        w.redo();
+        assert_eq!(w.mech.steps.len(), 2);
+        assert_eq!(w.enclosure().holes().len(), 2);
+    }
+
+    #[test]
+    fn a_post_is_added_and_the_next_one_moves_along() {
+        let mut w = fresh();
+        w.add_step(NewStep::Post);
+        let first = post_of(&w, 0);
+        assert_eq!(first.name, "Post 1");
+        assert_eq!((first.x, first.y), (mm_len(10), mm_len(10)));
+        assert_eq!(first.board_hole, None);
+        assert_eq!(w.selection, Selection::Post(0));
+        w.add_step(NewStep::Post);
+        assert_eq!(post_of(&w, 1).x, mm_len(22));
+        assert_eq!(w.enclosure().posts().len(), 2);
+        assert_eq!(w.tree()[2].title, Msg::GroupPosts);
+        assert_eq!(w.tree()[2].items.len(), 2);
+    }
+
+    #[test]
+    fn the_edge_treatment_is_added_once() {
+        let mut w = fresh();
+        w.add_step(NewStep::Edging);
+        assert_eq!(w.selection, Selection::Edging(0));
+        assert_eq!(
+            w.status,
+            Status::Done(Msg::StepAdded, vec!["Edge treatment".to_string()])
+        );
+        assert_eq!(w.enclosure().edging().vertical, Treatment::Round(mm_len(1)));
+        assert!(w.enclosure().edging().top.is_sharp());
+        w.add_step(NewStep::Edging);
+        assert!(problem(&w));
+        assert_eq!(w.mech.steps.len(), 1);
+    }
+
+    #[test]
+    fn a_step_added_behind_the_tip_goes_at_the_tip() {
+        let mut w = example();
+        w.mech.tip = 3;
+        rebuild(&mut w);
+        assert_eq!(w.states()[3], StepState::AfterTip);
+        w.add_step(NewStep::Hole);
+        assert_eq!(w.mech.steps.len(), 9);
+        assert_eq!(w.mech.tip, 4);
+        assert_eq!(hole_of(&w, 3).name, "Hole 3");
+        assert_eq!(w.states()[3], StepState::Valid);
+        assert_eq!(w.states()[4], StepState::AfterTip);
+        assert_eq!(w.selection, Selection::Hole(3));
+        w.undo();
+        assert_eq!(w.mech.tip, 3);
+        assert_eq!(w.mech.steps.len(), 8);
+    }
+
+    #[test]
+    fn a_step_is_removed_with_one_undo_to_bring_it_back() {
+        let mut w = fresh();
+        w.add_step(NewStep::Hole);
+        w.add_step(NewStep::Post);
+        w.select(Selection::Hole(0));
+        w.remove_step();
+        assert_eq!(w.mech.steps.len(), 1);
+        assert_eq!(w.mech.tip, 1);
+        assert_eq!(w.selection, Selection::Body);
+        assert_eq!(w.enclosure().holes().len(), 0);
+        assert_eq!(w.enclosure().posts().len(), 1);
+        assert_eq!(
+            w.status,
+            Status::Done(Msg::StepRemoved, vec!["Hole 1".to_string()])
+        );
+        w.undo();
+        assert_eq!(w.mech.steps.len(), 2);
+        assert_eq!(w.mech.tip, 2);
+        assert_eq!(w.enclosure().holes().len(), 1);
+        // nothing selected that is a step: refused
+        w.select(Selection::Body);
+        let before = w.mech.clone();
+        w.remove_step();
+        assert!(problem(&w));
+        assert_eq!(w.mech, before);
+    }
+
+    #[test]
+    fn a_step_that_a_later_step_needs_is_not_removed() {
+        let mut w = fresh();
+        w.add_step(NewStep::Hole);
+        let (id, hole) = match &w.mech.steps[0].op {
+            Operation::AddHole { id, hole } => (*id, hole.clone()),
+            other => panic!("not a hole: {other:?}"),
+        };
+        w.mech.steps.push(Step {
+            name: "wider".to_string(),
+            op: Operation::ReplaceHole { id, hole },
+            suppressed: false,
+        });
+        w.mech.tip = 2;
+        rebuild(&mut w);
+        assert!(w.states().iter().all(|s| *s == StepState::Valid));
+        w.select(Selection::Hole(0));
+        let before = w.mech.clone();
+        w.remove_step();
+        assert!(problem(&w));
+        assert_eq!(w.mech, before);
+    }
+
+    #[test]
+    fn a_read_only_project_gets_no_new_steps_or_variables() {
+        let mut w = fresh();
+        w.read_only = true;
+        w.add_step(NewStep::Hole);
+        assert_eq!(w.status, Status::Problem(Msg::ReadOnlyBadge, Vec::new()));
+        w.add_variable("gap", "5 mm");
+        w.set_variable("gap", "5 mm");
+        w.remove_variable("gap");
+        w.remove_step();
+        assert_eq!(w.status, Status::Problem(Msg::ReadOnlyBadge, Vec::new()));
+        assert!(w.mech.steps.is_empty() && w.mech.vars.is_empty());
+        assert!(!w.dirty);
+    }
+
+    #[test]
+    fn the_positions_tried_come_from_the_settings() {
+        let ui = UiSettings::with_user_config(
+            "[new_step]\ntries = 1\nhole_face = left\nhole_u = 20 mm\nhole_diameter = 4 mm\n",
+        )
+        .unwrap();
+        let mut w = Window::new(Lang::En, Settings::defaults(), ui).unwrap();
+        w.add_step(NewStep::Hole);
+        let hole = hole_of(&w, 0);
+        assert_eq!(
+            (hole.face, hole.u, hole.diameter),
+            (Face::Left, mm_len(20), mm_len(4))
+        );
+        // one try only: the same place is refused
+        w.add_step(NewStep::Hole);
+        assert!(problem(&w));
+        assert_eq!(w.mech.steps.len(), 1);
+    }
+
+    #[test]
+    fn a_project_with_added_steps_and_variables_is_saved_and_read_again() {
+        let dir = Scratch::new("added");
+        let path = dir.0.join("added.phoenixproj");
+        let mut w = fresh();
+        w.add_variable("gap", "5 mm");
+        w.add_step(NewStep::Hole);
+        w.add_step(NewStep::Post);
+        w.add_step(NewStep::Edging);
+        assert!(w.save_to(&path), "{:?}", w.status);
+        let mut again = fresh();
+        assert!(again.open(&path), "{:?}", again.status);
+        assert_eq!(again.mech, w.mech);
+        assert_eq!(again.sheet()[0].value, mm_len(5));
+        assert!(again.states().iter().all(|s| *s == StepState::Valid));
     }
 }

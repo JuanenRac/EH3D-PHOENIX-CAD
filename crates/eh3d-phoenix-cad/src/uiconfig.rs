@@ -5,11 +5,45 @@
 //! the code holds none of the values. A user file only needs the keys it changes.
 
 use crate::config::Config;
-use crate::enclosure::{Enclosure, EnclosureParams};
+use crate::enclosure::{Enclosure, EnclosureParams, Face};
+use crate::mount::BoreKind;
 use crate::{CadError, Length};
 
 /// The shipped settings of the window, as text.
 pub const DEFAULT_UI_CONFIG: &str = include_str!("../phoenix-cad-window.default.cfg");
+
+/// What a step added from the window starts with. The position of a hole or a post moves along
+/// by `pitch` for each try until the model accepts it, so that a second step does not land on the
+/// first.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewStepDefaults {
+    /// How many positions are tried before the step is refused.
+    pub tries: u32,
+    /// The distance between two tries.
+    pub pitch: Length,
+    /// The face of a new hole.
+    pub hole_face: Face,
+    /// The position `u` of a new hole.
+    pub hole_u: Length,
+    /// The position `v` of a new hole.
+    pub hole_v: Length,
+    /// The diameter of a new hole.
+    pub hole_diameter: Length,
+    /// The position `x` of a new post.
+    pub post_x: Length,
+    /// The position `y` of a new post.
+    pub post_y: Length,
+    /// The outer diameter of a new post.
+    pub post_outer: Length,
+    /// The height of a new post.
+    pub post_height: Length,
+    /// What the bore of a new post is for.
+    pub post_kind: BoreKind,
+    /// The diameter of the bore of a new post.
+    pub post_bore_diameter: Length,
+    /// The depth of the bore of a new post.
+    pub post_bore_depth: Length,
+}
 
 /// The settings of the window with their types.
 #[derive(Debug, Clone, PartialEq)]
@@ -40,6 +74,8 @@ pub struct UiSettings {
     pub fit: [Length; 3],
     /// The size given to an edge that goes from sharp to rounded or chamfered.
     pub edge_size: Length,
+    /// What a step added from the window starts with.
+    pub new_step: NewStepDefaults,
 }
 
 fn missing(key: &str) -> CadError {
@@ -68,6 +104,38 @@ fn count(c: &Config, key: &str, low: u32, high: u32) -> Result<u32, CadError> {
         Err(CadError::Config(format!(
             "{key} must be from {low} to {high}"
         )))
+    }
+}
+
+fn word<'a>(c: &'a Config, key: &str) -> Result<&'a str, CadError> {
+    c.get(key).ok_or_else(|| missing(key))
+}
+
+impl NewStepDefaults {
+    fn from_config(c: &Config) -> Result<NewStepDefaults, CadError> {
+        let face = word(c, "new_step.hole_face")?;
+        let kind = word(c, "new_step.post_kind")?;
+        Ok(NewStepDefaults {
+            tries: count(c, "new_step.tries", 1, 1000)?,
+            pitch: c.length("new_step.pitch")?,
+            hole_face: Face::from_name(face).ok_or_else(|| {
+                CadError::Config(format!("new_step.hole_face: {face} is not a face"))
+            })?,
+            hole_u: c.length("new_step.hole_u")?,
+            hole_v: c.length("new_step.hole_v")?,
+            hole_diameter: c.length("new_step.hole_diameter")?,
+            post_x: c.length("new_step.post_x")?,
+            post_y: c.length("new_step.post_y")?,
+            post_outer: c.length("new_step.post_outer")?,
+            post_height: c.length("new_step.post_height")?,
+            post_kind: BoreKind::from_name(kind).ok_or_else(|| {
+                CadError::Config(format!(
+                    "new_step.post_kind: {kind} is not insert or self-tapping"
+                ))
+            })?,
+            post_bore_diameter: c.length("new_step.post_bore_diameter")?,
+            post_bore_depth: c.length("new_step.post_bore_depth")?,
+        })
     }
 }
 
@@ -127,6 +195,7 @@ impl UiSettings {
                 c.length("fit.height")?,
             ],
             edge_size: c.length("edges.size")?,
+            new_step: NewStepDefaults::from_config(c)?,
         })
     }
 }
@@ -156,6 +225,33 @@ mod tests {
         assert_eq!(s.new_box.min_web, mm(2));
         assert_eq!(s.fit, [mm(90), mm(50), mm(20)]);
         assert_eq!(s.edge_size, mm(1));
+        let n = &s.new_step;
+        assert_eq!((n.tries, n.pitch), (12, mm(12)));
+        assert_eq!(n.hole_face, Face::Front);
+        assert_eq!(
+            (n.hole_u, n.hole_v, n.hole_diameter),
+            (mm(14), mm(15), mm(6))
+        );
+        assert_eq!(n.post_kind, BoreKind::Insert);
+        assert_eq!(n.post_bore_diameter, Length::new(4_200_000).unwrap());
+    }
+
+    #[test]
+    fn the_defaults_of_a_new_step_are_read_and_checked() {
+        let s =
+            UiSettings::with_user_config("[new_step]\nhole_face = top\npost_kind = self-tapping\n")
+                .unwrap();
+        assert_eq!(s.new_step.hole_face, Face::Top);
+        assert_eq!(s.new_step.post_kind, BoreKind::SelfTapping);
+        for text in [
+            "[new_step]\nhole_face = side\n",
+            "[new_step]\npost_kind = glue\n",
+            "[new_step]\ntries = 0\n",
+            "[new_step]\npitch = wide\n",
+        ] {
+            let error = UiSettings::with_user_config(text).unwrap_err();
+            assert_eq!(error.code(), "PHOENIX-CAD-011", "{text:?}: {error}");
+        }
     }
 
     #[test]
