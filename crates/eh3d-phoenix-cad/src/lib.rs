@@ -83,6 +83,7 @@ pub mod scad;
 pub mod scene;
 pub mod shot;
 pub mod sketch;
+pub mod sketch_ui;
 pub mod step;
 pub mod store;
 pub mod uiconfig;
