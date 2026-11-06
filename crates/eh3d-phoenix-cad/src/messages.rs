@@ -402,6 +402,71 @@ const TEXTS: &[Row] = &[
             "Fixação da tampa inválida",
         ],
     ),
+    (
+        "PHOENIX-CAD-031",
+        [
+            "Sketch element not valid",
+            "Elemento del croquis no válido",
+            "Skizzenelement ungültig",
+            "Élément de l'esquisse non valide",
+            "Elemento dello schizzo non valido",
+            "スケッチ要素が無効です",
+            "草图元素无效",
+            "Elemento do esboço inválido",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-032",
+        [
+            "Sketch constraint not valid",
+            "Restricción del croquis no válida",
+            "Skizzenbedingung ungültig",
+            "Contrainte de l'esquisse non valide",
+            "Vincolo dello schizzo non valido",
+            "スケッチ拘束が無効です",
+            "草图约束无效",
+            "Restrição do esboço inválida",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-033",
+        [
+            "Sketch over-constrained",
+            "Croquis sobrerrestringido",
+            "Skizze überbestimmt",
+            "Esquisse sur-contrainte",
+            "Schizzo sovravincolato",
+            "スケッチが過拘束です",
+            "草图过约束",
+            "Esboço sobrerrestringido",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-034",
+        [
+            "Sketch solver did not converge",
+            "El solucionador del croquis no converge",
+            "Der Skizzenlöser konvergiert nicht",
+            "Le solveur de l'esquisse ne converge pas",
+            "Il risolutore dello schizzo non converge",
+            "スケッチのソルバーが収束しません",
+            "草图求解器未收敛",
+            "O solucionador do esboço não converge",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-035",
+        [
+            "Sketch file not valid",
+            "Fichero del croquis no válido",
+            "Skizzendatei ungültig",
+            "Fichier de l'esquisse non valide",
+            "File dello schizzo non valido",
+            "スケッチファイルが無効です",
+            "草图文件无效",
+            "Ficheiro do esboço inválido",
+        ],
+    ),
 ];
 
 /// The text of a diagnostic in a language (`en`, `es`, `de`, `fr`, `it`, `ja`, `zh` or `pt`), or

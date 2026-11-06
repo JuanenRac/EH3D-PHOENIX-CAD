@@ -231,6 +231,18 @@ pub enum CadError {
     PostHeight(String),
     /// A fixing of the lid that does not fit the box.
     LidFixing(String),
+    /// An element of a sketch that does not hold together (a line between two points that are
+    /// not points, a circle without a positive radius, a point outside the plane).
+    SketchElement(String),
+    /// A constraint of a sketch about elements of the wrong kind, tied to itself, or with a
+    /// dimension that is not valid.
+    SketchConstraint(String),
+    /// A sketch with constraints that repeat or contradict each other.
+    SketchOverConstrained(String),
+    /// A sketch that the solver could not bring to a solution.
+    SketchNoConvergence(String),
+    /// A sketch file that is not valid.
+    SketchFile(String),
 }
 
 impl CadError {
@@ -267,6 +279,11 @@ impl CadError {
             CadError::PostPlace(_) => "PHOENIX-CAD-028",
             CadError::PostHeight(_) => "PHOENIX-CAD-029",
             CadError::LidFixing(_) => "PHOENIX-CAD-030",
+            CadError::SketchElement(_) => "PHOENIX-CAD-031",
+            CadError::SketchConstraint(_) => "PHOENIX-CAD-032",
+            CadError::SketchOverConstrained(_) => "PHOENIX-CAD-033",
+            CadError::SketchNoConvergence(_) => "PHOENIX-CAD-034",
+            CadError::SketchFile(_) => "PHOENIX-CAD-035",
         }
     }
 }
@@ -310,7 +327,12 @@ impl fmt::Display for CadError {
             CadError::PostShape(why)
             | CadError::PostPlace(why)
             | CadError::PostHeight(why)
-            | CadError::LidFixing(why) => write!(f, "{title}: {why}"),
+            | CadError::LidFixing(why)
+            | CadError::SketchElement(why)
+            | CadError::SketchConstraint(why)
+            | CadError::SketchOverConstrained(why)
+            | CadError::SketchNoConvergence(why)
+            | CadError::SketchFile(why) => write!(f, "{title}: {why}"),
         }
     }
 }
@@ -352,6 +374,11 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-028", "Post meets a wall, a post or a hole"),
     ("PHOENIX-CAD-029", "Post too high for the space above it"),
     ("PHOENIX-CAD-030", "Lid fixing not valid"),
+    ("PHOENIX-CAD-031", "Sketch element not valid"),
+    ("PHOENIX-CAD-032", "Sketch constraint not valid"),
+    ("PHOENIX-CAD-033", "Sketch over-constrained"),
+    ("PHOENIX-CAD-034", "Sketch solver did not converge"),
+    ("PHOENIX-CAD-035", "Sketch file not valid"),
 ];
 
 #[cfg(test)]
@@ -535,6 +562,11 @@ mod tests {
             CadError::PostPlace("wall".into()),
             CadError::PostHeight("lid".into()),
             CadError::LidFixing("inset".into()),
+            CadError::SketchElement("e1".into()),
+            CadError::SketchConstraint("c1".into()),
+            CadError::SketchOverConstrained("c1 c2".into()),
+            CadError::SketchNoConvergence("100 steps".into()),
+            CadError::SketchFile("line 3".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));
