@@ -5,3 +5,6 @@
 *.sh text eol=lf
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# The project files are text with a byte count in front of each domain: no line-end conversion.
+*.phoenixproj -text
