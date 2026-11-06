@@ -1,0 +1,29 @@
+phoenix-sketch 1
+name plate
+plane top 0 0 0
+next 13 14
+e1 point 0 0
+e2 point 100000000 0
+e3 point 100000000 60000000
+e4 point 0 60000000
+e5 line e1 e2
+e6 line e2 e3
+e7 line e3 e4
+e8 line e4 e1
+e9 point 10000000 10000000
+e10 circle e9 2500000
+e11 point 90000000 50000000
+e12 circle e11 2500000
+c1 on horizontal e5
+c2 on vertical e6
+c3 on horizontal e7
+c4 on vertical e8
+c5 on fixed e1 0 0
+c6 on length e5 100000000
+c7 on length e6 60000000
+c8 on distance_x e1 e9 10000000
+c9 on distance_y e1 e9 10000000
+c10 on diameter e10 5000000
+c11 on equal e10 e12
+c12 on distance_x e11 e3 10000000
+c13 on distance_y e11 e3 10000000

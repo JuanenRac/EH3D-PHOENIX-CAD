@@ -3889,6 +3889,48 @@ mod tests {
     }
 
     #[test]
+    fn the_example_sketch_opens_fully_constrained_and_is_written_back_the_same() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("box.phoenixsketch");
+        let mut e = editor();
+        assert!(e.open_file(&path), "{:?}", e.status);
+        assert_eq!(e.sketch.elements().len(), 12);
+        assert_eq!(e.sketch.constraints().len(), 13);
+        assert_eq!(e.report.health, Health::Full);
+        assert_eq!(e.report.tone(), Tone::Green);
+        assert_eq!(e.state_text(), "Fully constrained");
+        // the plate is 100 by 60 mm and the holes sit 10 mm from its corners
+        assert_eq!(point(&e, 3), (mm(100.0), mm(60.0)));
+        assert_eq!(point(&e, 9), (mm(10.0), mm(10.0)));
+        assert_eq!(point(&e, 11), (mm(90.0), mm(50.0)));
+        assert_eq!(
+            e.sketch.element(ElementId(12)),
+            Some(&Element::Circle {
+                center: ElementId(11),
+                radius: mm(2.5)
+            })
+        );
+        // the file is the text the program writes
+        let text = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("\r\n", "\n");
+        assert_eq!(file::to_text(&e.sketch), text);
+        // dragging a hole is held by its dimensions; the plate does not move either
+        let before = e.sketch.clone();
+        assert!(e.begin_drag(at(&e, 10.0, 10.0)));
+        e.drag_to(at(&e, 30.0, 30.0));
+        e.end_drag();
+        assert_eq!(e.sketch, before);
+        // freeing a dimension lets the hole move and the state goes amber
+        e.set_enabled(ConstraintId(9), false);
+        assert_eq!(e.report.health, Health::Under);
+        assert_eq!(e.report.dof, Some(1));
+        let window = SketchEditor::with_defaults(Lang::Pt);
+        assert_eq!(window.state_text(), "Esboço vazio");
+    }
+
+    #[test]
     fn the_distance_helpers_are_exact_on_a_three_four_five() {
         assert_eq!(dist((0.0, 0.0), (3.0, 4.0)), 5.0);
         let (d, near) = segment_distance((5.0, 3.0), (0.0, 0.0), (10.0, 0.0));

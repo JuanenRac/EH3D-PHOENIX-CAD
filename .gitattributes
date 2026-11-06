@@ -8,3 +8,6 @@
 
 # The project files are text with a byte count in front of each domain: no line-end conversion.
 *.phoenixproj -text
+
+# the sketch files are text with their own line ends: no conversion
+*.phoenixsketch -text
