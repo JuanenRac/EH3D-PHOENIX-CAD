@@ -9,10 +9,13 @@ use crate::lang::{Lang, Msg};
 use crate::scene::{Kind, Line2};
 use crate::shot::{ShotRequest, ShotTheme, PATIENCE_FRAMES};
 use crate::uiconfig::UiSettings;
-use crate::window::{error_text, Input, Mark, Selection, ViewKind, Window, PROJECT_EXTENSIONS};
+use crate::window::{
+    error_text, Input, Mark, NewStep, Selection, ViewKind, Window, PROJECT_EXTENSIONS,
+};
 use eframe::egui::{
     self, Color32, FontData, FontDefinitions, FontFamily, Pos2, Rect, Stroke, Vec2,
 };
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -48,6 +51,11 @@ struct App {
     /// The picture mode, while the window is there only to be photographed.
     shot: Option<ShotState>,
     dialog: Option<Dialog>,
+    /// The text being typed in the value of each row of the sheet of variables.
+    var_edits: HashMap<String, String>,
+    /// The name and the value being typed for a new variable.
+    new_name: String,
+    new_value: String,
 }
 
 impl App {
@@ -56,6 +64,9 @@ impl App {
             win,
             shot: None,
             dialog: None,
+            var_edits: HashMap::new(),
+            new_name: String::new(),
+            new_value: String::new(),
         }
     }
 
@@ -184,6 +195,40 @@ impl App {
                         .color(ACCENT),
                 );
                 ui.separator();
+                let editable = !self.win.read_only;
+                let has_step = self.win.selection.step().is_some();
+                let mut add = None;
+                let mut remove = false;
+                ui.horizontal_wrapped(|ui| {
+                    for (kind, msg) in [
+                        (NewStep::Hole, Msg::AddHole),
+                        (NewStep::Post, Msg::AddPost),
+                        (NewStep::Edging, Msg::AddEdging),
+                    ] {
+                        if ui
+                            .add_enabled(editable, egui::Button::new(msg.tr(lang)))
+                            .clicked()
+                        {
+                            add = Some(kind);
+                        }
+                    }
+                    if ui
+                        .add_enabled(
+                            editable && has_step,
+                            egui::Button::new(Msg::RemoveStep.tr(lang)),
+                        )
+                        .clicked()
+                    {
+                        remove = true;
+                    }
+                });
+                if let Some(kind) = add {
+                    self.win.add_step(kind);
+                }
+                if remove {
+                    self.win.remove_step();
+                }
+                ui.separator();
                 let mut picked = None;
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     for group in self.win.tree() {
@@ -229,8 +274,93 @@ impl App {
             });
     }
 
+    /// The sheet of variables: one row for each, with the value or formula to type, what it
+    /// calculates to and the parameters that use it, and a line to add another.
+    fn sheet_body(&mut self, ui: &mut egui::Ui) {
+        let lang = self.win.lang;
+        let editable = !self.win.read_only;
+        ui.label(egui::RichText::new(Msg::SheetHint.tr(lang)).color(DIM));
+        ui.add_space(6.0);
+        let mut edited: Option<(String, String)> = None;
+        let mut removed: Option<String> = None;
+        for row in self.win.sheet() {
+            let used = self.win.used_by_text(&row);
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(row.name.as_str())
+                        .strong()
+                        .color(ACCENT),
+                );
+                ui.label(egui::RichText::new(format!("= {}", row.text)).color(TEXT));
+            });
+            ui.label(
+                egui::RichText::new(format!("{}: {used}", Msg::VariableUsedBy.tr(lang))).color(DIM),
+            );
+            let mut text = self
+                .var_edits
+                .remove(&row.name)
+                .unwrap_or_else(|| row.text.clone());
+            ui.horizontal(|ui| {
+                let edit = egui::TextEdit::singleline(&mut text).desired_width(150.0);
+                let response = ui.add_enabled(editable, edit);
+                if response.lost_focus() && text != row.text {
+                    edited = Some((row.name.clone(), text.clone()));
+                }
+                if !response.has_focus() {
+                    text.clone_from(&row.text);
+                }
+                if ui
+                    .add_enabled(editable, egui::Button::new(Msg::RemoveVariable.tr(lang)))
+                    .clicked()
+                {
+                    removed = Some(row.name.clone());
+                }
+            });
+            self.var_edits.insert(row.name.clone(), text);
+        }
+        if let Some((name, text)) = edited {
+            self.win.set_variable(&name, &text);
+        }
+        if let Some(name) = removed {
+            self.win.remove_variable(&name);
+            self.var_edits.remove(&name);
+        }
+        ui.separator();
+        ui.label(egui::RichText::new(Msg::AddVariable.tr(lang)).color(DIM));
+        let mut add = false;
+        ui.horizontal(|ui| {
+            let name = egui::TextEdit::singleline(&mut self.new_name)
+                .hint_text(Msg::VariableName.tr(lang))
+                .desired_width(90.0);
+            ui.add_enabled(editable, name);
+            let value = egui::TextEdit::singleline(&mut self.new_value)
+                .hint_text(Msg::VariableValue.tr(lang))
+                .desired_width(120.0);
+            ui.add_enabled(editable, value);
+            let ready = editable && !self.new_name.trim().is_empty();
+            if ui
+                .add_enabled(ready, egui::Button::new(Msg::AddVariable.tr(lang)))
+                .clicked()
+            {
+                add = true;
+            }
+        });
+        if add {
+            self.win.add_variable(&self.new_name, &self.new_value);
+            if !self.win.status.is_problem() {
+                self.new_name.clear();
+                self.new_value.clear();
+            }
+        }
+    }
+
     fn properties_body(&mut self, ui: &mut egui::Ui) {
         let lang = self.win.lang;
+        if self.win.selection == Selection::Sheet {
+            self.sheet_body(ui);
+            return;
+        }
         if self.win.fields.is_empty() && self.win.selection.step().is_none() {
             ui.label(egui::RichText::new(Msg::NothingSelected.tr(lang)).color(DIM));
             return;
