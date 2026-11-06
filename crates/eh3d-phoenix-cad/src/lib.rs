@@ -24,7 +24,10 @@
 //! * [`project`]: the envelope of a project file with a format version, named domains kept byte for byte when unknown, read-only opening when a critical domain is not understood, and migrations from older versions;
 //! * [`mechanical`]: the mechanical domain of the project file: the recipe of steps, the parameters and expressions, and the interface of the board, read again to the same enclosure, with a migration from the domain of the parameters;
 //! * [`messages`]: the text of every diagnostic in the eight languages of the suite;
-//! * [`fit`]: whether an envelope (the outline of a board and its tallest part) fits inside.
+//! * [`fit`]: whether an envelope (the outline of a board and its tallest part) fits inside;
+//! * [`window`], [`scene`], [`history`], [`uiconfig`], [`lang`], [`shot`] and [`browse`]: the state of the window (the tree of the model, the properties, the
+//!   views, the history of the changes), the lines it draws, its settings, its texts in the eight languages, the picture mode and the list of files; the window itself is
+//!   `gui` (built with `--features gui`).
 //!
 //! # Example
 //!
@@ -49,18 +52,21 @@
 //! ```
 //!
 //! Every failure has a stable code `PHOENIX-CAD-<NNN>` ([`CadError::code`], [`REGISTRY`]).
-//! Nothing here draws or meshes; the STEP file has not been opened in a CAD program.
+//! The library meshes nothing; the lines of the window are a drawing and decide nothing about the model. The STEP file has not been opened in a CAD program.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 pub mod body;
+pub mod browse;
 pub mod config;
 pub mod datum;
 pub mod enclosure;
 pub mod expr;
 pub mod fit;
 pub mod graph;
+pub mod history;
+pub mod lang;
 pub mod mass;
 pub mod mechanical;
 pub mod messages;
@@ -71,8 +77,11 @@ pub mod pattern;
 pub mod printer;
 pub mod project;
 pub mod scad;
+pub mod scene;
+pub mod shot;
 pub mod step;
 pub mod store;
+pub mod uiconfig;
 pub mod units;
 pub mod vars;
 
