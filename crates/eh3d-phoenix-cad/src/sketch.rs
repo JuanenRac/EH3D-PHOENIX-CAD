@@ -32,6 +32,7 @@ use crate::units::{div_round_half_away, Angle};
 use crate::vars::Variables;
 use crate::{CadError, Length};
 
+pub mod file;
 pub mod settings;
 pub mod solver;
 
