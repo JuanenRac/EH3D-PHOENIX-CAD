@@ -116,10 +116,37 @@ c2 on distance_x e1 e2 40000000 = width / 2
 
 Lengths are integer nanometres and angles integer nano-degrees. The line of an element may end with `construction`; a constraint is `on` or `off`; a dimension may end with ` = ` and its expression. Empty lines and lines that start with `#` are ignored. The text written is always the same for the same sketch, files are saved atomically with numbered copies and read under a size limit. A file of a newer version, a line that is not understood, or a sketch that does not hold together is refused with `PHOENIX-CAD-035` and the number of the line.
 
+## The window
+
+The window has a **Sketch** part beside the **Box** part (the switch in the top bar). `eh3d-phoenix-cad SKETCH.phoenixsketch` opens it on a sketch file at once, and `eh3d-phoenix-cad PROJECT.phoenixproj --view sketch` opens the project and the sketch file next to it when there is one. Everything the window decides is in `eh3d_phoenix_cad::sketch_ui` and is tested without a screen; `gui` only draws the primitives that `SketchEditor::scene` returns and passes on the clicks, drags, wheel and keys.
+
+* **Tools**: select, point, line, polyline, rectangle, circle and arc, and a switch that draws the next lines, circles and arcs as construction geometry. A line takes two clicks, a polyline one click for each corner (Enter, a right click, a double click or a click on its first corner ends it, and the whole polyline is one step of the history), a rectangle two opposite corners, a circle its centre and a point of it, an arc its centre, its start and its end (the end is brought to the circle of the start).
+* **Snaps**: a click lands on a point that exists, else on a line, circle or arc that exists (the new point is then tied to it with *point on object*), else on the grid, else where the pointer is. A line that ends on a point uses that point, so nothing has to be glued. A corner of a rectangle clicked on a point is made *coincident* with it.
+* **Proposed constraints**: a new line within a few degrees of horizontal or vertical is made so, and the window says it before the second click; nothing is added when it would make the sketch unsolvable. The angle and every other tuned value are in the `[sketch_ui]` section of the settings.
+* **Selection**: a click picks a point first and then the nearest line, circle or arc; Ctrl adds or takes away; the lists of elements and constraints pick too. A selected constraint draws what it is about in its own colour.
+* **Constraints from the selection** (the buttons of the left panel and the menu of a right click on the canvas offer only what fits):
+
+| Selection | Constraints offered |
+|---|---|
+| two points | coincident, horizontal, vertical |
+| lines | horizontal, vertical (each line), parallel, perpendicular and equal (two lines) |
+| a point and a line, circle or arc | point on object; with a line also midpoint |
+| a line and a circle or arc, or two of those | tangent; equal for two circles or arcs |
+| three points, or two points and a line | symmetric about a point, or about the line |
+| points | fixed (each one where it is) |
+
+* **Dimensions** (the right panel): the distance, the horizontal and vertical distance of two points, the length of a line, the radius or diameter of a circle or arc and the angle of two lines. A dimension starts with the value the drawing has, or with the text typed in the box above the buttons; the value of a dimension that exists is edited in its own line. The text is a number (millimetres, or degrees for an angle), a length with its unit, a variable of the project (`width`) or a formula (`width / 2 + 2 mm`); a number stays a plain value and anything else is kept as the expression of the dimension and follows the variables. A text the model refuses leaves the sketch as it was.
+* **Dragging**: a point, a line (both its points), a circle or an arc (its centre) is dragged with the solver running at each move, with the dragged points held at the pointer, so what is tied to them follows and what cannot move stays. When the constraints between the dragged points forbid holding all of them, only the first is held. A point dropped on another point is made coincident with it. The whole drag is one step of the history, and Escape puts everything back.
+* **State of the sketch**: an indicator and a sentence after every change. *Green*: fully constrained. *Amber*: degrees of freedom left (or nothing drawn). *Red*: over-constrained (the constraints that repeat or contradict the others are listed, drawn in the colours of the list, and one button switches them off, the latest named one first, until the sketch holds together) or no solution found. A constraint that makes the sketch red is kept so that it can be seen; each constraint has a switch to turn it off and a button to remove it.
+* **History and file**: undo and redo go back and forward through the changes of the window (`undo.depth` changes are kept); the sketch is opened and saved as a `.phoenixsketch` file, by name, by the buttons, with Ctrl+O and Ctrl+S, or by dropping the file on the window.
+* **Canvas**: the grid (lines every `grid` millimetres, drawn every tenth line when they would crowd each other), the axes, the wheel to zoom around the pointer, the middle button or Space with a drag to pan, a double click to fit the drawing. The signs of the constraints (`H`, `V`, `//`, `+`, `T`, `=`, `C`, `O`, `S`, `M`, `F`) and the dimensions are drawn beside what they are about.
+
+The picture mode takes a sketch: `eh3d-phoenix-cad gui box.phoenixsketch --view sketch --shot sketch.png`. `eh3d-phoenix-cad config` writes the settings of the solver and of the sketch window with the other settings.
+
 ## Codes
 
 `PHOENIX-CAD-031` element not valid, `-032` constraint not valid, `-033` over-constrained, `-034` solver did not converge, `-035` sketch file not valid. See `ERROR_CODES.md`; the text of each is in the eight languages.
 
 ## What is not here yet
 
-The window of the sketch (drawing, dimensioning, showing the state of the constraints), turning a closed profile into a hole or a boss of the box, reference (driven) dimensions, ellipses and splines, tangent continuity at the end of an arc, and sketches inside the project file. The sketch has only been tried on sketches made by its own tests, with values worked out by hand.
+Turning a closed profile into a hole or a boss of the box, reference (driven) dimensions, ellipses and splines, tangent continuity at the end of an arc, and sketches inside the project file. The sketch has only been tried on sketches made by its own tests, with values worked out by hand. The drawing code of the window of the sketch has never been opened on a screen: its look, its layout and its behaviour with the mouse are checked by no test.
