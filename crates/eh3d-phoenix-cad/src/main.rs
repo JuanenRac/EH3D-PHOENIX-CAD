@@ -6,6 +6,10 @@ use eh3d_phoenix_cad::body::StepState;
 use eh3d_phoenix_cad::config::{Settings, DEFAULT_CONFIG};
 use eh3d_phoenix_cad::lang::{Lang, Msg};
 use eh3d_phoenix_cad::shot;
+#[cfg(feature = "gui")]
+use eh3d_phoenix_cad::sketch::settings::SketchSettings;
+#[cfg(feature = "gui")]
+use eh3d_phoenix_cad::sketch_ui::SketchUiSettings;
 use eh3d_phoenix_cad::uiconfig::{default_file, UiSettings};
 use eh3d_phoenix_cad::window::{error_text, step_label, Window};
 use std::env;
@@ -15,12 +19,12 @@ use std::process::ExitCode;
 
 const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the properties, a 3D view and a plan, and the fit check of a board
 
-  eh3d-phoenix-cad [gui] [PROJECT.phoenixproj] [--lang CODE] [--config FILE]   the window (a build with --features gui): with no arguments it opens with a new project
-  eh3d-phoenix-cad gui [PROJECT] --shot OUT.png [--size WxH] [--theme forge|dark|light] [--wait N] [--lang CODE] [--config FILE] [--replace]   a picture of the window (a build with --features gui)
+  eh3d-phoenix-cad [gui] [PROJECT.phoenixproj | SKETCH.phoenixsketch] [--view model|sketch] [--lang CODE] [--config FILE]   the window (a build with --features gui): with no arguments it opens with a new project; the sketch of a project is the file next to it with the extension .phoenixsketch
+  eh3d-phoenix-cad gui [PROJECT | SKETCH] [--view model|sketch] --shot OUT.png [--size WxH] [--theme forge|dark|light] [--wait N] [--lang CODE] [--config FILE] [--replace]   a picture of the window (a build with --features gui)
   eh3d-phoenix-cad check PROJECT.phoenixproj [--lang CODE] [--config FILE]       reads a project, builds the box and prints its measures, the fit of the board and the state of every step
-  eh3d-phoenix-cad config                                                         every setting of the library and of the window with its default value, as a file for --config
+  eh3d-phoenix-cad config                                                         every setting of the library, of the window and of the sketch with its default value, as a file for --config
 
---open PROJECT is the same as giving the project by itself. --lang takes en, es, de, fr, it, ja, zh or pt; without it the language of the system is used.
+--open FILE is the same as giving the file by itself; a sketch file opens the window on the sketch. --lang takes en, es, de, fr, it, ja, zh or pt; without it the language of the system is used.
 --shot writes a PNG file of the window (the exit code is 0 when it was written, 1 when it was not and 2 when the arguments are wrong); the window keeps no settings in that mode.
 --config FILE reads a settings file over the defaults: it only needs the keys it changes (see the output of config).
 check exits with 0 when every step was applied and the board fits, and with 1 when a step was refused or the board does not fit.";
@@ -35,6 +39,22 @@ fn load_settings(config: Option<&Path>) -> Result<(Settings, UiSettings), String
         Settings::with_user_config(&text).map_err(|e| format!("{}: {e}", path.display()))?;
     let ui = UiSettings::with_user_config(&text).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok((settings, ui))
+}
+
+/// The settings of the sketch, with the keys of a user file put over the defaults.
+#[cfg(feature = "gui")]
+fn load_sketch_settings(
+    config: Option<&Path>,
+) -> Result<(SketchSettings, SketchUiSettings), String> {
+    let Some(path) = config else {
+        return Ok((SketchSettings::defaults(), SketchUiSettings::defaults()));
+    };
+    let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let solver =
+        SketchSettings::with_user_config(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    let ui = SketchUiSettings::with_user_config(&text)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok((solver, ui))
 }
 
 /// `check`: reads a project and says what the model makes of it. The answer is whether every step
@@ -102,7 +122,11 @@ fn run(args: &[String]) -> Result<bool, String> {
             if !rest.is_empty() {
                 return Err("config takes no arguments".to_owned());
             }
-            print!("{DEFAULT_CONFIG}\n{}", default_file());
+            print!(
+                "{DEFAULT_CONFIG}\n{}\n{}",
+                default_file(),
+                eh3d_phoenix_cad::sketch::settings::default_file()
+            );
             Ok(true)
         }
         "check" => run_check(rest),
@@ -132,11 +156,25 @@ fn window_request(args: &[String]) -> Option<Result<shot::WindowArgs, String>> {
 #[cfg(feature = "gui")]
 fn start_of(parsed: &shot::WindowArgs) -> Result<eh3d_phoenix_cad::gui::Start, String> {
     let (settings, ui) = load_settings(parsed.config.as_deref())?;
+    let (solver, sketch_ui) = load_sketch_settings(parsed.config.as_deref())?;
+    let (project, sketch) = match parsed.files.first().cloned() {
+        Some(f) if shot::is_sketch_file(&f) => (None, Some(f)),
+        other => (other, None),
+    };
+    let view = parsed.view.unwrap_or(if sketch.is_some() {
+        shot::StartView::Sketch
+    } else {
+        shot::StartView::Model
+    });
     Ok(eh3d_phoenix_cad::gui::Start {
         lang: parsed.lang.unwrap_or_else(Lang::from_env),
         settings,
         ui,
-        project: parsed.files.first().cloned(),
+        solver,
+        sketch_ui,
+        project,
+        sketch,
+        view,
     })
 }
 

@@ -2,8 +2,10 @@
 //! waits a number of frames so that the drawing is complete, saves what it drew as a PNG file and closes by itself. In this mode the window keeps no settings, so a run leaves
 //! nothing of the person's changed.
 
+use crate::browse::matches_extension;
 use crate::lang::Lang;
-use std::path::PathBuf;
+use crate::sketch::file::EXTENSION as SKETCH_EXTENSION;
+use std::path::{Path, PathBuf};
 
 /// The smallest side of the window of a picture, in pixels.
 pub const SIZE_MIN: u32 = 320;
@@ -49,6 +51,40 @@ impl ShotTheme {
     }
 }
 
+/// The part of the window that shows first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StartView {
+    /// The model of the box: the tree, the properties and the views.
+    #[default]
+    Model,
+    /// The 2D sketch.
+    Sketch,
+}
+
+impl StartView {
+    /// The word that names the part on the command line.
+    pub fn name(self) -> &'static str {
+        match self {
+            StartView::Model => "model",
+            StartView::Sketch => "sketch",
+        }
+    }
+
+    /// The part a word names, in any case.
+    pub fn parse(text: &str) -> Option<StartView> {
+        let word = text.trim().to_ascii_lowercase();
+        [StartView::Model, StartView::Sketch]
+            .into_iter()
+            .find(|v| v.name() == word)
+    }
+}
+
+/// Whether a file is a sketch file (by its extension) and not a project.
+pub fn is_sketch_file(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| matches_extension(&name.to_string_lossy(), &[SKETCH_EXTENSION]))
+}
+
 /// What the picture mode was asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShotRequest {
@@ -73,6 +109,9 @@ pub struct WindowArgs {
     pub config: Option<PathBuf>,
     /// The language of the window; none takes the one of the system.
     pub lang: Option<Lang>,
+    /// The part of the window that shows first (`--view model` or `--view sketch`); none shows the
+    /// sketch when a sketch file is given and the model otherwise.
+    pub view: Option<StartView>,
     /// The picture mode: the window opens, saves a PNG file and closes by itself.
     pub shot: Option<ShotRequest>,
 }
@@ -100,7 +139,7 @@ struct PictureOptions {
     replace: bool,
 }
 
-/// Reads the arguments of the window (after an optional leading `gui`): `--shot FILE.png`, `--size WxH`, `--theme`, `--wait N`, `--replace`, `--lang CODE`, `--config FILE`, `--open FILE` and bare
+/// Reads the arguments of the window (after an optional leading `gui`): `--shot FILE.png`, `--size WxH`, `--theme`, `--wait N`, `--replace`, `--lang CODE`, `--view model|sketch`, `--config FILE`, `--open FILE` and bare
 /// file names, of which at most `max_files` are accepted. The answer for a mistake is the reason.
 pub fn parse_window_args(args: &[String], max_files: usize) -> Result<WindowArgs, String> {
     let args = if args.first().is_some_and(|a| a == "gui") {
@@ -144,6 +183,10 @@ pub fn parse_window_args(args: &[String], max_files: usize) -> Result<WindowArgs
             "--lang" => {
                 let tag = iter.next().ok_or("--lang needs a language code")?;
                 parsed.lang = Some(Lang::from_code(tag).ok_or("unknown language code")?);
+            }
+            "--view" => {
+                let text = iter.next().ok_or("--view needs model or sketch")?;
+                parsed.view = Some(StartView::parse(text).ok_or("--view is model or sketch")?);
             }
             "--replace" => picture.replace = true,
             "--config" => {
@@ -360,5 +403,41 @@ mod tests {
         }
         let error = parse_window_args(&args(&["a", "b", "c"]), 2).unwrap_err();
         assert!(error.contains("at most 2 files"), "{error}");
+    }
+
+    #[test]
+    fn the_part_that_shows_first_is_read_and_a_sketch_file_is_told_from_a_project() {
+        for view in [StartView::Model, StartView::Sketch] {
+            assert_eq!(StartView::parse(view.name()), Some(view));
+        }
+        assert_eq!(StartView::parse(" Sketch "), Some(StartView::Sketch));
+        assert_eq!(StartView::parse("plan"), None);
+        assert_eq!(StartView::default(), StartView::Model);
+        assert!(is_sketch_file(Path::new("caja.phoenixsketch")));
+        assert!(is_sketch_file(Path::new("dir/CAJA.PHOENIXSKETCH")));
+        assert!(!is_sketch_file(Path::new("caja.phoenixproj")));
+        assert!(!is_sketch_file(Path::new(".phoenixsketch")));
+        let parsed = parse_window_args(
+            &args(&[
+                "--view",
+                "sketch",
+                "--open",
+                "caja.phoenixsketch",
+                "--shot",
+                "a.png",
+            ]),
+            1,
+        )
+        .unwrap();
+        assert_eq!(parsed.view, Some(StartView::Sketch));
+        assert_eq!(parsed.files, [PathBuf::from("caja.phoenixsketch")]);
+        assert_eq!(parse_window_args(&args(&["a.png"]), 1).unwrap().view, None);
+        for (list, reason) in [
+            (vec!["--view"], "needs model or sketch"),
+            (vec!["--view", "plan"], "model or sketch"),
+        ] {
+            let error = parse_window_args(&args(&list), 1).unwrap_err();
+            assert!(error.contains(reason), "{list:?}: {error}");
+        }
     }
 }

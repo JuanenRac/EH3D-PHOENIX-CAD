@@ -91,3 +91,25 @@ fn config_writes_both_files_of_settings_and_they_read_back() {
     let window = eh3d_phoenix_cad::uiconfig::UiSettings::with_user_config(&text).unwrap();
     assert_eq!(window, eh3d_phoenix_cad::uiconfig::UiSettings::defaults());
 }
+
+#[test]
+fn config_also_writes_the_settings_of_the_sketch_and_they_read_back() {
+    let (code, text, _) = run(&["config"]);
+    assert_eq!(code, 0);
+    assert!(text.contains("[sketch]"));
+    assert!(text.contains("[sketch_ui]"));
+    let solver =
+        eh3d_phoenix_cad::sketch::settings::SketchSettings::with_user_config(&text).unwrap();
+    assert_eq!(
+        solver,
+        eh3d_phoenix_cad::sketch::settings::SketchSettings::defaults()
+    );
+    let window = eh3d_phoenix_cad::sketch_ui::SketchUiSettings::with_user_config(&text).unwrap();
+    assert_eq!(
+        window,
+        eh3d_phoenix_cad::sketch_ui::SketchUiSettings::defaults()
+    );
+    // the three files are one: the library and the window read it too
+    assert!(eh3d_phoenix_cad::config::Settings::with_user_config(&text).is_ok());
+    assert!(eh3d_phoenix_cad::uiconfig::UiSettings::with_user_config(&text).is_ok());
+}
