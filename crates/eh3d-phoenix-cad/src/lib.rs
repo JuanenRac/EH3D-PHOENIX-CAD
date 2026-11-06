@@ -84,6 +84,7 @@ pub mod store;
 pub mod uiconfig;
 pub mod units;
 pub mod vars;
+pub mod window;
 
 pub use enclosure::{
     Edging, Enclosure, EnclosureParams, Face, Hole, HoleStyle, Id, Operation, Treatment,
