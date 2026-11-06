@@ -55,11 +55,17 @@ jobs:
           done
       - name: Rust toolchain
         run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+      - name: Libraries of the window
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev
       - name: Format
         run: cargo fmt --check
         working-directory: EH3D-PHOENIX-CAD
       - name: Lints
         run: cargo clippy --all-targets -- -D warnings
+        working-directory: EH3D-PHOENIX-CAD
+      - name: Lints of the window
+        run: cargo clippy --all-targets --features gui -- -D warnings
         working-directory: EH3D-PHOENIX-CAD
       - name: Tests
         run: cargo test --all-targets

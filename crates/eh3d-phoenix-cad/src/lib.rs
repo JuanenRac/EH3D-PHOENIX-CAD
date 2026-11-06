@@ -65,6 +65,8 @@ pub mod enclosure;
 pub mod expr;
 pub mod fit;
 pub mod graph;
+#[cfg(feature = "gui")]
+pub mod gui;
 pub mod history;
 pub mod lang;
 pub mod mass;
