@@ -185,14 +185,14 @@
         {
           "name": "crates/",
           "desc": {
-            "en": "the mechanical model: enclosure, operations, script, fit check",
-            "es": "el modelo mecánico: caja, operaciones, script, comprobación de encaje",
-            "de": "das mechanische Modell: Gehäuse, Operationen, Skript, Passprüfung",
-            "fr": "le modèle mécanique : boîtier, opérations, script, contrôle d'ajustement",
-            "it": "il modello meccanico: contenitore, operazioni, script, controllo di alloggiamento",
-            "ja": "機械モデル：筐体、操作、スクリプト、収まりの検査",
-            "zh": "机械模型：外壳、操作、脚本、装配检查",
-            "pt": "o modelo mecânico: caixa, operações, script, verificação de encaixe"
+            "en": "the mechanical model: enclosure, operations, script, fit check, window",
+            "es": "el modelo mecánico: caja, operaciones, script, comprobación de encaje, ventana",
+            "de": "das mechanische Modell: Gehäuse, Operationen, Skript, Passprüfung, Fenster",
+            "fr": "le modèle mécanique : boîtier, opérations, script, contrôle d'ajustement, fenêtre",
+            "it": "il modello meccanico: contenitore, operazioni, script, controllo di alloggiamento, finestra",
+            "ja": "機械モデル：筐体、操作、スクリプト、収まりの検査、ウィンドウ",
+            "zh": "机械模型：外壳、操作、脚本、装配检查、窗口",
+            "pt": "o modelo mecânico: caixa, operações, script, verificação de encaixe, janela"
           }
         },
         {

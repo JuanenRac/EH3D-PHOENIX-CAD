@@ -5,20 +5,20 @@
 # <img src="images/brand/icon-64.png" alt="" width="40" height="40" align="absmiddle"> EH3D-PHOENIX-CAD
 <p align="center">🇺🇸 <b>English</b> | <a href="README_spa.md">🇪🇸 Español</a> | <a href="README_fra.md">🇫🇷 Français</a> | <a href="README_ita.md">🇮🇹 Italiano</a> | <a href="README_deu.md">🇩🇪 Deutsch</a> | <a href="README_zho.md">🇨🇳 中文</a> | <a href="README_jpn.md">🇯🇵 日本語</a> | <a href="README_por.md">🇵🇹 Português</a></p>
 
-### EH3D-PHOENIX-CAD: planned as a parametric mechanical CAD focused on the design of enclosures, chassis and heat sinks. A first model of enclosures exists as a library; nothing has been run on a machine.
+### EH3D-PHOENIX-CAD: planned as a parametric mechanical CAD focused on the design of enclosures, chassis and heat sinks. A first model of enclosures exists as a library with a window that has never been opened on a screen; nothing has been run on a machine.
 
 <p align="center">
   <img src="https://img.shields.io/badge/License-GPL%203.0--or--later-blue.svg" alt="GPL 3.0 or later">
   <img src="https://img.shields.io/badge/Stack-Markdown%20%2B%20Python-blue.svg" alt="Markdown and Python">
   <img src="https://img.shields.io/badge/Languages-8-00E5FF.svg" alt="Languages">
-  <img src="https://img.shields.io/badge/Tests-259-2EA043.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-327-2EA043.svg" alt="Tests">
   <img src="https://img.shields.io/badge/Version-0.0.3-0f6cbd.svg" alt="Version">
   <img src="https://img.shields.io/badge/Maturity-scaffolding-FFB020.svg" alt="Maturity">
 </p>
 
 ---
 
-**Honesty check - what actually runs today:** a Rust library without a window with a parametric enclosure: lengths in integer nanometres with their own range, holes in the faces (round, countersunk, counterbored, rectangular and oval), rounded and chamfered edges, parameters that are formulas with units over variables, constants and other parameters (exact fractions, checked overflow), structured change operations that report conflicts and leave the model unchanged, posts under the mounting holes of a board with a lid screwed onto them, the recipe of the box kept in the mechanical domain of the project file, an OpenSCAD-style script and a fit check against the envelope of a board. It has 256 tests of its own and they pass on a computer. It has only been tried on models made by its own tests; nothing has been drawn or run on a machine, and the STEP file it writes has only been checked for its structure, and heat sinks, sketches and assemblies are only planned.
+**Honesty check - what actually runs today:** a Rust library with a parametric enclosure: lengths in integer nanometres with their own range, holes in the faces (round, countersunk, counterbored, rectangular and oval), rounded and chamfered edges, parameters that are formulas with units over variables, constants and other parameters (exact fractions, checked overflow), structured change operations that report conflicts and leave the model unchanged, posts under the mounting holes of a board with a lid screwed onto them, the recipe of the box kept in the mechanical domain of the project file, an OpenSCAD-style script and a fit check against the envelope of a board. A window (egui, built with `--features gui`) shows the tree of the model, the properties of each item, a 3D view and a plan, and a `check` command reads a project and prints its measures, its fit and the state of every step; the logic of the window is tested without a screen. It has 324 tests of its own and they pass on a computer. It has only been tried on models made by its own tests; the window has never been opened on a screen and nothing has been run on a machine, and the STEP file it writes has only been checked for its structure, and heat sinks, sketches and assemblies are only planned.
 
 ---
 
@@ -30,7 +30,7 @@
 |---|---|
 | Version | `0.0.3` |
 | Maturity | Scaffolding |
-| Tests | 259 |
+| Tests | 327 |
 | Stack | Markdown, Python 3.10+ |
 | On real hardware | Not run on hardware yet |
 
@@ -45,14 +45,14 @@ Each line is one part of this repository and the light says how far it is today.
 | Area | State | What it means here |
 |---|---|---|
 | Repository checks | 🟡 | The repository check, the check of the pictures and the 3 tests of the base run in CI and pass. |
-| Tests | 🟡 | The 256 tests of the Rust library and the 3 of the base pass on a computer. They use only models made by the tests themselves. |
+| Tests | 🟡 | The 324 tests of the Rust library and the 3 of the base pass on a computer. They use only models made by the tests themselves. |
 | Real hardware | 🟠 | Not run on any machine or board: nothing here has been tried on hardware. |
 | Planned function | 🟠 | Partly done: a parametric enclosure with holes, posts and a screwed lid, an OpenSCAD-style script, a fit check and the recipe of the box in the project file exist, and so does a first STEP writer checked only for its structure; heat sinks, sketches and assemblies are not started. |
 | Requirements | 🟠 | 4 of 6 requirements are at prototype (the enclosure, the script, the change operations and the mechanical range), 2 are only planned and none is validated. |
 
 ## 🎯 Overview
 
-* **Planned:** EH3D-PHOENIX-CAD is meant to be a parametric mechanical CAD focused on the design of enclosures, chassis and heat sinks, as a library without a window, with a command-line interface and, when it applies, a kind of server task. The library exists with a first parametric enclosure; the command line, the server task, the STEP export and the heat sinks do not exist yet.
+* **Planned:** EH3D-PHOENIX-CAD is meant to be a parametric mechanical CAD focused on the design of enclosures, chassis and heat sinks, as a library with a window, a command-line interface and, when it applies, a kind of server task. The library exists with a first parametric enclosure, a window that shows its tree, its properties, a 3D view and a plan (never opened on a screen yet) and a `check` command; the server task, the STEP export and the heat sinks do not exist yet.
 
 ## 🧩 Role in EH3D
 
@@ -77,9 +77,17 @@ python -I tools/make_structure.py --check --readmes
 python -I -m unittest discover -s tools -p "test_*.py"
 ```
 
+To try the program (it needs Rust; the window needs `--features gui`):
+
+```bash
+cargo run -p eh3d-phoenix-cad -- check crates/eh3d-phoenix-cad/examples/box.phoenixproj
+cargo run --release -p eh3d-phoenix-cad --features gui -- crates/eh3d-phoenix-cad/examples/box.phoenixproj
+cargo run --release -p eh3d-phoenix-cad --features gui -- gui crates/eh3d-phoenix-cad/examples/box.phoenixproj --shot box.png
+```
+
 ## 🧪 Testing
 
-The Rust library has 256 tests (`cargo test`) and the base has 3 (`python -I -m unittest discover -s tools -p "test_*.py"`); all pass on a computer. The CI runs the repository check, the check of the pictures, the tests of the base and, for the Rust code, the format check, clippy with warnings as errors and the tests on Linux and Windows.
+The Rust library has 324 tests (`cargo test`) and the base has 3 (`python -I -m unittest discover -s tools -p "test_*.py"`); all pass on a computer. The CI runs the repository check, the check of the pictures, the tests of the base and, for the Rust code, the format check, clippy with warnings as errors and the tests on Linux and Windows, and it also lints the window with clippy (`--features gui`).
 
 ## 🏗️ Build & Release
 
@@ -107,7 +115,7 @@ EH3D-PHOENIX-CAD/
 │   ├── PROJECT_DOMAIN.md                        the recipe of the box in the project file
 │   └── adr/                                     the accepted decision records
 ├── Cargo.toml Cargo.lock                        the Rust workspace and its locked dependencies
-├── crates/                                      the mechanical model: enclosure, operations, script, fit check
+├── crates/                                      the mechanical model: enclosure, operations, script, fit check, window
 ├── AGENTS.md                                    rules for anyone who changes the repository
 ├── tools/                                       the repository check, its tests and the picture tools
 ├── images/                                      banner and the Architecture and Repository Structure pictures

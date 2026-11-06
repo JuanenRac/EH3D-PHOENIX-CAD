@@ -5,20 +5,20 @@
 # <img src="images/brand/icon-64.png" alt="" width="40" height="40" align="absmiddle"> EH3D-PHOENIX-CAD
 <p align="center"><a href="README.md">🇺🇸 English</a> | <a href="README_spa.md">🇪🇸 Español</a> | <a href="README_fra.md">🇫🇷 Français</a> | <a href="README_ita.md">🇮🇹 Italiano</a> | 🇩🇪 <b>Deutsch</b> | <a href="README_zho.md">🇨🇳 中文</a> | <a href="README_jpn.md">🇯🇵 日本語</a> | <a href="README_por.md">🇵🇹 Português</a></p>
 
-### EH3D-PHOENIX-CAD: geplant als ein parametrisches mechanisches CAD für den Entwurf von Gehäusen, Chassis und Kühlkörpern. Ein erstes Modell für Gehäuse existiert als Bibliothek; nichts wurde auf einer Maschine ausgeführt.
+### EH3D-PHOENIX-CAD: geplant als ein parametrisches mechanisches CAD für den Entwurf von Gehäusen, Chassis und Kühlkörpern. Ein erstes Modell für Gehäuse existiert als Bibliothek mit einem Fenster, das noch nie auf einem Bildschirm geöffnet wurde; nichts wurde auf einer Maschine ausgeführt.
 
 <p align="center">
   <img src="https://img.shields.io/badge/License-GPL%203.0--or--later-blue.svg" alt="GPL 3.0 or later">
   <img src="https://img.shields.io/badge/Stack-Markdown%20%2B%20Python-blue.svg" alt="Markdown and Python">
   <img src="https://img.shields.io/badge/Languages-8-00E5FF.svg" alt="Languages">
-  <img src="https://img.shields.io/badge/Tests-259-2EA043.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-327-2EA043.svg" alt="Tests">
   <img src="https://img.shields.io/badge/Version-0.0.3-0f6cbd.svg" alt="Version">
   <img src="https://img.shields.io/badge/Maturity-scaffolding-FFB020.svg" alt="Maturity">
 </p>
 
 ---
 
-**Ehrlichkeitscheck - was heute tatsächlich läuft:** eine Rust-Bibliothek ohne Fenster mit einem parametrischen Gehäuse: Längen in ganzzahligen Nanometern mit eigenem Bereich, Löcher in den Flächen (rund, gesenkt, mit Senkung für den Kopf, rechteckig und oval), abgerundete und angefaste Kanten, Parameter als Formeln mit Einheiten über Variablen, Konstanten und andere Parameter (exakte Brüche, geprüfter Überlauf), strukturierte Änderungsoperationen, die Konflikte melden und das Modell unverändert lassen, Pfosten unter den Montagelöchern einer Platine mit einem daran verschraubten Deckel, das Rezept des Gehäuses im mechanischen Bereich der Projektdatei, ein Skript im OpenSCAD-Stil und eine Passprüfung gegen die Hüllgröße einer Platine. Sie hat 256 eigene Tests, die auf einem Computer bestehen. Sie wurde nur mit Modellen aus ihren eigenen Tests erprobt; nichts wurde gezeichnet oder auf einer Maschine ausgeführt, und die STEP-Datei, die sie schreibt, wurde nur auf ihre Struktur geprüft, und Kühlkörper, Skizzen und Baugruppen sind nur geplant.
+**Ehrlichkeitscheck - was heute tatsächlich läuft:** eine Rust-Bibliothek mit einem parametrischen Gehäuse: Längen in ganzzahligen Nanometern mit eigenem Bereich, Löcher in den Flächen (rund, gesenkt, mit Senkung für den Kopf, rechteckig und oval), abgerundete und angefaste Kanten, Parameter als Formeln mit Einheiten über Variablen, Konstanten und andere Parameter (exakte Brüche, geprüfter Überlauf), strukturierte Änderungsoperationen, die Konflikte melden und das Modell unverändert lassen, Pfosten unter den Montagelöchern einer Platine mit einem daran verschraubten Deckel, das Rezept des Gehäuses im mechanischen Bereich der Projektdatei, ein Skript im OpenSCAD-Stil und eine Passprüfung gegen die Hüllgröße einer Platine. Ein Fenster (egui, mit `--features gui`) zeigt den Baum des Modells, die Eigenschaften jedes Elements, eine 3D-Ansicht und eine Draufsicht, und ein Befehl `check` liest ein Projekt und gibt seine Maße, die Passung und den Zustand jedes Schritts aus; die Logik des Fensters wird ohne Bildschirm getestet. Sie hat 324 eigene Tests, die auf einem Computer bestehen. Sie wurde nur mit Modellen aus ihren eigenen Tests erprobt; das Fenster wurde noch nie auf einem Bildschirm geöffnet und nichts wurde auf einer Maschine ausgeführt, und die STEP-Datei, die sie schreibt, wurde nur auf ihre Struktur geprüft, und Kühlkörper, Skizzen und Baugruppen sind nur geplant.
 
 ---
 
@@ -30,7 +30,7 @@
 |---|---|
 | Version | `0.0.3` |
 | Reifegrad | Gerüst |
-| Tests | 259 |
+| Tests | 327 |
 | Technologie-Stack | Markdown, Python 3.10+ |
 | Auf echter Hardware | Noch nicht auf Hardware ausgeführt |
 
@@ -45,14 +45,14 @@ Jede Zeile ist ein Teil dieses Repositorys, und die Ampel sagt, wie weit er heut
 | Bereich | Stand | Was das hier bedeutet |
 |---|---|---|
 | Repository-Prüfungen | 🟡 | Die Repository-Prüfung, die Prüfung der Bilder und die 3 Tests der Basis laufen in der CI und bestehen. |
-| Tests | 🟡 | Die 256 Tests der Rust-Bibliothek und die 3 der Basis bestehen auf einem Computer. Sie nutzen nur Modelle, die die Tests selbst erzeugen. |
+| Tests | 🟡 | Die 324 Tests der Rust-Bibliothek und die 3 der Basis bestehen auf einem Computer. Sie nutzen nur Modelle, die die Tests selbst erzeugen. |
 | Echte Hardware | 🟠 | Auf keiner Maschine und keiner Platine ausgeführt: nichts hier wurde auf Hardware ausprobiert. |
 | Geplante Funktion | 🟠 | Teilweise fertig: ein parametrisches Gehäuse mit Löchern, Pfosten und einem verschraubten Deckel, ein Skript im OpenSCAD-Stil, eine Passprüfung und das Rezept des Gehäuses in der Projektdatei existieren, dazu ein erster STEP-Schreiber, nur auf seine Struktur geprüft; Kühlkörper, Skizzen und Baugruppen sind nicht begonnen. |
 | Anforderungen | 🟠 | 4 von 6 Anforderungen sind als Prototyp (Gehäuse, Skript, Änderungsoperationen und mechanischer Bereich), 2 nur geplant und keine ist validiert. |
 
 ## 🎯 Überblick
 
-* **Geplant:** EH3D-PHOENIX-CAD soll ein parametrisches mechanisches CAD für den Entwurf von Gehäusen, Chassis und Kühlkörpern werden, als Bibliothek ohne Fenster, mit Kommandozeile und, wo es passt, einer Art Serveraufgabe. Die Bibliothek existiert mit einem ersten parametrischen Gehäuse; die Kommandozeile, die Serveraufgabe, der STEP-Export und die Kühlkörper gibt es noch nicht.
+* **Geplant:** EH3D-PHOENIX-CAD soll ein parametrisches mechanisches CAD für den Entwurf von Gehäusen, Chassis und Kühlkörpern werden, als Bibliothek mit Fenster, mit Kommandozeile und, wo es passt, einer Art Serveraufgabe. Die Bibliothek existiert mit einem ersten parametrischen Gehäuse, einem Fenster, das Baum, Eigenschaften, eine 3D-Ansicht und eine Draufsicht zeigt (noch nie auf einem Bildschirm geöffnet), und einem Befehl `check`; die Serveraufgabe, der STEP-Export und die Kühlkörper gibt es noch nicht.
 
 ## 🧩 Rolle in EH3D
 
@@ -77,9 +77,17 @@ python -I tools/make_structure.py --check --readmes
 python -I -m unittest discover -s tools -p "test_*.py"
 ```
 
+Zum Ausprobieren des Programms (es braucht Rust; das Fenster braucht `--features gui`):
+
+```bash
+cargo run -p eh3d-phoenix-cad -- check crates/eh3d-phoenix-cad/examples/box.phoenixproj
+cargo run --release -p eh3d-phoenix-cad --features gui -- crates/eh3d-phoenix-cad/examples/box.phoenixproj
+cargo run --release -p eh3d-phoenix-cad --features gui -- gui crates/eh3d-phoenix-cad/examples/box.phoenixproj --shot box.png
+```
+
 ## 🧪 Tests
 
-Die Rust-Bibliothek hat 256 Tests (`cargo test`) und die Basis hat 3 (`python -I -m unittest discover -s tools -p "test_*.py"`); alle bestehen auf einem Computer. Die CI führt die Repository-Prüfung, die Prüfung der Bilder, die Tests der Basis und für den Rust-Code die Formatprüfung, clippy mit Warnungen als Fehlern und die Tests unter Linux und Windows aus.
+Die Rust-Bibliothek hat 324 Tests (`cargo test`) und die Basis hat 3 (`python -I -m unittest discover -s tools -p "test_*.py"`); alle bestehen auf einem Computer. Die CI führt die Repository-Prüfung, die Prüfung der Bilder, die Tests der Basis und für den Rust-Code die Formatprüfung, clippy mit Warnungen als Fehlern und die Tests unter Linux und Windows aus und prüft außerdem das Fenster mit clippy (`--features gui`).
 
 ## 🏗️ Build und Veröffentlichung
 
@@ -107,7 +115,7 @@ EH3D-PHOENIX-CAD/
 │   ├── PROJECT_DOMAIN.md                        das Rezept des Gehäuses in der Projektdatei
 │   └── adr/                                     die angenommenen Entscheidungsprotokolle
 ├── Cargo.toml Cargo.lock                        der Rust-Workspace und seine festgelegten Abhängigkeiten
-├── crates/                                      das mechanische Modell: Gehäuse, Operationen, Skript, Passprüfung
+├── crates/                                      das mechanische Modell: Gehäuse, Operationen, Skript, Passprüfung, Fenster
 ├── AGENTS.md                                    Regeln für alle, die das Repository ändern
 ├── tools/                                       die Repository-Prüfung, ihre Tests und die Bild-Werkzeuge
 ├── images/                                      Banner und die Bilder von Architektur und Repository-Struktur

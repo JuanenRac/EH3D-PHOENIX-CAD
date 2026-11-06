@@ -24,9 +24,9 @@ Mechanical design for the PHOENIX family: parametric enclosures, chassis and hea
 
 ## Planned shape
 
-A library without a window, written in Rust (planned), with a command-line interface and, where it applies, a kind of task for the server. Programs of the suite exchange work through project files or through the server, never by depending on each other.
+A library written in Rust with a window and a command-line interface and, where it applies, a kind of task for the server. Programs of the suite exchange work through project files or through the server, never by depending on each other.
 
-The first crate is `eh3d-phoenix-cad` (lengths with their own range, the enclosure, the operations, the script and the fit check). The command-line interface, the server task, the STEP export and the heat sinks are not written; the other crates will be decided together with their code.
+The first crate is `eh3d-phoenix-cad` (lengths with their own range, the enclosure, the operations, the script and the fit check). The program of the same crate has a window (the model tree, the properties, a 3D view and a plan, built with `--features gui`) and the commands `check` and `config`. The server task and the heat sinks are not written; the other crates will be decided together with their code.
 
 ## Where it sits
 
