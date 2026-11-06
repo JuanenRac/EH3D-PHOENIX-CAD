@@ -25,6 +25,7 @@
 //! * [`mechanical`]: the mechanical domain of the project file: the recipe of steps, the parameters and expressions, and the interface of the board, read again to the same enclosure, with a migration from the domain of the parameters;
 //! * [`messages`]: the text of every diagnostic in the eight languages of the suite;
 //! * [`fit`]: whether an envelope (the outline of a board and its tallest part) fits inside;
+//! * [`sketch`]: the 2D sketch on a face of the box: points, lines, circles, arcs, polylines and rectangles, geometric and dimensional constraints (a dimension may be an expression over the variables), a numeric solver that reports the degrees of freedom left, the constraints that repeat or contradict each other, or that it did not converge, its settings file, and the sketch file kept next to the project;
 //! * [`window`], [`scene`], [`history`], [`uiconfig`], [`lang`], [`shot`] and [`browse`]: the state of the window (the tree of the model, the properties, the
 //!   views, the history of the changes), the lines it draws, its settings, its texts in the eight languages, the picture mode and the list of files; the window itself is
 //!   `gui` (built with `--features gui`).
@@ -81,6 +82,7 @@ pub mod project;
 pub mod scad;
 pub mod scene;
 pub mod shot;
+pub mod sketch;
 pub mod step;
 pub mod store;
 pub mod uiconfig;
