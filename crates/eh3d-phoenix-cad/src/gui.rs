@@ -7,7 +7,13 @@ use crate::browse::{self, Browser};
 use crate::config::Settings;
 use crate::lang::{Lang, Msg};
 use crate::scene::{Kind, Line2};
-use crate::shot::{ShotRequest, ShotTheme, PATIENCE_FRAMES};
+use crate::shot::{ShotRequest, ShotTheme, StartView, PATIENCE_FRAMES};
+use crate::sketch::file as sketch_file;
+use crate::sketch::settings::SketchSettings;
+use crate::sketch_ui::{
+    ConstraintTool, DimTool, Prim, RowMark, SketchEditor, SketchUiSettings, Stroke as SketchStroke,
+    Tone, Tool,
+};
 use crate::uiconfig::UiSettings;
 use crate::window::{
     error_text, Input, Mark, NewStep, Selection, ViewKind, Window, PROJECT_EXTENSIONS,
@@ -34,6 +40,9 @@ const HOLE: Color32 = Color32::from_rgb(0x4c, 0xc9, 0xf0);
 const SCREW: Color32 = Color32::from_rgb(0xb4, 0x8c, 0xf0);
 const POST: Color32 = Color32::from_rgb(0xf0, 0x8a, 0x4c);
 
+/// The extensions of the sketch files that the window opens and writes.
+const SKETCH_EXTENSIONS: [&str; 1] = [sketch_file::EXTENSION];
+
 enum Outcome {
     Cancel,
     Pick(PathBuf),
@@ -44,10 +53,21 @@ struct Dialog {
     browser: Browser,
     /// The name being typed when the window asks for a file to write.
     save: Option<String>,
+    /// Whether the files are sketches (otherwise they are projects).
+    sketch: bool,
 }
 
 struct App {
     win: Window,
+    /// The sketch.
+    sketch: SketchEditor,
+    /// The part of the window that shows.
+    workspace: StartView,
+    /// Whether the sketch is to be fitted to the canvas as soon as the canvas has its size.
+    fit_next: bool,
+    /// The text being typed in the value of each dimension of the sketch, by the number of the
+    /// constraint.
+    dim_edits: HashMap<u32, String>,
     /// The picture mode, while the window is there only to be photographed.
     shot: Option<ShotState>,
     dialog: Option<Dialog>,
@@ -59,9 +79,13 @@ struct App {
 }
 
 impl App {
-    fn new(win: Window) -> App {
+    fn new(win: Window, sketch: SketchEditor, workspace: StartView) -> App {
         App {
             win,
+            fit_next: !sketch.sketch.elements().is_empty(),
+            sketch,
+            workspace,
+            dim_edits: HashMap::new(),
             shot: None,
             dialog: None,
             var_edits: HashMap::new(),
@@ -83,6 +107,7 @@ impl App {
         self.dialog = Some(Dialog {
             browser: Browser::new(self.folder(), &PROJECT_EXTENSIONS),
             save: None,
+            sketch: false,
         });
     }
 
@@ -96,6 +121,7 @@ impl App {
         self.dialog = Some(Dialog {
             browser: Browser::new(self.folder(), &PROJECT_EXTENSIONS),
             save: Some(name),
+            sketch: false,
         });
     }
 
@@ -109,6 +135,13 @@ impl App {
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
+        match self.workspace {
+            StartView::Model => self.model_top_bar(ui),
+            StartView::Sketch => self.sketch_top_bar(ui),
+        }
+    }
+
+    fn model_top_bar(&mut self, ui: &mut egui::Ui) {
         let lang = self.win.lang;
         egui::Panel::top("top").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -118,6 +151,8 @@ impl App {
                         .size(18.0)
                         .color(ACCENT),
                 );
+                ui.separator();
+                self.workspace_switch(ui);
                 ui.separator();
                 if ui.button(Msg::New.tr(lang)).clicked() {
                     self.win.new_project();
@@ -592,10 +627,15 @@ impl App {
             None => self.dialog = Some(dialog),
             Some(Outcome::Cancel) => {}
             Some(Outcome::Pick(path)) => {
-                let done = if dialog.save.is_some() {
-                    self.win.save_to(&path)
-                } else {
-                    self.win.open(&path)
+                let done = match (dialog.sketch, dialog.save.is_some()) {
+                    (false, true) => self.win.save_to(&path),
+                    (false, false) => self.win.open(&path),
+                    (true, true) => self.sketch.save_to(&path),
+                    (true, false) => {
+                        let opened = self.sketch.open_file(&path);
+                        self.fit_next = opened;
+                        opened
+                    }
                 };
                 if !done {
                     // the window stays open so that another name can be tried
@@ -639,10 +679,16 @@ fn style_of(line: &Line2, board: Color32) -> (Color32, f32) {
 fn show_dialog(ctx: &egui::Context, d: &mut Dialog, lang: Lang) -> Option<Outcome> {
     let mut outcome = None;
     let mut open = true;
-    let title = if d.save.is_some() {
-        Msg::SaveTitle
+    let title = match (d.sketch, d.save.is_some()) {
+        (false, true) => Msg::SaveTitle,
+        (false, false) => Msg::OpenTitle,
+        (true, true) => Msg::SaveSketchTitle,
+        (true, false) => Msg::OpenSketchTitle,
+    };
+    let extensions: &[&str] = if d.sketch {
+        &SKETCH_EXTENSIONS
     } else {
-        Msg::OpenTitle
+        &PROJECT_EXTENSIONS
     };
     egui::Window::new(title.tr(lang))
         .open(&mut open)
@@ -703,7 +749,9 @@ fn show_dialog(ctx: &egui::Context, d: &mut Dialog, lang: Lang) -> Option<Outcom
                     ui.label(Msg::FileName.tr(lang));
                     ui.add(egui::TextEdit::singleline(name).desired_width(260.0));
                     if ui.button(Msg::Save.tr(lang)).clicked() && !name.trim().is_empty() {
-                        outcome = Some(Outcome::Pick(d.browser.dir.join(with_extension(name))));
+                        outcome = Some(Outcome::Pick(
+                            d.browser.dir.join(with_extension_of(name, extensions)),
+                        ));
                     }
                 }
                 if ui.button(Msg::Cancel.tr(lang)).clicked() {
@@ -717,13 +765,775 @@ fn show_dialog(ctx: &egui::Context, d: &mut Dialog, lang: Lang) -> Option<Outcom
     outcome
 }
 
-/// A file name typed to save a project: it gets the extension of the projects when it has none.
-fn with_extension(name: &str) -> String {
+/// A file name typed to save a file: it gets the first of the extensions when it has none of them.
+fn with_extension_of(name: &str, extensions: &[&str]) -> String {
     let name = name.trim();
-    if browse::matches_extension(name, &PROJECT_EXTENSIONS) {
+    if browse::matches_extension(name, extensions) {
         name.to_string()
     } else {
-        format!("{name}.{}", PROJECT_EXTENSIONS[0])
+        format!("{name}.{}", extensions[0])
+    }
+}
+
+// the colours of the sketch
+const GRID_MINOR: Color32 = Color32::from_rgba_premultiplied(14, 10, 0, 14);
+const GRID_MAJOR: Color32 = Color32::from_rgba_premultiplied(34, 23, 0, 34);
+const AXIS: Color32 = Color32::from_rgba_premultiplied(120, 83, 0, 120);
+const PREVIEW: Color32 = Color32::from_rgba_premultiplied(60, 158, 188, 200);
+
+/// The colour and the width of a primitive of the sketch.
+fn sketch_style(stroke: SketchStroke) -> (Color32, f32) {
+    match stroke {
+        SketchStroke::GridMinor => (GRID_MINOR, 1.0),
+        SketchStroke::GridMajor => (GRID_MAJOR, 1.0),
+        SketchStroke::Axis => (AXIS, 1.3),
+        SketchStroke::Normal => (OUTER, 1.8),
+        SketchStroke::Construction => (HOLE, 1.2),
+        SketchStroke::Selected => (ACCENT, 2.8),
+        SketchStroke::Related => (HOLE, 2.6),
+        SketchStroke::Conflict => (DANGER, 2.6),
+        SketchStroke::Redundant => (POST, 2.6),
+        SketchStroke::Preview => (PREVIEW, 1.4),
+        SketchStroke::Dimension => (DIM, 1.0),
+        SketchStroke::Marker => (SCREW, 1.0),
+    }
+}
+
+/// The colour of the indicator of the state of the sketch.
+fn tone_colour(tone: Tone) -> Color32 {
+    match tone {
+        Tone::Green => OK,
+        Tone::Amber => ACCENT,
+        Tone::Red => DANGER,
+    }
+}
+
+/// Draws the primitives of the sketch on a canvas whose upper left corner is `rect.min`.
+fn paint_sketch(painter: &egui::Painter, rect: Rect, prims: &[Prim]) {
+    let at = |p: (f64, f64)| Pos2::new(rect.min.x + p.0 as f32, rect.min.y + p.1 as f32);
+    for prim in prims {
+        match prim {
+            Prim::Segment { a, b, stroke } => {
+                let (colour, width) = sketch_style(*stroke);
+                let points = [at(*a), at(*b)];
+                if *stroke == SketchStroke::Construction {
+                    painter.extend(egui::Shape::dashed_line(
+                        &points,
+                        Stroke::new(width, colour),
+                        6.0,
+                        4.0,
+                    ));
+                } else {
+                    painter.line_segment(points, Stroke::new(width, colour));
+                }
+            }
+            Prim::Polyline { points, stroke } => {
+                let (colour, width) = sketch_style(*stroke);
+                let points: Vec<Pos2> = points.iter().map(|p| at(*p)).collect();
+                if *stroke == SketchStroke::Construction {
+                    painter.extend(egui::Shape::dashed_line(
+                        &points,
+                        Stroke::new(width, colour),
+                        6.0,
+                        4.0,
+                    ));
+                } else {
+                    painter.add(egui::Shape::line(points, Stroke::new(width, colour)));
+                }
+            }
+            Prim::Dot { at: p, stroke } => {
+                let (colour, _) = sketch_style(*stroke);
+                let radius = match stroke {
+                    SketchStroke::Normal => 3.0,
+                    SketchStroke::Selected => 5.0,
+                    _ => 4.0,
+                };
+                painter.circle_filled(at(*p), radius, colour);
+            }
+            Prim::Ring { at: p, stroke } => {
+                let (colour, width) = sketch_style(*stroke);
+                painter.circle_stroke(at(*p), 8.0, Stroke::new(width, colour));
+            }
+            Prim::Text {
+                at: p,
+                text,
+                stroke,
+            } => {
+                let (colour, _) = sketch_style(*stroke);
+                painter.text(
+                    at(*p),
+                    egui::Align2::CENTER_CENTER,
+                    text,
+                    egui::FontId::proportional(12.0),
+                    colour,
+                );
+            }
+        }
+    }
+}
+
+/// What the person chose in the menu of the canvas.
+enum Chosen {
+    Constraint(ConstraintTool),
+    Dimension(DimTool),
+}
+
+impl App {
+    fn sketch_folder(&self) -> PathBuf {
+        self.sketch
+            .path
+            .as_ref()
+            .or(self.win.path.as_ref())
+            .and_then(|p| p.parent().map(Path::to_path_buf))
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(browse::start_dir)
+    }
+
+    fn open_sketch_dialog(&mut self) {
+        self.dialog = Some(Dialog {
+            browser: Browser::new(self.sketch_folder(), &SKETCH_EXTENSIONS),
+            save: None,
+            sketch: true,
+        });
+    }
+
+    fn save_sketch_dialog(&mut self) {
+        let name = self
+            .sketch
+            .path
+            .clone()
+            .or_else(|| self.win.path.as_deref().map(sketch_file::sibling_path))
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| format!("sketch.{}", SKETCH_EXTENSIONS[0]));
+        self.dialog = Some(Dialog {
+            browser: Browser::new(self.sketch_folder(), &SKETCH_EXTENSIONS),
+            save: Some(name),
+            sketch: true,
+        });
+    }
+
+    /// Saves to the file the sketch has, or asks for a name when it has none.
+    fn save_sketch_or_ask(&mut self) {
+        if self.sketch.path.is_none() {
+            self.save_sketch_dialog();
+        } else {
+            self.sketch.save();
+        }
+    }
+
+    fn workspace_switch(&mut self, ui: &mut egui::Ui) {
+        let lang = self.win.lang;
+        ui.selectable_value(
+            &mut self.workspace,
+            StartView::Model,
+            Msg::GroupBox.tr(lang),
+        );
+        ui.selectable_value(
+            &mut self.workspace,
+            StartView::Sketch,
+            Msg::WorkspaceSketch.tr(lang),
+        );
+    }
+
+    fn sketch_top_bar(&mut self, ui: &mut egui::Ui) {
+        let lang = self.win.lang;
+        egui::Panel::top("top").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("EH3D-PHOENIX-CAD")
+                        .strong()
+                        .size(18.0)
+                        .color(ACCENT),
+                );
+                ui.separator();
+                self.workspace_switch(ui);
+                ui.separator();
+                if ui.button(Msg::New.tr(lang)).clicked() {
+                    self.sketch.new_sketch();
+                }
+                if ui.button(Msg::Open.tr(lang)).clicked() {
+                    self.open_sketch_dialog();
+                }
+                if ui.button(Msg::Save.tr(lang)).clicked() {
+                    self.save_sketch_or_ask();
+                }
+                if ui.button(Msg::SaveAs.tr(lang)).clicked() {
+                    self.save_sketch_dialog();
+                }
+                ui.separator();
+                if ui
+                    .add_enabled(
+                        self.sketch.can_undo(),
+                        egui::Button::new(Msg::Undo.tr(lang)),
+                    )
+                    .clicked()
+                {
+                    self.sketch.undo();
+                }
+                if ui
+                    .add_enabled(
+                        self.sketch.can_redo(),
+                        egui::Button::new(Msg::Redo.tr(lang)),
+                    )
+                    .clicked()
+                {
+                    self.sketch.redo();
+                }
+                if ui.button(Msg::FitView.tr(lang)).clicked() {
+                    self.sketch.fit();
+                }
+                ui.separator();
+                let name = self
+                    .sketch
+                    .path
+                    .as_ref()
+                    .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                    .unwrap_or_default();
+                ui.label(egui::RichText::new(name).color(TEXT));
+                if self.sketch.dirty {
+                    ui.label(egui::RichText::new(Msg::Unsaved.tr(lang)).color(ACCENT));
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    egui::ComboBox::from_id_salt("language")
+                        .selected_text(self.win.lang.name())
+                        .show_ui(ui, |ui| {
+                            for l in Lang::ALL {
+                                ui.selectable_value(&mut self.win.lang, l, l.name());
+                            }
+                        });
+                    ui.label(egui::RichText::new(Msg::Language.tr(lang)).color(DIM));
+                });
+            });
+        });
+    }
+
+    fn sketch_tools_bar(&mut self, ui: &mut egui::Ui) {
+        let lang = self.win.lang;
+        egui::Panel::top("sketch_tools").show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new(Msg::ToolsTitle.tr(lang))
+                        .strong()
+                        .color(ACCENT),
+                );
+                for tool in Tool::ALL {
+                    let on = self.sketch.tool == tool;
+                    if ui.selectable_label(on, tool.msg().tr(lang)).clicked() {
+                        self.sketch.set_tool(tool);
+                    }
+                }
+                ui.separator();
+                ui.checkbox(
+                    &mut self.sketch.construction_mode,
+                    Msg::ConstructionMode.tr(lang),
+                );
+                ui.checkbox(&mut self.sketch.grid_snap, Msg::GridSnap.tr(lang));
+                ui.checkbox(
+                    &mut self.sketch.auto_constraints,
+                    Msg::AutoConstraints.tr(lang),
+                );
+                ui.separator();
+                let has_elements = !self.sketch.picked.elements.is_empty();
+                if ui
+                    .add_enabled(
+                        has_elements,
+                        egui::Button::new(Msg::ToggleConstruction.tr(lang)),
+                    )
+                    .clicked()
+                {
+                    self.sketch.toggle_construction();
+                }
+                let has_any = !self.sketch.picked.is_empty();
+                if ui
+                    .add_enabled(has_any, egui::Button::new(Msg::DeleteSelection.tr(lang)))
+                    .clicked()
+                {
+                    self.sketch.delete_selection();
+                }
+            });
+        });
+    }
+
+    /// The constraints that tie the geometry, the buttons that add one to the selection and the
+    /// elements of the sketch.
+    fn sketch_constraints_panel(&mut self, ui: &mut egui::Ui) {
+        let lang = self.win.lang;
+        egui::Panel::left("sketch_constraints")
+            .default_size(280.0)
+            .show(ui, |ui| {
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(Msg::ConstraintsTitle.tr(lang))
+                        .strong()
+                        .color(ACCENT),
+                );
+                ui.label(egui::RichText::new(Msg::AddConstraintHint.tr(lang)).color(DIM));
+                let available = self.sketch.available();
+                let mut add = None;
+                ui.horizontal_wrapped(|ui| {
+                    for tool in ConstraintTool::ALL {
+                        let enabled = available.contains(&tool);
+                        if ui
+                            .add_enabled(enabled, egui::Button::new(tool.msg().tr(lang)))
+                            .clicked()
+                        {
+                            add = Some(tool);
+                        }
+                    }
+                });
+                if let Some(tool) = add {
+                    self.sketch.add_constraint(tool);
+                }
+                ui.separator();
+                let extend = ui.input(|i| i.modifiers.command);
+                let rows: Vec<_> = self
+                    .sketch
+                    .constraint_rows()
+                    .into_iter()
+                    .filter(|r| r.value.is_none())
+                    .collect();
+                let mut toggled = None;
+                let mut picked = None;
+                let mut removed = None;
+                egui::ScrollArea::vertical()
+                    .id_salt("sketch_constraint_rows")
+                    .max_height(ui.available_height() * 0.55)
+                    .show(ui, |ui| {
+                        if rows.is_empty() {
+                            ui.label(egui::RichText::new(Msg::NoConstraints.tr(lang)).color(DIM));
+                        }
+                        for row in &rows {
+                            ui.horizontal(|ui| {
+                                let mut on = row.enabled;
+                                if ui
+                                    .checkbox(&mut on, "")
+                                    .on_hover_text(Msg::ConstraintEnabled.tr(lang))
+                                    .changed()
+                                {
+                                    toggled = Some((row.id, on));
+                                }
+                                let colour = match (row.enabled, row.mark) {
+                                    (false, _) => DIM,
+                                    (true, RowMark::Ok) => TEXT,
+                                    (true, RowMark::Redundant) => POST,
+                                    (true, RowMark::Conflict) => DANGER,
+                                };
+                                let text = egui::RichText::new(format!(
+                                    "{}  {}  {}",
+                                    row.id,
+                                    row.label.tr(lang),
+                                    row.elements
+                                ))
+                                .color(colour);
+                                if ui.selectable_label(row.selected, text).clicked() {
+                                    picked = Some(row.id);
+                                }
+                                if ui.small_button("x").clicked() {
+                                    removed = Some(row.id);
+                                }
+                            });
+                        }
+                    });
+                if let Some((id, on)) = toggled {
+                    self.sketch.set_enabled(id, on);
+                }
+                if let Some(id) = picked {
+                    self.sketch.select_constraint(id, extend);
+                }
+                if let Some(id) = removed {
+                    self.sketch.select_constraint(id, false);
+                    self.sketch.delete_selection();
+                }
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(Msg::ElementsTitle.tr(lang))
+                        .strong()
+                        .color(ACCENT),
+                );
+                let mut chosen = None;
+                egui::ScrollArea::vertical()
+                    .id_salt("sketch_element_rows")
+                    .show(ui, |ui| {
+                        for row in self.sketch.element_rows() {
+                            let marker = if row.construction { " *" } else { "" };
+                            let text = egui::RichText::new(format!(
+                                "{}  {}  {}{marker}",
+                                row.id,
+                                row.label.tr(lang),
+                                row.detail
+                            ))
+                            .color(if row.construction {
+                                HOLE
+                            } else {
+                                TEXT
+                            });
+                            if ui.selectable_label(row.selected, text).clicked() {
+                                chosen = Some(row.id);
+                            }
+                        }
+                    });
+                if let Some(id) = chosen {
+                    self.sketch.select_element(id, extend);
+                }
+            });
+    }
+
+    /// The dimensions: the value (or variable) to type, the buttons that add one to the selection
+    /// and the dimensions of the sketch with their values to edit.
+    fn sketch_dimensions_panel(&mut self, ui: &mut egui::Ui) {
+        let lang = self.win.lang;
+        egui::Panel::right("sketch_dimensions")
+            .default_size(300.0)
+            .show(ui, |ui| {
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(Msg::DimensionsTitle.tr(lang))
+                        .strong()
+                        .color(ACCENT),
+                );
+                ui.label(egui::RichText::new(Msg::DimensionsHint.tr(lang)).color(DIM));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.sketch.dim_input)
+                        .hint_text(Msg::DimValueHint.tr(lang))
+                        .desired_width(f32::INFINITY),
+                );
+                let names: Vec<String> = self
+                    .win
+                    .mech
+                    .vars
+                    .names()
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect();
+                if !names.is_empty() {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}: {}",
+                            Msg::GroupVariables.tr(lang),
+                            names.join(", ")
+                        ))
+                        .color(DIM),
+                    );
+                }
+                let available = self.sketch.dimensions_available();
+                let mut add = None;
+                ui.horizontal_wrapped(|ui| {
+                    for tool in DimTool::ALL {
+                        let enabled = available.contains(&tool);
+                        if ui
+                            .add_enabled(enabled, egui::Button::new(tool.msg().tr(lang)))
+                            .clicked()
+                        {
+                            add = Some(tool);
+                        }
+                    }
+                });
+                if let Some(tool) = add {
+                    self.sketch.add_dimension(tool);
+                }
+                let extend = ui.input(|i| i.modifiers.command);
+                let rows: Vec<_> = self
+                    .sketch
+                    .constraint_rows()
+                    .into_iter()
+                    .filter(|r| r.value.is_some())
+                    .collect();
+                let mut edited = None;
+                let mut toggled = None;
+                let mut picked = None;
+                let mut removed = None;
+                egui::ScrollArea::vertical()
+                    .id_salt("sketch_dimension_rows")
+                    .show(ui, |ui| {
+                        for row in &rows {
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                let mut on = row.enabled;
+                                if ui
+                                    .checkbox(&mut on, "")
+                                    .on_hover_text(Msg::ConstraintEnabled.tr(lang))
+                                    .changed()
+                                {
+                                    toggled = Some((row.id, on));
+                                }
+                                let colour = match (row.enabled, row.mark) {
+                                    (false, _) => DIM,
+                                    (true, RowMark::Ok) => TEXT,
+                                    (true, RowMark::Redundant) => POST,
+                                    (true, RowMark::Conflict) => DANGER,
+                                };
+                                let text = egui::RichText::new(format!(
+                                    "{}  {}  {}",
+                                    row.id,
+                                    row.label.tr(lang),
+                                    row.elements
+                                ))
+                                .color(colour);
+                                if ui.selectable_label(row.selected, text).clicked() {
+                                    picked = Some(row.id);
+                                }
+                                if ui.small_button("x").clicked() {
+                                    removed = Some(row.id);
+                                }
+                            });
+                            let shown = row.edit.clone().unwrap_or_default();
+                            let mut text = self
+                                .dim_edits
+                                .remove(&row.id.0)
+                                .unwrap_or_else(|| shown.clone());
+                            ui.horizontal(|ui| {
+                                let edit =
+                                    egui::TextEdit::singleline(&mut text).desired_width(170.0);
+                                let response = ui.add_enabled(row.enabled, edit);
+                                if response.lost_focus() && text != shown {
+                                    edited = Some((row.id, text.clone()));
+                                }
+                                if !response.has_focus() {
+                                    text.clone_from(&shown);
+                                }
+                                let value = row.value.clone().unwrap_or_default();
+                                ui.label(egui::RichText::new(format!("= {value}")).color(DIM));
+                            });
+                            self.dim_edits.insert(row.id.0, text);
+                        }
+                    });
+                if let Some((id, on)) = toggled {
+                    self.sketch.set_enabled(id, on);
+                }
+                if let Some(id) = picked {
+                    self.sketch.select_constraint(id, extend);
+                }
+                if let Some(id) = removed {
+                    self.sketch.select_constraint(id, false);
+                    self.sketch.delete_selection();
+                }
+                if let Some((id, text)) = edited {
+                    self.sketch.edit_dimension(id, &text);
+                    self.dim_edits.remove(&id.0);
+                }
+            });
+    }
+
+    /// The indicator of the state of the sketch, the constraints that repeat or contradict the
+    /// others with the button that switches them off, and the status line.
+    fn sketch_status_bar(&mut self, ui: &mut egui::Ui) {
+        let lang = self.win.lang;
+        egui::Panel::bottom("sketch_status").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let colour = tone_colour(self.sketch.report.tone());
+                let (rect, _) = ui.allocate_exact_size(Vec2::splat(14.0), egui::Sense::hover());
+                ui.painter().circle_filled(rect.center(), 6.0, colour);
+                ui.label(egui::RichText::new(self.sketch.state_text()).color(colour));
+                ui.separator();
+                let status = if self.sketch.status.is_problem() {
+                    DANGER
+                } else {
+                    OK
+                };
+                ui.label(egui::RichText::new(self.sketch.status.text(lang)).color(status));
+            });
+            let lines = self.sketch.problem_lines();
+            if !lines.is_empty() {
+                ui.horizontal_wrapped(|ui| {
+                    for line in &lines {
+                        ui.colored_label(DANGER, line.as_str());
+                    }
+                    if !self.sketch.report.problems().is_empty()
+                        && ui.button(Msg::DisableProblems.tr(lang)).clicked()
+                    {
+                        self.sketch.disable_problems();
+                    }
+                });
+            }
+            ui.label(egui::RichText::new(self.sketch.tool.hint().tr(lang)).color(DIM));
+        });
+    }
+
+    /// The canvas: the grid, the axes and the geometry, and what the pointer does on them.
+    fn sketch_canvas(&mut self, ui: &mut egui::Ui) {
+        let lang = self.win.lang;
+        egui::CentralPanel::no_frame().show(ui, |ui| {
+            let size = ui.available_size();
+            let (response, painter) = ui.allocate_painter(size, egui::Sense::click_and_drag());
+            let rect = response.rect;
+            painter.rect_filled(rect, 0.0, BACKGROUND);
+            self.sketch
+                .set_canvas((f64::from(rect.width()), f64::from(rect.height())));
+            if self.fit_next {
+                self.fit_next = false;
+                self.sketch.fit();
+            }
+            let local = |p: Pos2| (f64::from(p.x - rect.min.x), f64::from(p.y - rect.min.y));
+            let (space, extend) = ui.input(|i| (i.key_down(egui::Key::Space), i.modifiers.command));
+            let pointer = response.hover_pos().or(response.interact_pointer_pos());
+            if let Some(p) = pointer {
+                self.sketch.pointer_move(local(p));
+            } else if !self.sketch.is_dragging() {
+                self.sketch.pointer_leave();
+            }
+            if response.hovered() {
+                let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                if scroll != 0.0 {
+                    if let Some(p) = pointer {
+                        self.sketch.wheel(local(p), f64::from(scroll));
+                    }
+                }
+            }
+            let panning = response.dragged_by(egui::PointerButton::Middle)
+                || (space && response.dragged_by(egui::PointerButton::Primary));
+            if panning {
+                let d = response.drag_delta();
+                self.sketch.pan(f64::from(d.x), f64::from(d.y));
+            } else if self.sketch.tool == Tool::Select {
+                if response.drag_started_by(egui::PointerButton::Primary) {
+                    if let Some(p) = response.interact_pointer_pos() {
+                        self.sketch.begin_drag(local(p));
+                    }
+                }
+                if response.dragged_by(egui::PointerButton::Primary) && self.sketch.is_dragging() {
+                    if let Some(p) = pointer {
+                        self.sketch.drag_to(local(p));
+                    }
+                }
+                if response.drag_stopped() {
+                    self.sketch.end_drag();
+                }
+                if response.clicked() {
+                    if let Some(p) = response.interact_pointer_pos() {
+                        self.sketch.select_at(local(p), extend);
+                    }
+                }
+                if response.secondary_clicked() {
+                    if let Some(p) = response.interact_pointer_pos() {
+                        let under = self.sketch.hit(local(p));
+                        if under.is_some_and(|id| !self.sketch.picked.elements.contains(&id)) {
+                            self.sketch.select_at(local(p), false);
+                        }
+                    }
+                }
+            } else {
+                if response.clicked() {
+                    if let Some(p) = response.interact_pointer_pos() {
+                        self.sketch.place(local(p));
+                    }
+                }
+                if response.secondary_clicked() {
+                    self.sketch.finish();
+                }
+            }
+            if response.double_clicked() {
+                if self.sketch.tool == Tool::Polyline {
+                    self.sketch.finish();
+                } else if self.sketch.tool == Tool::Select {
+                    self.sketch.fit();
+                }
+            }
+            let mut chosen = None;
+            if self.sketch.tool == Tool::Select {
+                response.context_menu(|ui| {
+                    let constraints = self.sketch.available();
+                    let dimensions = self.sketch.dimensions_available();
+                    if constraints.is_empty() && dimensions.is_empty() {
+                        ui.label(egui::RichText::new(Msg::AddConstraintHint.tr(lang)).color(DIM));
+                    }
+                    for tool in constraints {
+                        if ui.button(tool.msg().tr(lang)).clicked() {
+                            chosen = Some(Chosen::Constraint(tool));
+                            ui.close();
+                        }
+                    }
+                    if !dimensions.is_empty() {
+                        ui.separator();
+                    }
+                    for tool in dimensions {
+                        if ui.button(tool.msg().tr(lang)).clicked() {
+                            chosen = Some(Chosen::Dimension(tool));
+                            ui.close();
+                        }
+                    }
+                });
+            }
+            match chosen {
+                Some(Chosen::Constraint(tool)) => self.sketch.add_constraint(tool),
+                Some(Chosen::Dimension(tool)) => self.sketch.add_dimension(tool),
+                None => {}
+            }
+            let painter = painter.with_clip_rect(rect);
+            paint_sketch(&painter, rect, &self.sketch.scene());
+            painter.text(
+                Pos2::new(rect.min.x + 12.0, rect.min.y + 10.0),
+                egui::Align2::LEFT_TOP,
+                Msg::WorkspaceSketch.tr(lang),
+                egui::FontId::proportional(14.0),
+                ACCENT,
+            );
+            if let Some(hint) = self.sketch.proposal() {
+                painter.text(
+                    Pos2::new(rect.min.x + 12.0, rect.min.y + 30.0),
+                    egui::Align2::LEFT_TOP,
+                    hint.tr(lang),
+                    egui::FontId::proportional(12.0),
+                    HOLE,
+                );
+            }
+            painter.text(
+                Pos2::new(rect.min.x + 12.0, rect.max.y - 10.0),
+                egui::Align2::LEFT_BOTTOM,
+                Msg::CanvasHint.tr(lang),
+                egui::FontId::proportional(12.0),
+                DIM,
+            );
+        });
+    }
+}
+
+impl App {
+    /// The keys of the sketch: open, save, undo, redo, select all, Escape, Enter and Delete. They
+    /// are ignored while a text is being typed.
+    fn sketch_keys(&mut self, ctx: &egui::Context) {
+        if ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let keys = ctx.input(|i| {
+            let command = i.modifiers.command;
+            [
+                command && i.key_pressed(egui::Key::O),
+                command && i.key_pressed(egui::Key::S),
+                command && !i.modifiers.shift && i.key_pressed(egui::Key::Z),
+                command
+                    && (i.key_pressed(egui::Key::Y)
+                        || (i.modifiers.shift && i.key_pressed(egui::Key::Z))),
+                command && i.key_pressed(egui::Key::A),
+                i.key_pressed(egui::Key::Escape),
+                i.key_pressed(egui::Key::Enter),
+                i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
+            ]
+        });
+        let [open, save, undo, redo, all, escape, enter, delete] = keys;
+        if open {
+            self.open_sketch_dialog();
+        }
+        if save {
+            self.save_sketch_or_ask();
+        }
+        if undo {
+            self.sketch.undo();
+        }
+        if redo {
+            self.sketch.redo();
+        }
+        if all {
+            self.sketch.select_all();
+        }
+        if escape {
+            self.sketch.cancel();
+        }
+        if enter {
+            self.sketch.finish();
+        }
+        if delete && !self.sketch.picked.is_empty() {
+            self.sketch.delete_selection();
+        }
     }
 }
 
@@ -739,9 +1549,18 @@ impl eframe::App for App {
                 .collect()
         });
         if let Some(p) = dropped.first() {
-            self.win.open(p);
+            if crate::shot::is_sketch_file(p) {
+                self.fit_next = self.sketch.open_file(p);
+                self.workspace = StartView::Sketch;
+            } else {
+                self.win.open(p);
+            }
         }
-        if !ctx.egui_wants_keyboard_input() {
+        if self.workspace == StartView::Sketch {
+            self.sketch.lang = self.win.lang;
+            self.sketch.set_variables(&self.win.mech.vars);
+            self.sketch_keys(&ctx);
+        } else if !ctx.egui_wants_keyboard_input() {
             let (open, save, undo, redo) = ctx.input(|i| {
                 let command = i.modifiers.command;
                 (
@@ -767,10 +1586,21 @@ impl eframe::App for App {
             }
         }
         self.top_bar(ui);
-        self.status_bar(ui);
-        self.model_panel(ui);
-        self.properties_panel(ui);
-        self.views(ui);
+        match self.workspace {
+            StartView::Model => {
+                self.status_bar(ui);
+                self.model_panel(ui);
+                self.properties_panel(ui);
+                self.views(ui);
+            }
+            StartView::Sketch => {
+                self.sketch_tools_bar(ui);
+                self.sketch_status_bar(ui);
+                self.sketch_constraints_panel(ui);
+                self.sketch_dimensions_panel(ui);
+                self.sketch_canvas(ui);
+            }
+        }
         self.dialog_window(&ctx);
         self.shot_tick(&ctx);
     }
@@ -863,22 +1693,46 @@ pub struct Start {
     pub settings: Settings,
     /// The settings of the window.
     pub ui: UiSettings,
+    /// The settings of the solver of the sketch.
+    pub solver: SketchSettings,
+    /// The settings of the sketch window.
+    pub sketch_ui: SketchUiSettings,
     /// A project to open at once.
     pub project: Option<PathBuf>,
+    /// A sketch file to open at once.
+    pub sketch: Option<PathBuf>,
+    /// The part of the window that shows first.
+    pub view: StartView,
 }
 
-fn make_window(start: Start) -> Result<Window, String> {
+fn make_window(start: Start) -> Result<(Window, SketchEditor, StartView), String> {
+    let mut sketch = SketchEditor::new(
+        start.lang,
+        start.settings.clone(),
+        start.solver,
+        start.sketch_ui,
+    );
     let mut win = Window::new(start.lang, start.settings, start.ui).map_err(|e| e.to_string())?;
     if let Some(path) = start.project {
         win.open(&path);
     }
-    Ok(win)
+    sketch.set_variables(&win.mech.vars);
+    if let Some(path) = &start.sketch {
+        sketch.open_file(path);
+    } else if start.view == StartView::Sketch {
+        // the sketch of a project is the file next to it
+        let next_to = win.path.as_deref().map(sketch_file::sibling_path);
+        if let Some(path) = next_to.filter(|p| p.is_file()) {
+            sketch.open_file(&path);
+        }
+    }
+    Ok((win, sketch, start.view))
 }
 
 /// Opens the window. A project given here is opened at once.
 pub fn run(start: Start) -> Result<(), String> {
     let (size, minimum) = (start.ui.window_size, start.ui.window_min);
-    let win = make_window(start)?;
+    let (win, sketch, view) = make_window(start)?;
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([size.0 as f32, size.1 as f32])
         .with_min_inner_size([minimum.0 as f32, minimum.1 as f32])
@@ -896,7 +1750,7 @@ pub fn run(start: Start) -> Result<(), String> {
         Box::new(move |cc| {
             install_fonts(&cc.egui_ctx);
             apply_theme(&cc.egui_ctx, ShotTheme::Forge);
-            Ok(Box::new(App::new(win)))
+            Ok(Box::new(App::new(win, sketch, view)))
         }),
     )
     .map_err(|e| e.to_string())
@@ -997,10 +1851,15 @@ pub fn run_shot(start: Start, request: ShotRequest) -> Result<(), String> {
             request.output.display()
         ));
     }
-    if let Some(missing) = start.project.as_ref().filter(|f| !f.is_file()) {
+    let missing = start
+        .project
+        .iter()
+        .chain(start.sketch.iter())
+        .find(|f| !f.is_file());
+    if let Some(missing) = missing {
         return Err(format!("{} is not a file", missing.display()));
     }
-    let win = make_window(start)?;
+    let (win, sketch, view) = make_window(start)?;
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([request.size.0 as f32, request.size.1 as f32])
         .with_title("EH3D-PHOENIX-CAD");
@@ -1020,7 +1879,7 @@ pub fn run_shot(start: Start, request: ShotRequest) -> Result<(), String> {
         Box::new(move |cc| {
             install_fonts(&cc.egui_ctx);
             apply_theme(&cc.egui_ctx, theme);
-            let mut app = App::new(win);
+            let mut app = App::new(win, sketch, view);
             app.shot = Some(ShotState {
                 request,
                 frame: 0,
@@ -1042,11 +1901,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_name_typed_to_save_gets_the_extension_of_the_projects() {
+    fn a_name_typed_to_save_gets_the_extension_of_the_projects_or_of_the_sketches() {
+        let with_extension = |name: &str| with_extension_of(name, &PROJECT_EXTENSIONS);
         assert_eq!(with_extension("box"), "box.phoenixproj");
         assert_eq!(with_extension(" box.phoenixproj "), "box.phoenixproj");
         assert_eq!(with_extension("BOX.PHOENIXPROJ"), "BOX.PHOENIXPROJ");
         assert_eq!(with_extension("box.txt"), "box.txt.phoenixproj");
+        let sketch = |name: &str| with_extension_of(name, &SKETCH_EXTENSIONS);
+        assert_eq!(sketch("plate"), "plate.phoenixsketch");
+        assert_eq!(sketch("plate.phoenixsketch"), "plate.phoenixsketch");
+        assert_eq!(
+            sketch("plate.phoenixproj"),
+            "plate.phoenixproj.phoenixsketch"
+        );
+    }
+
+    #[test]
+    fn every_kind_of_stroke_of_the_sketch_has_a_colour_and_a_width() {
+        use SketchStroke::*;
+        for stroke in [
+            GridMinor,
+            GridMajor,
+            Axis,
+            Normal,
+            Construction,
+            Selected,
+            Related,
+            Conflict,
+            Redundant,
+            Preview,
+            Dimension,
+            Marker,
+        ] {
+            let (_, width) = sketch_style(stroke);
+            assert!(width > 0.0, "{stroke:?}");
+        }
+        assert_ne!(tone_colour(Tone::Green), tone_colour(Tone::Red));
+        assert_ne!(tone_colour(Tone::Amber), tone_colour(Tone::Red));
     }
 
     #[test]
