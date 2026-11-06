@@ -11,14 +11,14 @@
   <img src="https://img.shields.io/badge/License-GPL%203.0--or--later-blue.svg" alt="GPL 3.0 or later">
   <img src="https://img.shields.io/badge/Stack-Markdown%20%2B%20Python-blue.svg" alt="Markdown and Python">
   <img src="https://img.shields.io/badge/Languages-8-00E5FF.svg" alt="Languages">
-  <img src="https://img.shields.io/badge/Tests-327-2EA043.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-343-2EA043.svg" alt="Tests">
   <img src="https://img.shields.io/badge/Version-0.0.3-0f6cbd.svg" alt="Version">
   <img src="https://img.shields.io/badge/Maturity-scaffolding-FFB020.svg" alt="Maturity">
 </p>
 
 ---
 
-**诚实性核对 - 今天真正能运行的内容：** 一个 Rust 库，带参数化外壳：整数纳米长度（有自己的范围）、面上的孔（圆孔、锥形沉孔、柱形沉孔、矩形孔和长圆孔）、圆角和倒角的边、可写成含单位的公式的参数（基于变量、常量和其他参数，精确分数，溢出受检）、会报告冲突并保持模型不变的结构化修改操作、电路板安装孔下方的立柱及用螺钉固定其上的盖子、保存在项目文件机械域中的外壳配方、OpenSCAD 风格的脚本，以及对电路板外形的装配检查。一个窗口（egui，用 `--features gui` 构建）显示模型树、每一项的属性、3D 视图和俯视图，`check` 命令读取项目并打印其尺寸、装配情况和每一步的状态；窗口的逻辑无需屏幕即可测试。它有 324 个自己的测试，在计算机上通过。它只在自己的测试生成的模型上试过；窗口从未在屏幕上打开过，也没有在机器上运行，写出的 STEP 文件只检查过结构，散热器、草图和装配仍只是计划。
+**诚实性核对 - 今天真正能运行的内容：** 一个 Rust 库，带参数化外壳：整数纳米长度（有自己的范围）、面上的孔（圆孔、锥形沉孔、柱形沉孔、矩形孔和长圆孔）、圆角和倒角的边、可写成含单位的公式的参数（基于变量、常量和其他参数，精确分数，溢出受检）、会报告冲突并保持模型不变的结构化修改操作、电路板安装孔下方的立柱及用螺钉固定其上的盖子、保存在项目文件机械域中的外壳配方、OpenSCAD 风格的脚本，以及对电路板外形的装配检查。一个窗口（egui，用 `--features gui` 构建）显示模型树、每一项的属性、3D 视图和俯视图，`check` 命令读取项目并打印其尺寸、装配情况和每一步的状态；窗口的逻辑无需屏幕即可测试。它有 340 个自己的测试，在计算机上通过。它只在自己的测试生成的模型上试过；窗口从未在屏幕上打开过，也没有在机器上运行，写出的 STEP 文件只检查过结构，散热器、草图和装配仍只是计划。
 
 ---
 
@@ -30,7 +30,7 @@
 |---|---|
 | 版本 | `0.0.3` |
 | 成熟度 | 脚手架 |
-| 测试 | 327 |
+| 测试 | 343 |
 | 技术栈 | Markdown, Python 3.10+ |
 | 真实硬件 | 尚未在硬件上运行 |
 
@@ -45,7 +45,7 @@
 | 领域 | 状态 | 在这里的含义 |
 |---|---|---|
 | 仓库检查 | 🟡 | 仓库检查、图片检查以及基础部分的 3 个测试都在 CI 中运行并通过。 |
-| 测试 | 🟡 | Rust 库的 324 个测试和基础部分的 3 个测试在计算机上通过。它们只使用测试自己生成的模型。 |
+| 测试 | 🟡 | Rust 库的 340 个测试和基础部分的 3 个测试在计算机上通过。它们只使用测试自己生成的模型。 |
 | 真实硬件 | 🟠 | 没有在任何机床或电路板上运行过：这里没有任何内容在硬件上试过。 |
 | 计划的功能 | 🟠 | 部分完成：已有带孔、立柱和螺钉固定盖子的参数化外壳、OpenSCAD 风格的脚本、装配检查、项目文件中的外壳配方，以及只检查过结构的首个 STEP 写出器；散热器、草图和装配尚未开始。 |
 | 需求 | 🟠 | 6 项需求中有 4 项处于原型阶段（外壳、脚本、修改操作和机械范围），2 项仍是计划，没有任何一项通过验证。 |
@@ -87,7 +87,7 @@ cargo run --release -p eh3d-phoenix-cad --features gui -- gui crates/eh3d-phoeni
 
 ## 🧪 测试
 
-Rust 库有 324 个测试（`cargo test`），基础部分有 3 个（`python -I -m unittest discover -s tools -p "test_*.py"`）；全部在计算机上通过。CI 运行仓库检查、图片检查、基础部分的测试，对 Rust 代码还运行格式检查、把警告当作错误的 clippy，以及 Linux 和 Windows 上的测试，并用 clippy（`--features gui`）检查窗口。
+Rust 库有 340 个测试（`cargo test`），基础部分有 3 个（`python -I -m unittest discover -s tools -p "test_*.py"`）；全部在计算机上通过。CI 运行仓库检查、图片检查、基础部分的测试，对 Rust 代码还运行格式检查、把警告当作错误的 clippy，以及 Linux 和 Windows 上的测试，并用 clippy（`--features gui`）检查窗口。
 
 ## 🏗️ 构建与发布
 
