@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "The mechanical model of the design: lengths in integer nanometres with their own range, a parametric enclosure, structured change operations that report conflicts and leave the model unchanged, an OpenSCAD-style script and a fit check against the envelope of a board"
+description = "The mechanical model of the design: lengths in integer nanometres with their own range, a parametric enclosure, structured change operations that report conflicts and leave the model unchanged, an OpenSCAD-style script, a fit check against the envelope of a board and 2D sketches with constraints whose outlines can be raised from a face or cut into it"
 
 [dependencies]
 # the object identity (UUID v7) is the one of the shared repository, next to this one; the CI checks out the tag named in SIBLING_REFS

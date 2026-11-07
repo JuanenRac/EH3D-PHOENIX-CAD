@@ -9,7 +9,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/License-GPL%203.0--or--later-blue.svg" alt="GPL 3.0 or later">
-  <img src="https://img.shields.io/badge/Stack-Markdown%20%2B%20Python-blue.svg" alt="Markdown and Python">
+  <img src="https://img.shields.io/badge/Stack-Rust%20%2B%20Markdown%20%2B%20Python-blue.svg" alt="Rust, Markdown and Python">
   <img src="https://img.shields.io/badge/Languages-8-00E5FF.svg" alt="Languages">
   <img src="https://img.shields.io/badge/Tests-459-2EA043.svg" alt="Tests">
   <img src="https://img.shields.io/badge/Version-0.0.3-0f6cbd.svg" alt="Version">
@@ -31,7 +31,7 @@
 | 版本 | `0.0.3` |
 | 成熟度 | 脚手架 |
 | 测试 | 459 |
-| 技术栈 | Markdown, Python 3.10+ |
+| 技术栈 | Rust, Markdown, Python 3.10+ |
 | 真实硬件 | 尚未在硬件上运行 |
 
 **跳转到：** [概述](#-概述) · [架构](#-架构) · [快速开始](#-快速开始) · [测试](#-测试) · [仓库结构](#-仓库结构) · [相关项目](#-相关项目)
@@ -93,7 +93,7 @@ Rust 库有 456 个测试（`cargo test`），基础部分有 3 个（`python -I
 
 ## 🏗️ 构建与发布
 
-版本号位于 `VERSION` 文件和 `eh3d.project.json`，每个版本在 [CHANGELOG.md](CHANGELOG.md) 中都有条目。没有需要构建的东西；版本发布在 GitHub 上。
+版本号位于 `VERSION` 文件和 `eh3d.project.json`，每个版本在 [CHANGELOG.md](CHANGELOG.md) 中都有条目。程序用 `cargo build --release` 构建（窗口需加 `--features gui`）；版本发布在 GitHub 上。
 
 ## 📂 仓库结构
 

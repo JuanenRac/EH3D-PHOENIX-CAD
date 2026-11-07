@@ -9,7 +9,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/License-GPL%203.0--or--later-blue.svg" alt="GPL 3.0 or later">
-  <img src="https://img.shields.io/badge/Stack-Markdown%20%2B%20Python-blue.svg" alt="Markdown and Python">
+  <img src="https://img.shields.io/badge/Stack-Rust%20%2B%20Markdown%20%2B%20Python-blue.svg" alt="Rust, Markdown and Python">
   <img src="https://img.shields.io/badge/Languages-8-00E5FF.svg" alt="Languages">
   <img src="https://img.shields.io/badge/Tests-459-2EA043.svg" alt="Tests">
   <img src="https://img.shields.io/badge/Version-0.0.3-0f6cbd.svg" alt="Version">
@@ -31,7 +31,7 @@
 | Version | `0.0.3` |
 | Maturity | Scaffolding |
 | Tests | 459 |
-| Stack | Markdown, Python 3.10+ |
+| Stack | Rust, Markdown, Python 3.10+ |
 | On real hardware | Not run on hardware yet |
 
 **Jump to:** [Overview](#-overview) · [Architecture](#-architecture) · [Quick start](#-quick-start) · [Testing](#-testing) · [Repository Structure](#-repository-structure) · [Related Projects](#-related-projects)
@@ -93,7 +93,7 @@ The Rust library has 456 tests (`cargo test`) and the base has 3 (`python -I -m 
 
 ## 🏗️ Build & Release
 
-The version lives in the `VERSION` file and in `eh3d.project.json`, and each version has its entry in [CHANGELOG.md](CHANGELOG.md). There is nothing to build; releases are published on GitHub.
+The version lives in the `VERSION` file and in `eh3d.project.json`, and each version has its entry in [CHANGELOG.md](CHANGELOG.md). The program is built with `cargo build --release` (the window with `--features gui`); releases are published on GitHub.
 
 ## 📂 Repository Structure
 
