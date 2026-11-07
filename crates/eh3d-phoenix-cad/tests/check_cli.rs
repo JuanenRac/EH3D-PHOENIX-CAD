@@ -113,3 +113,65 @@ fn config_also_writes_the_settings_of_the_sketch_and_they_read_back() {
     assert!(eh3d_phoenix_cad::config::Settings::with_user_config(&text).is_ok());
     assert!(eh3d_phoenix_cad::uiconfig::UiSettings::with_user_config(&text).is_ok());
 }
+
+const PLATE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/plate.phoenixproj");
+
+#[test]
+fn a_project_with_a_sketch_and_an_extrusion_is_checked_with_them() {
+    let (code, text, _) = run(&["check", PLATE, "--lang", "en"]);
+    assert_eq!(code, 0, "{text}");
+    let lines: Vec<&str> = text.lines().collect();
+    // the box of the example (52.96 cm3 of material) and a plate of 100 x 60 mm with two holes of
+    // diameter 5 mm raised 5 mm: 5 * (6000 - 2 * pi * 2.5^2) = 29 803.7 mm3
+    assert_eq!(
+        lines[0],
+        "Outside 104 x 64 x 35 mm - inside 100 x 60 x 30 mm - material 82.8 cm3"
+    );
+    assert_eq!(lines.len(), 2 + 9, "{text}");
+    assert!(lines[10].ends_with("Extrusion 1  valid"), "{}", lines[10]);
+}
+
+#[test]
+fn the_settings_of_the_sketch_in_a_settings_file_apply_to_the_profiles_of_the_check() {
+    // an outline must have at least 10 000 mm2 and the plate has 5 960
+    let dir = std::env::temp_dir().join(format!("phoenix-cad-plate-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = dir.join("big.cfg");
+    std::fs::write(&config, "[sketch]\nprofile_min_area = 10000\n").unwrap();
+    let (code, text, _) = run(&[
+        "check",
+        PLATE,
+        "--lang",
+        "en",
+        "--config",
+        config.to_str().unwrap(),
+    ]);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(code, 1, "{text}");
+    assert!(text.contains("PHOENIX-CAD-036"), "{text}");
+    assert!(text.contains("less area"), "{text}");
+}
+
+#[test]
+fn a_project_written_by_the_window_is_read_by_the_check() {
+    use eh3d_phoenix_cad::config::Settings;
+    use eh3d_phoenix_cad::lang::Lang;
+    use eh3d_phoenix_cad::uiconfig::UiSettings;
+    use eh3d_phoenix_cad::window::{NewStep, Window};
+    let dir = std::env::temp_dir().join(format!("phoenix-cad-written-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("pocket.phoenixproj");
+    let mut w = Window::new(Lang::En, Settings::defaults(), UiSettings::defaults()).unwrap();
+    assert!(w.import_sketch_file(std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/box.phoenixsketch"
+    ))));
+    w.add_step(NewStep::Pocket);
+    // a plate of 100 x 60 mm does not keep the margin of the edges of the lid: it is refused
+    assert!(w.status.is_problem(), "{:?}", w.status);
+    assert!(w.save_to(&path));
+    let (code, text, _) = run(&["check", path.to_str().unwrap(), "--lang", "en"]);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(text.lines().count(), 2, "{text}");
+}
