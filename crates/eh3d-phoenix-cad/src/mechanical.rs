@@ -2287,7 +2287,7 @@ mod feature_tests {
     fn a_recipe_without_them_is_still_version_one_and_the_text_does_not_change() {
         let s = Settings::defaults();
         let mut m = with_features();
-        m.steps.truncate(0);
+        m.steps.clear();
         m.tip = 0;
         assert_eq!(m.version(), 1);
         let text = String::from_utf8(m.to_bytes(&s.mechanical).unwrap()).unwrap();

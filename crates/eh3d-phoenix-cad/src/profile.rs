@@ -81,6 +81,11 @@ pub enum Piece {
 }
 
 impl Piece {
+    /// Where the piece starts, in the direction it is walked.
+    pub fn start(&self) -> Pt {
+        self.from()
+    }
+
     fn from(&self) -> Pt {
         match *self {
             Piece::Line { from, .. } | Piece::Arc { from, .. } => from,
@@ -696,7 +701,7 @@ impl Profile {
             let ccw = o.signed2() > 0;
             oriented.push(if hole == ccw { o.reversed() } else { o.clone() });
         }
-        let mut order: Vec<usize> = (0..n).filter(|i| containers[*i].len() % 2 == 0).collect();
+        let mut order: Vec<usize> = (0..n).filter(|i| containers[*i].len() & 1 == 0).collect();
         order.sort_by_key(|i| lowest_left(&oriented[*i].polygon));
         let mut regions: Vec<Region> = Vec::new();
         for i in &order {
