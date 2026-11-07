@@ -12,7 +12,7 @@ Mechanical design for the PHOENIX family: parametric enclosures, chassis and hea
 
 * Parametric models of enclosures, chassis and heat sinks, regenerated from named parameters.
 * A mechanical space shared with the board tool inside the same project: changes travel as structured, reviewable operations (holes, connectors, component height, heat dissipation, envelope) and never as silent edits.
-* Export to STEP and to OpenSCAD-style scripts.
+* Export to STEP, to STL (the solid as triangles), to DXF and SVG drawings of the plan, the front and the side, and to OpenSCAD-style scripts (`EXPORT.md`).
 * First step: a generator of simple parametric enclosures. Later steps: sketches with constraints, solid operations, assemblies and a dependency graph (simple assemblies of catalog parts, with mates along one axis and a check of interference, exist).
 
 ## What it will not do
@@ -26,7 +26,7 @@ Mechanical design for the PHOENIX family: parametric enclosures, chassis and hea
 
 A library written in Rust with a window and a command-line interface and, where it applies, a kind of task for the server. Programs of the suite exchange work through project files or through the server, never by depending on each other.
 
-The first crate is `eh3d-phoenix-cad` (lengths with their own range, the enclosure, the operations, the script and the fit check). The program of the same crate has a window (the model tree, the properties, a 3D view and a plan where holes and posts are dragged and distances and angles are measured, and a menu that writes the script, the STEP file and the fit report to a file, built with `--features gui`) and the commands `check` and `config`. The server task is not written (the cooling fins and the estimate of their heat are, in the library, the window and the script, but not in the STEP file), and so are the parts of a catalog (profiles, screws and brackets from library files, placed in the model, with a bill of materials, a cut list, volume and mass: `CATALOG.md`); the other crates will be decided together with their code.
+The first crate is `eh3d-phoenix-cad` (lengths with their own range, the enclosure, the operations, the script and the fit check). The program of the same crate has a window (the model tree, the properties, a 3D view and a plan where holes and posts are dragged and distances and angles are measured, and a menu that writes the script, the STEP file, the STL file, the DXF and SVG drawings and the fit report to a file, built with `--features gui`) and the commands `check`, `export` and `config`. The server task is not written (the cooling fins and the estimate of their heat are, in the library, the window and the script, but not in the STEP file), and so are the parts of a catalog (profiles, screws and brackets from library files, placed in the model, with a bill of materials, a cut list, volume and mass: `CATALOG.md`); the other crates will be decided together with their code.
 
 ## Where it sits
 

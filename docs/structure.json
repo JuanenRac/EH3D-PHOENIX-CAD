@@ -168,6 +168,19 @@
           }
         },
         {
+          "name": "EXPORT.md",
+          "desc": {
+            "en": "the exports: STL solid, DXF and SVG drawings",
+            "es": "las exportaciones: sólido STL, dibujos DXF y SVG",
+            "de": "die Exporte: STL-Körper, DXF- und SVG-Zeichnungen",
+            "fr": "les exports : solide STL, dessins DXF et SVG",
+            "it": "le esportazioni: solido STL, disegni DXF e SVG",
+            "ja": "エクスポート：STL ソリッド、DXF と SVG の図面",
+            "zh": "导出：STL 实体、DXF 与 SVG 图纸",
+            "pt": "as exportações: sólido STL, desenhos DXF e SVG"
+          }
+        },
+        {
           "desc": {
             "en": "the accepted decision records",
             "es": "los registros de decisiones aceptadas",

@@ -41,7 +41,7 @@
       "lines": [
         "enclosure, holes, patterns, fins, parts,",
         "assemblies, change operations, sketches,",
-        "extrusions, script, fit check"
+        "extrusions, script, STL, DXF, SVG, fit check"
       ],
       "code": [
         "crates/eh3d-phoenix-cad/src/enclosure.rs",
@@ -53,6 +53,9 @@
         "crates/eh3d-phoenix-cad/src/sketch.rs",
         "crates/eh3d-phoenix-cad/src/scad.rs",
         "crates/eh3d-phoenix-cad/src/export.rs",
+        "crates/eh3d-phoenix-cad/src/solid.rs",
+        "crates/eh3d-phoenix-cad/src/mesh.rs",
+        "crates/eh3d-phoenix-cad/src/drawing.rs",
         "crates/eh3d-phoenix-cad/src/fit.rs"
       ]
     },

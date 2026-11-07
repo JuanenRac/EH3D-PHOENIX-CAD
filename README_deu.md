@@ -11,14 +11,14 @@
   <img src="https://img.shields.io/badge/License-GPL%203.0--or--later-blue.svg" alt="GPL 3.0 or later">
   <img src="https://img.shields.io/badge/Stack-Rust%20%2B%20Markdown%20%2B%20Python-blue.svg" alt="Rust, Markdown and Python">
   <img src="https://img.shields.io/badge/Languages-8-00E5FF.svg" alt="Languages">
-  <img src="https://img.shields.io/badge/Tests-651-2EA043.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-709-2EA043.svg" alt="Tests">
   <img src="https://img.shields.io/badge/Version-0.0.5-0f6cbd.svg" alt="Version">
   <img src="https://img.shields.io/badge/Maturity-scaffolding-FFB020.svg" alt="Maturity">
 </p>
 
 ---
 
-**Ehrlichkeitscheck - was heute tatsächlich läuft:** eine Rust-Bibliothek mit einem parametrischen Gehäuse: Längen in ganzzahligen Nanometern mit eigenem Bereich, Löcher in den Flächen (rund, gesenkt, mit Senkung für den Kopf, rechteckig und oval), abgerundete und angefaste Kanten, Parameter als Formeln mit Einheiten über Variablen, Konstanten und andere Parameter (exakte Brüche, geprüfter Überlauf), strukturierte Änderungsoperationen, die Konflikte melden und das Modell unverändert lassen, Pfosten unter den Montagelöchern einer Platine mit einem daran verschraubten Deckel, das Rezept des Gehäuses im mechanischen Bereich der Projektdatei, ein Skript im OpenSCAD-Stil und eine Passprüfung gegen die Hüllgröße einer Platine. Ein Fenster (egui, mit `--features gui`) zeigt den Baum des Modells, die Eigenschaften jedes Elements, eine 3D-Ansicht und eine Draufsicht (in denen Löcher und Säulen mit der Maus gezogen und Abstände und Winkel gemessen werden; das Skript, die STEP-Datei und der Passungsbericht werden über ein Menü in eine Datei geschrieben, nie über eine vorhandene Datei, außer das Kästchen dafür ist angekreuzt), und ein Befehl `check` liest ein Projekt und gibt seine Maße, die Passung und den Zustand jedes Schritts aus; die Logik des Fensters wird ohne Bildschirm getestet. Sie hat 648 eigene Tests, die auf einem Computer bestehen. Sie wurde nur mit Modellen aus ihren eigenen Tests erprobt; das Fenster wurde noch nie auf einem Bildschirm geöffnet und nichts wurde auf einer Maschine ausgeführt, und die STEP-Datei, die sie schreibt, wurde nur auf ihre Struktur geprüft, und die 2D-Skizze (Geometrie, Bedingungen, ein Löser und ein Fenster zum Zeichnen und Bemaßen), die in der Projektdatei gespeichert wird und deren geschlossene Konturen als Schritte des Rezepts von einer Fläche aus extrudiert oder in sie eingeschnitten werden können, wurde nur mit Skizzen aus ihren eigenen Tests erprobt und ihr Fenster wurde noch nicht auf einem Bildschirm geöffnet, während Muster aus Löchern und Säulen sowie Kühlrippen (mit einer einfachen Schätzung der Wärme, die sie an ruhige Luft abgeben, mit keiner Messung verglichen) zwar existieren, aber nur an Modellen aus den eigenen Tests erprobt wurden, und dasselbe gilt für die Teile eines Katalogs (auf Länge geschnittene Profile, Schrauben und Winkel, aus Bibliotheksdateien gelesen und im Modell platziert, mit Stückliste, Zuschnittliste sowie Volumen und Masse nach der Dichte des jeweiligen Materials; die Bibliothek der Beispiele ist erfunden), und dasselbe gilt für die einfachen Baugruppen aus diesen Teilen (ein Teil, das entlang einer Achse mit einem Abstand, einer Ausrichtung oder einem Stapeln gegen ein anderes gesetzt wird, und eine Prüfung, welche Teile Volumen teilen, mit den exakten Formen von Profilen, Winkeln und Schrauben, wobei eine Schraube durch das Loch eines Winkels erlaubt ist; die beiden Beispielbaugruppen sind erfunden).
+**Ehrlichkeitscheck - was heute tatsächlich läuft:** eine Rust-Bibliothek mit einem parametrischen Gehäuse: Längen in ganzzahligen Nanometern mit eigenem Bereich, Löcher in den Flächen (rund, gesenkt, mit Senkung für den Kopf, rechteckig und oval), abgerundete und angefaste Kanten, Parameter als Formeln mit Einheiten über Variablen, Konstanten und andere Parameter (exakte Brüche, geprüfter Überlauf), strukturierte Änderungsoperationen, die Konflikte melden und das Modell unverändert lassen, Pfosten unter den Montagelöchern einer Platine mit einem daran verschraubten Deckel, das Rezept des Gehäuses im mechanischen Bereich der Projektdatei, ein Skript im OpenSCAD-Stil und eine Passprüfung gegen die Hüllgröße einer Platine. Ein Fenster (egui, mit `--features gui`) zeigt den Baum des Modells, die Eigenschaften jedes Elements, eine 3D-Ansicht und eine Draufsicht (in denen Löcher und Säulen mit der Maus gezogen und Abstände und Winkel gemessen werden; das Skript, die STEP-Datei und der Passungsbericht werden über ein Menü in eine Datei geschrieben, nie über eine vorhandene Datei, außer das Kästchen dafür ist angekreuzt), und ein Befehl `check` liest ein Projekt und gibt seine Maße, die Passung und den Zustand jedes Schritts aus; die Logik des Fensters wird ohne Bildschirm getestet. Sie hat 706 eigene Tests, die auf einem Computer bestehen. Sie wurde nur mit Modellen aus ihren eigenen Tests erprobt; das Fenster wurde noch nie auf einem Bildschirm geöffnet und nichts wurde auf einer Maschine ausgeführt, und die STEP-Datei, die sie schreibt, wurde nur auf ihre Struktur geprüft, und die 2D-Skizze (Geometrie, Bedingungen, ein Löser und ein Fenster zum Zeichnen und Bemaßen), die in der Projektdatei gespeichert wird und deren geschlossene Konturen als Schritte des Rezepts von einer Fläche aus extrudiert oder in sie eingeschnitten werden können, wurde nur mit Skizzen aus ihren eigenen Tests erprobt und ihr Fenster wurde noch nicht auf einem Bildschirm geöffnet, während Muster aus Löchern und Säulen sowie Kühlrippen (mit einer einfachen Schätzung der Wärme, die sie an ruhige Luft abgeben, mit keiner Messung verglichen) zwar existieren, aber nur an Modellen aus den eigenen Tests erprobt wurden, und dasselbe gilt für die Teile eines Katalogs (auf Länge geschnittene Profile, Schrauben und Winkel, aus Bibliotheksdateien gelesen und im Modell platziert, mit Stückliste, Zuschnittliste sowie Volumen und Masse nach der Dichte des jeweiligen Materials; die Bibliothek der Beispiele ist erfunden), und dasselbe gilt für die einfachen Baugruppen aus diesen Teilen (ein Teil, das entlang einer Achse mit einem Abstand, einer Ausrichtung oder einem Stapeln gegen ein anderes gesetzt wird, und eine Prüfung, welche Teile Volumen teilen, mit den exakten Formen von Profilen, Winkeln und Schrauben, wobei eine Schraube durch das Loch eines Winkels erlaubt ist; die beiden Beispielbaugruppen sind erfunden). Der Körper des Modells lässt sich als STL-Datei schreiben (binär oder Text, mit einer geschlossenen Oberfläche, die gegen das exakte Volumen geprüft wird; manche Formen werden abgelehnt), und der Grundriss, die Vorder- und die Seitenansicht als DXF- und SVG-Zeichnungen, über das Menü Exportieren oder mit dem Befehl `export`; keine dieser Dateien wurde in einem Slicer, einem CAD- oder einem Zeichenprogramm geöffnet.
 
 ---
 
@@ -30,7 +30,7 @@
 |---|---|
 | Version | `0.0.5` |
 | Reifegrad | Gerüst |
-| Tests | 651 |
+| Tests | 709 |
 | Technologie-Stack | Rust, Markdown, Python 3.10+ |
 | Auf echter Hardware | Noch nicht auf Hardware ausgeführt |
 
@@ -45,7 +45,7 @@ Jede Zeile ist ein Teil dieses Repositorys, und die Ampel sagt, wie weit er heut
 | Bereich | Stand | Was das hier bedeutet |
 |---|---|---|
 | Repository-Prüfungen | 🟡 | Die Repository-Prüfung, die Prüfung der Bilder und die 3 Tests der Basis laufen in der CI und bestehen. |
-| Tests | 🟡 | Die 648 Tests der Rust-Bibliothek und die 3 der Basis bestehen auf einem Computer. Sie nutzen nur Modelle, die die Tests selbst erzeugen. |
+| Tests | 🟡 | Die 706 Tests der Rust-Bibliothek und die 3 der Basis bestehen auf einem Computer. Sie nutzen nur Modelle, die die Tests selbst erzeugen. |
 | Echte Hardware | 🟠 | Auf keiner Maschine und keiner Platine ausgeführt: nichts hier wurde auf Hardware ausprobiert. |
 | Geplante Funktion | 🟠 | Teilweise fertig: ein parametrisches Gehäuse mit Löchern, Pfosten und einem verschraubten Deckel, ein Skript im OpenSCAD-Stil, eine Passprüfung und das Rezept des Gehäuses in der Projektdatei existieren, dazu ein erster STEP-Schreiber, nur auf seine Struktur geprüft; eine 2D-Skizze mit Bedingungen, einem Löser und einem Fenster zum Zeichnen existiert, wird in der Projektdatei gespeichert und kann von einer Fläche aus extrudiert oder in sie eingeschnitten werden, ihr Fenster wurde aber noch nicht auf einem Bildschirm geöffnet; Muster aus Löchern und Säulen sowie Kühlrippen mit einer Schätzung ihrer Wärme existieren und wurden nur an Modellen der Tests erprobt; Teile eines Katalogs (Profile, Schrauben und Winkel aus Bibliotheksdateien), im Modell platziert und mit Stückliste und Masse je Material, existieren und wurden nur an erfundenen Teilen erprobt; einfache Baugruppen aus diesen Teilen (ein Teil entlang einer Achse gegen ein anderes gesetzt und eine Prüfung, welche Teile Volumen teilen) existieren und wurden nur an erfundenen Teilen erprobt. |
 | Anforderungen | 🟠 | 7 von 8 Anforderungen sind als Prototyp (Gehäuse, Skript, Änderungsoperationen, Kühlkörpermodell, Teilekatalog, Baugruppen und mechanischer Bereich), 1 nur geplant und keine ist validiert. |
@@ -87,6 +87,8 @@ cargo run -p eh3d-phoenix-cad -- bill crates/eh3d-phoenix-cad/examples/frame.pho
 cargo run -p eh3d-phoenix-cad -- library crates/eh3d-phoenix-cad/examples/chassis.phoenixlib
 cargo run -p eh3d-phoenix-cad -- check crates/eh3d-phoenix-cad/examples/assembly.phoenixproj
 cargo run -p eh3d-phoenix-cad -- interference crates/eh3d-phoenix-cad/examples/assembly.phoenixproj
+cargo run -p eh3d-phoenix-cad -- export crates/eh3d-phoenix-cad/examples/box.phoenixproj --format stl --out box.stl
+cargo run -p eh3d-phoenix-cad -- export crates/eh3d-phoenix-cad/examples/box.phoenixproj --format svg --view front --out box-front.svg
 cargo run --release -p eh3d-phoenix-cad --features gui -- crates/eh3d-phoenix-cad/examples/box.phoenixproj
 cargo run --release -p eh3d-phoenix-cad --features gui -- gui crates/eh3d-phoenix-cad/examples/box.phoenixproj --shot box.png
 cargo run --release -p eh3d-phoenix-cad --features gui -- gui crates/eh3d-phoenix-cad/examples/box.phoenixsketch --view sketch --shot sketch.png
@@ -94,7 +96,7 @@ cargo run --release -p eh3d-phoenix-cad --features gui -- gui crates/eh3d-phoeni
 
 ## 🧪 Tests
 
-Die Rust-Bibliothek hat 648 Tests (`cargo test`) und die Basis hat 3 (`python -I -m unittest discover -s tools -p "test_*.py"`); alle bestehen auf einem Computer. Die CI führt die Repository-Prüfung, die Prüfung der Bilder, die Tests der Basis und für den Rust-Code die Formatprüfung, clippy mit Warnungen als Fehlern und die Tests unter Linux und Windows aus und prüft außerdem das Fenster mit clippy (`--features gui`).
+Die Rust-Bibliothek hat 706 Tests (`cargo test`) und die Basis hat 3 (`python -I -m unittest discover -s tools -p "test_*.py"`); alle bestehen auf einem Computer. Die CI führt die Repository-Prüfung, die Prüfung der Bilder, die Tests der Basis und für den Rust-Code die Formatprüfung, clippy mit Warnungen als Fehlern und die Tests unter Linux und Windows aus und prüft außerdem das Fenster mit clippy (`--features gui`).
 
 ## 🏗️ Build und Veröffentlichung
 
@@ -123,6 +125,7 @@ EH3D-PHOENIX-CAD/
 │   ├── SKETCH.md                                die 2D-Skizze: Bedingungen, Löser, Projektdatei und Extrusionen
 │   ├── CATALOG.md                               der Teilekatalog: Bibliotheken, Stückliste, Zuschnittliste
 │   ├── ASSEMBLY.md                              einfache Baugruppen: Bedingungen und Durchdringungsprüfung
+│   ├── EXPORT.md                                die Exporte: STL-Körper, DXF- und SVG-Zeichnungen
 │   └── adr/                                     die angenommenen Entscheidungsprotokolle
 ├── Cargo.toml Cargo.lock                        der Rust-Workspace und seine festgelegten Abhängigkeiten
 ├── crates/                                      mechanisches Modell: Gehäuse, Muster, Kühlrippen, Teile, Baugruppen, Skizzen, Skript, Fenster
