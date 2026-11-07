@@ -5,6 +5,8 @@ use std::process::Command;
 
 const BIN: &str = env!("CARGO_BIN_EXE_eh3d-phoenix-cad");
 const EXAMPLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/box.phoenixproj");
+const FRAME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/frame.phoenixproj");
+const LIBRARY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/chassis.phoenixlib");
 
 fn run(args: &[&str]) -> (i32, String, String) {
     let out = Command::new(BIN)
@@ -174,4 +176,106 @@ fn a_project_written_by_the_window_is_read_by_the_check() {
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(code, 0, "{text}");
     assert_eq!(text.lines().count(), 2, "{text}");
+}
+
+#[test]
+fn the_bill_of_the_example_frame_is_printed_as_comma_separated_values() {
+    let (code, text, _) = run(&["bill", FRAME]);
+    assert_eq!(code, 0, "{text}");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 8, "{text}");
+    assert_eq!(
+        lines[0],
+        "kind,part,material,count,cut_mm,volume_mm3,mass_g"
+    );
+    assert_eq!(
+        lines[1],
+        "profile,tube-20x20,aluminium,4,150,66600.000,179.820"
+    );
+    assert_eq!(lines[7], "total,,,18,,251025.901,684.085");
+    // the same text twice
+    assert_eq!(run(&["bill", FRAME]).1, text);
+}
+
+#[test]
+fn the_bill_of_a_project_without_parts_has_only_its_totals() {
+    let (code, text, _) = run(&["bill", EXAMPLE]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(
+        text,
+        "kind,part,material,count,cut_mm,volume_mm3,mass_g\ntotal,,,0,,0.000,0.000\n"
+    );
+}
+
+#[test]
+fn the_check_of_the_frame_lists_the_parts_and_the_cut_list() {
+    let (code, text, _) = run(&["check", FRAME, "--lang", "en"]);
+    assert_eq!(code, 0, "{text}");
+    assert!(
+        text.contains("Parts: 18 pieces, 251025.901 mm3 of material, 684.085 g"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Cut list tube-40x20: 2 x 300 mm, 600 mm in all"),
+        "{text}"
+    );
+    let (_, spanish, _) = run(&["check", FRAME, "--lang", "es"]);
+    assert!(
+        spanish.contains("Lista de corte tube-40x20: 2 x 300 mm, 600 mm en total"),
+        "{spanish}"
+    );
+}
+
+#[test]
+fn a_library_is_read_checked_and_listed() {
+    let (code, text, _) = run(&["library", LIBRARY]);
+    assert_eq!(code, 0, "{text}");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 9, "{text}");
+    assert_eq!(lines[0], "library chassis-basic: 8 parts");
+    assert_eq!(lines[1], "  profile tube-20x20 aluminium");
+    assert_eq!(lines[4], "  screw bolt-m3x10 steel");
+    assert_eq!(lines[8], "  bracket angle-20 aluminium");
+}
+
+#[test]
+fn a_library_that_is_not_valid_is_an_error_with_its_code() {
+    let (code, _, error) = run(&["library", "no/such/file.phoenixlib"]);
+    assert_eq!(code, 1);
+    assert!(error.contains("PHOENIX-CAD-012"), "{error}");
+    // a project is not a library
+    let (code, _, error) = run(&["library", EXAMPLE]);
+    assert_eq!(code, 1);
+    assert!(error.contains("PHOENIX-CAD-044"), "{error}");
+    // the limits of the settings apply
+    let dir = std::env::temp_dir().join(format!("phoenix-cad-library-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = dir.join("small.cfg");
+    std::fs::write(&config, "[catalog]\nmax_parts = 3\n").unwrap();
+    let (code, _, error) = run(&["library", LIBRARY, "--config", config.to_str().unwrap()]);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(code, 1);
+    assert!(
+        error.contains("PHOENIX-CAD-044") && error.contains("more than the 3 parts"),
+        "{error}"
+    );
+    let (code, _, error) = run(&["library"]);
+    assert_eq!(code, 1);
+    assert!(error.contains("needs a library file"), "{error}");
+    let (code, _, error) = run(&["bill"]);
+    assert_eq!(code, 1);
+    assert!(error.contains("needs a project file"), "{error}");
+    let (code, _, error) = run(&["bill", FRAME, "--lang", "en"]);
+    assert_eq!(code, 1);
+    assert!(error.contains("unknown option"), "{error}");
+}
+
+#[test]
+fn the_config_command_writes_the_settings_of_the_catalog() {
+    let (code, text, _) = run(&["config"]);
+    assert_eq!(code, 0);
+    assert!(text.contains("[catalog]"), "{text}");
+    assert!(text.contains("refuse_profile_overlap = 1"), "{text}");
+    assert!(text.contains("part_axis = +z"), "{text}");
+    assert!(text.contains("[material.steel]"), "{text}");
 }

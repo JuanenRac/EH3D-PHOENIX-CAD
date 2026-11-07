@@ -2,6 +2,7 @@
 // Copyright (C) 2026 JuanenRac (Electro Hobby 3D). GPL-3.0-or-later.
 #![forbid(unsafe_code)]
 
+use eh3d_phoenix_cad::catalog;
 use eh3d_phoenix_cad::config::{Settings, DEFAULT_CONFIG};
 use eh3d_phoenix_cad::lang::Lang;
 use eh3d_phoenix_cad::shot;
@@ -20,6 +21,8 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad [gui] [PROJECT.phoenixproj | SKETCH.phoenixsketch] [--view model|sketch] [--lang CODE] [--config FILE]   the window (a build with --features gui): with no arguments it opens with a new project; the sketches of a project are kept in the project file, and a .phoenixsketch file is opened to edit it and put in the project, or written from the sketch as a copy
   eh3d-phoenix-cad gui [PROJECT | SKETCH] [--view model|sketch] --shot OUT.png [--size WxH] [--theme forge|dark|light] [--wait N] [--lang CODE] [--config FILE] [--replace]   a picture of the window (a build with --features gui)
   eh3d-phoenix-cad check PROJECT.phoenixproj [--lang CODE] [--config FILE]       reads a project, builds the box (with the extrusions and pockets of its sketches) and prints its measures, the fit of the board and the state of every step
+  eh3d-phoenix-cad bill PROJECT.phoenixproj [--config FILE]                       the bill of materials of the parts placed in a project (profiles cut to a length, screws and brackets) as comma separated values, with the volume and the mass for the density of each material
+  eh3d-phoenix-cad library FILE.phoenixlib [--config FILE]                        reads a library of parts, checks it and lists its parts
   eh3d-phoenix-cad config                                                         every setting of the library, of the window and of the sketch with its default value, as a file for --config
 
 --open FILE is the same as giving the file by itself; a sketch file opens the window on the sketch. --lang takes en, es, de, fr, it, ja, zh or pt; without it the language of the system is used.
@@ -105,6 +108,63 @@ fn run_check(args: &[String]) -> Result<bool, String> {
     Ok(win.info.failed == 0 && win.info.fit.fits)
 }
 
+/// The project and the settings file of the commands `bill` and `library`.
+fn file_and_config(args: &[String], what: &str) -> Result<(PathBuf, Option<PathBuf>), String> {
+    let mut config: Option<PathBuf> = None;
+    let mut file: Option<PathBuf> = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--config" => {
+                let path = iter.next().ok_or("--config needs a settings file")?;
+                config = Some(PathBuf::from(path));
+            }
+            other if other.starts_with("--") => return Err(format!("unknown option {other}")),
+            other => {
+                if file.is_some() {
+                    return Err(format!("only one {what} can be given"));
+                }
+                file = Some(PathBuf::from(other));
+            }
+        }
+    }
+    let file = file.ok_or_else(|| format!("this command needs a {what}"))?;
+    Ok((file, config))
+}
+
+/// `bill`: reads a project and prints the bill of materials of the parts placed in it.
+fn run_bill(args: &[String]) -> Result<bool, String> {
+    let (file, config) = file_and_config(args, "project file")?;
+    let (settings, ui) = load_settings(config.as_deref())?;
+    let lang = Lang::En;
+    let mut win = Window::new(lang, settings, ui).map_err(|e| error_text(&e, lang))?;
+    if !win.open(&file) {
+        return Err(format!("{}: {}", file.display(), win.status.text(lang)));
+    }
+    let csv = win.bill_csv_text().map_err(|e| error_text(&e, lang))?;
+    print!("{csv}");
+    Ok(win.info.failed == 0)
+}
+
+/// `library`: reads a library of parts, checks it against the settings and lists its parts.
+fn run_library(args: &[String]) -> Result<bool, String> {
+    let (file, config) = file_and_config(args, "library file")?;
+    let (settings, _) = load_settings(config.as_deref())?;
+    let lang = Lang::En;
+    let library = catalog::read_file(&file, &settings.design.catalog)
+        .and_then(|library| {
+            library
+                .check_materials(&settings.materials)
+                .map(|()| library)
+        })
+        .map_err(|e| format!("{}: {}", file.display(), error_text(&e, lang)))?;
+    println!("library {}: {} parts", library.name, library.parts.len());
+    for part in &library.parts {
+        println!("  {} {} {}", part.kind().name(), part.name, part.material);
+    }
+    Ok(true)
+}
+
 fn run(args: &[String]) -> Result<bool, String> {
     let Some((command, rest)) = args.split_first() else {
         println!("{HELP}");
@@ -127,6 +187,8 @@ fn run(args: &[String]) -> Result<bool, String> {
             Ok(true)
         }
         "check" => run_check(rest),
+        "bill" => run_bill(rest),
+        "library" => run_library(rest),
         "gui" => Err("this build has no window: build it with --features gui".to_owned()),
         other => Err(format!("{other}: unknown command (see help)")),
     }
@@ -138,7 +200,7 @@ fn run(args: &[String]) -> Result<bool, String> {
 fn window_request(args: &[String]) -> Option<Result<shot::WindowArgs, String>> {
     match args.first().map(String::as_str) {
         None | Some("gui") => {}
-        Some("help" | "--help" | "-h" | "config" | "check") => return None,
+        Some("help" | "--help" | "-h" | "config" | "check" | "bill" | "library") => return None,
         Some(first) if first.starts_with("--") => {}
         Some(first) => {
             let path = Path::new(first);

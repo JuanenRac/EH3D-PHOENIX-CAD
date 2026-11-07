@@ -4,6 +4,7 @@
 
 use crate::body::StepState;
 use crate::browse::{self, Browser};
+use crate::catalog;
 use crate::config::Settings;
 use crate::export::Format;
 use crate::lang::{Lang, Msg};
@@ -46,6 +47,9 @@ const MEASURE: Color32 = Color32::from_rgb(0xff, 0xe0, 0x66);
 /// The extensions of the sketch files that the window opens and writes.
 const SKETCH_EXTENSIONS: [&str; 1] = [sketch_file::EXTENSION];
 
+/// The extensions of the library files that the window opens.
+const LIBRARY_EXTENSIONS: [&str; 1] = [catalog::EXTENSION];
+
 enum Outcome {
     Cancel,
     Pick(PathBuf),
@@ -62,6 +66,8 @@ struct Dialog {
     export: Option<Format>,
     /// Whether the file is written over when it exists (the box of the export window).
     overwrite: bool,
+    /// Whether the files are libraries of parts (otherwise they are projects or sketches).
+    library: bool,
 }
 
 struct App {
@@ -124,6 +130,19 @@ impl App {
             sketch: false,
             export: None,
             overwrite: false,
+            library: false,
+        });
+    }
+
+    /// Asks which library of parts to open.
+    fn open_library_dialog(&mut self) {
+        self.dialog = Some(Dialog {
+            browser: Browser::new(self.folder(), &LIBRARY_EXTENSIONS),
+            save: None,
+            sketch: false,
+            export: None,
+            overwrite: false,
+            library: true,
         });
     }
 
@@ -137,6 +156,7 @@ impl App {
             sketch: false,
             export: Some(format),
             overwrite: self.win.export_overwrite,
+            library: false,
         });
     }
 
@@ -153,6 +173,7 @@ impl App {
             sketch: false,
             export: None,
             overwrite: false,
+            library: false,
         });
     }
 
@@ -190,6 +211,9 @@ impl App {
                 }
                 if ui.button(Msg::Open.tr(lang)).clicked() {
                     self.open_dialog();
+                }
+                if ui.button(Msg::OpenLibrary.tr(lang)).clicked() {
+                    self.open_library_dialog();
                 }
                 let can_save = !self.win.read_only;
                 if ui
@@ -288,6 +312,7 @@ impl App {
                         (NewStep::HolePattern, Msg::AddHolePattern),
                         (NewStep::PostPattern, Msg::AddPostPattern),
                         (NewStep::Fins, Msg::AddFins),
+                        (NewStep::Part, Msg::AddPart),
                     ] {
                         if ui
                             .add_enabled(editable, egui::Button::new(msg.tr(lang)))
@@ -806,6 +831,8 @@ impl App {
                 // or by the person: an order to write over is for one file
                 let done = if let Some(format) = dialog.export {
                     self.win.export_to(format, &path, dialog.overwrite)
+                } else if dialog.library {
+                    self.win.open_library(&path)
                 } else {
                     match (dialog.sketch, dialog.save.is_some()) {
                         (false, true) => self.win.save_to(&path),
@@ -864,6 +891,7 @@ fn show_dialog(ctx: &egui::Context, d: &mut Dialog, lang: Lang) -> Option<Outcom
     let mut open = true;
     let title = match (d.sketch, d.save.is_some()) {
         _ if d.export.is_some() => Msg::ExportTitle,
+        _ if d.library => Msg::OpenLibraryTitle,
         (false, true) => Msg::SaveTitle,
         (false, false) => Msg::OpenTitle,
         (true, true) => Msg::SaveSketchTitle,
@@ -873,6 +901,8 @@ fn show_dialog(ctx: &egui::Context, d: &mut Dialog, lang: Lang) -> Option<Outcom
     let export_extensions: Vec<&str> = export_extension.into_iter().collect();
     let extensions: &[&str] = if d.export.is_some() {
         &export_extensions
+    } else if d.library {
+        &LIBRARY_EXTENSIONS
     } else if d.sketch {
         &SKETCH_EXTENSIONS
     } else {
@@ -1087,6 +1117,7 @@ impl App {
             sketch: true,
             export: None,
             overwrite: false,
+            library: false,
         });
     }
 
@@ -1104,6 +1135,7 @@ impl App {
             sketch: true,
             export: None,
             overwrite: false,
+            library: false,
         });
     }
 
