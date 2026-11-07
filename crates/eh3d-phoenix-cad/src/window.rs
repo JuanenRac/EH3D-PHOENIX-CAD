@@ -8,6 +8,7 @@
 //! it, so a refused value leaves the project exactly as it was.
 
 use crate::body::{Built, Step, StepState};
+use crate::catalog::{self, Axis, Kind as PartKind, Library, Orientation, PartInstance, Shape};
 use crate::config::Settings;
 use crate::drag::{self, Drawn, Plane};
 use crate::enclosure::{
@@ -19,6 +20,7 @@ use crate::fins::{FinAxis, FinSet};
 use crate::fit::{check_fit, Envelope, FitReport};
 use crate::history::History;
 use crate::lang::{fill, Lang, Msg};
+use crate::mass::mass_micrograms;
 use crate::measure::{self, Geometry, Label, Measurement, Quantity, Reference};
 use crate::mechanical::{Mechanical, MECHANICAL_DOMAIN};
 use crate::messages;
@@ -66,6 +68,10 @@ pub enum Selection {
     Pattern(usize),
     /// A set of cooling fins: the index of its step.
     Fins(usize),
+    /// A part of the catalog placed in the model: the index of its step.
+    Part(usize),
+    /// A part of the open library, which is not in the model: its place in the library.
+    CatalogPart(usize),
     /// A step that has no editor of its own: its index.
     Other(usize),
     /// A screw hole of the lid, by its position in the list the lid derives.
@@ -95,6 +101,8 @@ pub enum NewStep {
     PostPattern,
     /// A set of cooling fins on a face.
     Fins,
+    /// The part of the open library that is chosen, placed in the model.
+    Part,
 }
 
 /// A row of the sheet of variables.
@@ -137,9 +145,11 @@ impl Selection {
             | Selection::Feature(i)
             | Selection::Pattern(i)
             | Selection::Fins(i)
+            | Selection::Part(i)
             | Selection::Other(i) => Some(i),
             Selection::Nothing
             | Selection::Body
+            | Selection::CatalogPart(_)
             | Selection::Screw(_)
             | Selection::Fit
             | Selection::Sheet => None,
@@ -228,6 +238,30 @@ pub enum Key {
     FinArea,
     /// The estimate of the heat the fins give to still air (read only).
     FinPower,
+    /// The library and the part a placed part came from (read only).
+    PartLibrary,
+    /// The kind of a part (read only).
+    PartKind,
+    /// The material of a part (read only).
+    PartMaterial,
+    /// The position `x` of a placed part.
+    PartX,
+    /// The position `y` of a placed part.
+    PartY,
+    /// The position `z` of a placed part.
+    PartZ,
+    /// The direction the length of a placed part runs along.
+    PartDirection,
+    /// The roll of a placed part about its length, in degrees.
+    PartRoll,
+    /// The length a placed profile is cut to.
+    PartCut,
+    /// The size of a part in the model (read only).
+    PartSize,
+    /// The volume of the material of a part (read only).
+    PartVolume,
+    /// The mass of a part (read only).
+    PartMass,
 }
 
 /// How a field is edited.
@@ -507,6 +541,10 @@ pub struct Window {
     pub export_format: Format,
     /// Whether the box to write over an existing file is ticked.
     pub export_overwrite: bool,
+    /// The library of parts that is open, when one is.
+    pub library: Option<Library>,
+    /// The part of the library the next part added is made from (its place in the library).
+    pub catalog_choice: usize,
     measurements: Vec<Measurement>,
     pending: Vec<Reference>,
     drag: Option<Drag>,
@@ -534,6 +572,16 @@ pub fn format_msg(format: Format) -> Msg {
         Format::Script => Msg::ExportScript,
         Format::Step => Msg::ExportStep,
         Format::Report => Msg::ExportReport,
+        Format::Bill => Msg::ExportBill,
+    }
+}
+
+/// The word that names a kind of part.
+pub fn kind_msg(kind: PartKind) -> Msg {
+    match kind {
+        PartKind::Profile => Msg::KindProfile,
+        PartKind::Screw => Msg::KindScrew,
+        PartKind::Bracket => Msg::KindBracket,
     }
 }
 
@@ -603,6 +651,7 @@ pub fn step_label(step: &Step) -> String {
         Operation::AddPost { post, .. } | Operation::ReplacePost { post, .. } => post.name.clone(),
         Operation::AddPattern { pattern, .. } => pattern.name().to_string(),
         Operation::AddFins { fins, .. } => fins.name.clone(),
+        Operation::AddPart { part, .. } => part.name.clone(),
         _ => "-".to_string(),
     }
 }
@@ -616,6 +665,7 @@ fn the_selection_of(index: usize, step: &Step) -> Selection {
         Operation::Extrude { .. } | Operation::Pocket { .. } => Selection::Feature(index),
         Operation::AddPattern { .. } => Selection::Pattern(index),
         Operation::AddFins { .. } => Selection::Fins(index),
+        Operation::AddPart { .. } => Selection::Part(index),
         _ => Selection::Other(index),
     }
 }
@@ -654,6 +704,8 @@ impl Window {
             measure_tool: MeasureTool::Off,
             export_format: ui.export.format,
             export_overwrite: ui.export.overwrite,
+            library: None,
+            catalog_choice: 0,
             measurements: Vec::new(),
             pending: Vec::new(),
             drag: None,
@@ -805,6 +857,7 @@ impl Window {
         let mut posts = Vec::new();
         let mut patterns = Vec::new();
         let mut fins = Vec::new();
+        let mut parts = Vec::new();
         let mut edges = Vec::new();
         let mut lids = Vec::new();
         let mut features = Vec::new();
@@ -821,6 +874,7 @@ impl Window {
                 Selection::Post(_) => posts.push(item),
                 Selection::Pattern(_) => patterns.push(item),
                 Selection::Fins(_) => fins.push(item),
+                Selection::Part(_) => parts.push(item),
                 Selection::Edging(_) => edges.push(item),
                 Selection::Lid(_) => lids.push(item),
                 Selection::Feature(_) => features.push(item),
@@ -839,6 +893,21 @@ impl Window {
                 mark: Mark::Normal,
             })
             .collect();
+        let library: Vec<TreeItem> = self
+            .library
+            .as_ref()
+            .map(|l| {
+                l.parts
+                    .iter()
+                    .enumerate()
+                    .map(|(k, p)| TreeItem {
+                        selection: Selection::CatalogPart(k),
+                        label: p.name.clone(),
+                        mark: Mark::Normal,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let mut groups = vec![TreeGroup {
             title: Msg::GroupBox,
             items: vec![TreeItem {
@@ -860,11 +929,13 @@ impl Window {
             (Msg::GroupPosts, posts),
             (Msg::GroupPatterns, patterns),
             (Msg::GroupFins, fins),
+            (Msg::GroupParts, parts),
             (Msg::GroupEdges, edges),
             (Msg::GroupLid, lids),
             (Msg::GroupScrews, screws),
             (Msg::GroupFeatures, features),
             (Msg::GroupOther, others),
+            (Msg::GroupLibrary, library),
         ] {
             if !items.is_empty() {
                 groups.push(TreeGroup { title, items });
@@ -891,11 +962,16 @@ impl Window {
             | Selection::Feature(i)
             | Selection::Pattern(i)
             | Selection::Fins(i)
+            | Selection::Part(i)
             | Selection::Other(i) => i < self.mech.steps.len(),
+            Selection::CatalogPart(k) => k < self.library.as_ref().map_or(0, |l| l.parts.len()),
             Selection::Screw(k) => k < self.built.enclosure.lid_holes().len(),
             Selection::Nothing | Selection::Body | Selection::Fit | Selection::Sheet => true,
         };
         self.selection = if valid { selection } else { Selection::Body };
+        if let (true, Selection::CatalogPart(k)) = (valid, selection) {
+            self.catalog_choice = k;
+        }
         self.refresh_fields();
     }
 
@@ -907,7 +983,8 @@ impl Window {
                 | Some(Operation::AddPost { id, .. })
                 | Some(Operation::Extrude { id, .. })
                 | Some(Operation::Pocket { id, .. })
-                | Some(Operation::AddFins { id, .. }) => Highlight::Object(*id),
+                | Some(Operation::AddFins { id, .. })
+                | Some(Operation::AddPart { id, .. }) => Highlight::Object(*id),
                 Some(Operation::AddPattern { id, .. }) => Highlight::Pattern(*id),
                 _ => Highlight::Nothing,
             }
@@ -917,7 +994,8 @@ impl Window {
             | Selection::Post(i)
             | Selection::Feature(i)
             | Selection::Pattern(i)
-            | Selection::Fins(i) => id_of(i),
+            | Selection::Fins(i)
+            | Selection::Part(i) => id_of(i),
             Selection::Screw(k) => Highlight::Screw(k),
             _ => Highlight::Nothing,
         }
@@ -1080,6 +1158,10 @@ impl Window {
             (Selection::Fins(_), Some(Operation::AddFins { fins, .. })) => {
                 self.fins_fields(fins, writable)
             }
+            (Selection::Part(_), Some(Operation::AddPart { part, .. })) => {
+                self.part_fields(part, writable)
+            }
+            (Selection::CatalogPart(k), _) => self.catalog_fields(k),
             (Selection::Edging(_), Some(Operation::SetEdging(edging))) => {
                 let mut out = Vec::new();
                 for index in 0..3 {
@@ -1329,6 +1411,197 @@ impl Window {
         out
     }
 
+    /// A read only field of text.
+    fn info_field(key: Key, label: Msg, text: String) -> Field {
+        Field {
+            key,
+            label,
+            text,
+            note: String::new(),
+            input: Input::Text,
+            editable: false,
+        }
+    }
+
+    /// The size of a part in the model as text.
+    fn size_text(&self, size: [i64; 3]) -> String {
+        size.map(|v| self.unit_text(Length::new(v).unwrap_or(Length::ZERO)))
+            .join(" x ")
+    }
+
+    /// The volume and the mass of a part as read only fields. The mass needs the density of the
+    /// material in the settings; without it the field says so with a dash.
+    fn material_fields(&self, volume: Result<i128, CadError>, material: &str) -> Vec<Field> {
+        let volume = volume.ok();
+        let volume_text = volume.map_or("-".to_string(), |v| {
+            format!("{} mm3", catalog::volume_mm3_text(v))
+        });
+        let mass_text = match (volume, self.settings.materials.get(material)) {
+            (Some(v), Some(density)) => mass_micrograms(v, *density).map_or("-".to_string(), |m| {
+                format!("{} g", catalog::mass_g_text(m))
+            }),
+            _ => "-".to_string(),
+        };
+        vec![
+            Self::info_field(Key::PartVolume, Msg::FieldPartVolume, volume_text),
+            Self::info_field(Key::PartMass, Msg::FieldPartMass, mass_text),
+        ]
+    }
+
+    /// The fields of a part placed in the model.
+    fn part_fields(&self, part: &PartInstance, writable: bool) -> Vec<Field> {
+        let lang = self.lang;
+        let text = |key: Key, label: Msg, text: String| Field {
+            key,
+            label,
+            text,
+            note: String::new(),
+            input: Input::Text,
+            editable: writable,
+        };
+        let mut out = vec![
+            text(Key::Name, Msg::FieldName, part.name.clone()),
+            Self::info_field(
+                Key::PartLibrary,
+                Msg::FieldPartLibrary,
+                format!("{} / {}", part.library, part.part.name),
+            ),
+            Self::info_field(
+                Key::PartKind,
+                Msg::FieldPartKind,
+                kind_msg(part.part.kind()).tr(lang).to_string(),
+            ),
+            Self::info_field(
+                Key::PartMaterial,
+                Msg::FieldPartMaterial,
+                part.part.material.clone(),
+            ),
+            self.length_field(Key::PartX, Msg::FieldPartX, part.at[0], writable),
+            self.length_field(Key::PartY, Msg::FieldPartY, part.at[1], writable),
+            self.length_field(Key::PartZ, Msg::FieldPartZ, part.at[2], writable),
+            text(
+                Key::PartDirection,
+                Msg::FieldPartDirection,
+                part.orientation.axis.name().to_string(),
+            ),
+            text(
+                Key::PartRoll,
+                Msg::FieldPartRoll,
+                (u32::from(part.orientation.roll) * 90).to_string(),
+            ),
+        ];
+        if let Some(cut) = part.cut {
+            out.push(self.length_field(Key::PartCut, Msg::FieldPartCut, cut, writable));
+        }
+        out.push(Self::info_field(
+            Key::PartSize,
+            Msg::FieldPartSize,
+            self.size_text(part.extent().0),
+        ));
+        out.extend(self.material_fields(part.volume_nm3(), &part.part.material));
+        out
+    }
+
+    /// The fields of a part of the open library, which are all read only: what it is made of and
+    /// how big it is at its usual cut.
+    fn catalog_fields(&self, index: usize) -> Vec<Field> {
+        let Some(part) = self.library.as_ref().and_then(|l| l.parts.get(index)) else {
+            return Vec::new();
+        };
+        let mut out = vec![
+            Self::info_field(Key::Name, Msg::FieldName, part.name.clone()),
+            Self::info_field(
+                Key::PartKind,
+                Msg::FieldPartKind,
+                kind_msg(part.kind()).tr(self.lang).to_string(),
+            ),
+            Self::info_field(
+                Key::PartMaterial,
+                Msg::FieldPartMaterial,
+                part.material.clone(),
+            ),
+            Self::info_field(
+                Key::PartSize,
+                Msg::FieldPartSize,
+                self.size_text(part.size(None)),
+            ),
+        ];
+        out.extend(self.material_fields(part.volume_nm3(None), &part.material));
+        out
+    }
+
+    /// A part placed in the model after an edit of the field `key`.
+    fn edited_part(
+        &self,
+        part: &PartInstance,
+        key: Key,
+        text: &str,
+    ) -> Result<PartInstance, CadError> {
+        let mut p = part.clone();
+        match key {
+            Key::Name => p.name = text.trim().to_string(),
+            Key::PartX => p.at[0] = self.parse_text(text)?,
+            Key::PartY => p.at[1] = self.parse_text(text)?,
+            Key::PartZ => p.at[2] = self.parse_text(text)?,
+            Key::PartDirection => {
+                p.orientation.axis = Axis::from_name(text.trim())
+                    .ok_or_else(|| CadError::Reference(text.trim().to_string()))?;
+            }
+            Key::PartRoll => {
+                let degrees = text
+                    .trim()
+                    .parse::<u32>()
+                    .map_err(|_| CadError::ValueOutOfRange("roll"))?;
+                if degrees % 90 != 0 || degrees > 270 {
+                    return Err(CadError::ValueOutOfRange("roll"));
+                }
+                p.orientation.roll = u8::try_from(degrees / 90).unwrap_or(0);
+            }
+            Key::PartCut if p.cut.is_some() => p.cut = Some(self.parse_text(text)?),
+            _ => return Err(refusal()),
+        }
+        Ok(p)
+    }
+
+    /// Opens a library of parts from a file. The materials of its parts have to be in the
+    /// settings. When it cannot be opened the one that was open stays and the status bar says why.
+    pub fn open_library(&mut self, path: &Path) -> bool {
+        let opened = catalog::read_file(path, &self.settings.design.catalog).and_then(|library| {
+            library
+                .check_materials(&self.settings.materials)
+                .map(|()| library)
+        });
+        match opened {
+            Ok(library) => {
+                self.status = Status::Done(
+                    Msg::LibraryLoaded,
+                    vec![library.name.clone(), library.parts.len().to_string()],
+                );
+                self.library = Some(library);
+                self.catalog_choice = 0;
+                self.refresh_fields();
+                true
+            }
+            Err(e) => {
+                self.status = Status::Error(e);
+                false
+            }
+        }
+    }
+
+    /// The bill of materials of the parts placed in the model.
+    pub fn bill(&self) -> Result<catalog::Bill, CadError> {
+        catalog::bill(
+            self.built.enclosure.parts().values(),
+            &self.settings.materials,
+        )
+    }
+
+    /// The bill of materials as comma separated values.
+    pub fn bill_csv_text(&self) -> Result<String, CadError> {
+        self.bill().map(|bill| catalog::bill_csv(&bill))
+    }
+
     fn refresh_fields(&mut self) {
         self.fields = self.make_fields();
     }
@@ -1433,6 +1706,10 @@ impl Window {
             Operation::AddFins { id, fins } => Ok(Operation::AddFins {
                 id: *id,
                 fins: self.edited_fins(fins, key, text)?,
+            }),
+            Operation::AddPart { id, part } => Ok(Operation::AddPart {
+                id: *id,
+                part: self.edited_part(part, key, text)?,
             }),
             Operation::SetEdging(edging) => {
                 Ok(Operation::SetEdging(self.edited_edging(edging, key, text)?))
@@ -1905,7 +2182,9 @@ impl Window {
                 | Operation::RemoveFeature { id }
                 | Operation::RemovePattern { id }
                 | Operation::AddFins { id, .. }
-                | Operation::RemoveFins { id } => ids.push(*id),
+                | Operation::RemoveFins { id }
+                | Operation::AddPart { id, .. }
+                | Operation::RemovePart { id } => ids.push(*id),
                 Operation::AddPattern { id, pattern } => ids.extend(pattern.instance_ids(*id)),
                 Operation::AddPost { id, post } | Operation::ReplacePost { id, post } => {
                     ids.push(*id);
@@ -2084,6 +2363,46 @@ impl Window {
                     name,
                 ))
             }
+            NewStep::Part => {
+                let library = self
+                    .library
+                    .as_ref()
+                    .ok_or_else(|| CadError::Part("no library is open".to_string()))?;
+                let chosen = library
+                    .parts
+                    .get(self.catalog_choice)
+                    .or_else(|| library.parts.first())
+                    .ok_or_else(|| CadError::Part("the library has no part".to_string()))?;
+                let count = self
+                    .mech
+                    .steps
+                    .iter()
+                    .filter(|s| matches!(s.op, Operation::AddPart { .. }))
+                    .count();
+                let name = fill(Msg::NamePart.tr(self.lang), &[&(count + 1).to_string()]);
+                let cut = match chosen.shape {
+                    Shape::Profile { default_cut, .. } => Some(default_cut),
+                    _ => None,
+                };
+                let part = PartInstance {
+                    name: name.clone(),
+                    library: library.name.clone(),
+                    part: chosen.clone(),
+                    at: [d.part_x.checked_add(shift)?, d.part_y, d.part_z],
+                    orientation: Orientation {
+                        axis: d.part_axis,
+                        roll: d.part_roll,
+                    },
+                    cut,
+                };
+                Ok((
+                    Operation::AddPart {
+                        id: self.fresh_id()?,
+                        part,
+                    },
+                    name,
+                ))
+            }
             NewStep::Extrude | NewStep::Pocket => {
                 let sketch = self
                     .active_sketch
@@ -2159,7 +2478,8 @@ impl Window {
             | NewStep::Post
             | NewStep::HolePattern
             | NewStep::PostPattern
-            | NewStep::Fins => self.ui.new_step.tries,
+            | NewStep::Fins
+            | NewStep::Part => self.ui.new_step.tries,
         };
         let mut last = refusal();
         for attempt in 0..tries {
@@ -2592,10 +2912,62 @@ impl Window {
                 ],
             ));
         }
+        lines.extend(self.parts_report_lines());
         lines.join(
             "
 ",
         )
+    }
+
+    /// The lines of the report about the parts placed in the model: the totals, a line for each
+    /// part and cut, and the cut list of each profile (lengths in millimetres).
+    fn parts_report_lines(&self) -> Vec<String> {
+        let lang = self.lang;
+        if self.built.enclosure.parts().is_empty() {
+            return Vec::new();
+        }
+        let bill = match self.bill() {
+            Ok(bill) => bill,
+            Err(e) => return vec![error_text(&e, lang)],
+        };
+        let mm = |nm: i64| format!("{} mm", mm_text(nm));
+        let mut lines = vec![fill(
+            Msg::ReportParts.tr(lang),
+            &[
+                &bill.pieces.to_string(),
+                &catalog::volume_mm3_text(bill.volume_nm3),
+                &catalog::mass_g_text(bill.mass_ug),
+            ],
+        )];
+        for l in &bill.lines {
+            lines.push(fill(
+                Msg::ReportPartLine.tr(lang),
+                &[
+                    kind_msg(l.kind).tr(lang),
+                    &l.part,
+                    &l.material,
+                    &l.count.to_string(),
+                    &l.cut.map_or("-".to_string(), |c| mm(c.get())),
+                    &catalog::mass_g_text(l.mass_ug),
+                ],
+            ));
+        }
+        for cut in catalog::cut_list(&bill) {
+            let pieces: Vec<String> = cut
+                .cuts
+                .iter()
+                .map(|(len, n)| format!("{n} x {}", mm(len.get())))
+                .collect();
+            lines.push(fill(
+                Msg::ReportCut.tr(lang),
+                &[
+                    &cut.part,
+                    &pieces.join(" + "),
+                    &mm(i64::try_from(cut.total_nm).unwrap_or(i64::MAX)),
+                ],
+            ));
+        }
+        lines
     }
 
     /// Says in the status bar that the report was put on the clipboard.
@@ -2611,7 +2983,11 @@ impl Window {
     /// `PHOENIX-CAD-022` when the model has a shape it does not draw (the extrusions and pockets
     /// of the sketches among them).
     pub fn export_text(&self, format: Format) -> Result<String, CadError> {
-        export::render(format, &self.built.enclosure, &self.report_text())
+        let text = match format {
+            Format::Bill => self.bill_csv_text()?,
+            _ => self.report_text(),
+        };
+        export::render(format, &self.built.enclosure, &text)
     }
 
     /// The name suggested for a file of a format, from the name of the project.
@@ -5239,5 +5615,409 @@ mod tests {
         // the STEP file does not draw them and says so
         let err = again.export_text(Format::Step).unwrap_err();
         assert_eq!(err.code(), "PHOENIX-CAD-022");
+    }
+
+    fn library_path() -> PathBuf {
+        PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/examples/chassis.phoenixlib"
+        ))
+    }
+
+    fn frame_path() -> PathBuf {
+        PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/examples/frame.phoenixproj"
+        ))
+    }
+
+    fn with_library() -> Window {
+        let mut w = fresh();
+        assert!(w.open_library(&library_path()), "{:?}", w.status);
+        w
+    }
+
+    /// Chooses a part of the library by clicking it in the tree.
+    fn choose_part(w: &mut Window, name: &str) {
+        let k = w
+            .library
+            .as_ref()
+            .unwrap()
+            .parts
+            .iter()
+            .position(|p| p.name == name)
+            .unwrap();
+        w.select(Selection::CatalogPart(k));
+    }
+
+    fn part_of(w: &Window, index: usize) -> PartInstance {
+        match &w.mech.steps[index].op {
+            Operation::AddPart { part, .. } => part.clone(),
+            other => panic!("not a part: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_library_is_opened_listed_in_the_tree_and_each_part_shows_its_numbers() {
+        let mut w = with_library();
+        assert_eq!(
+            w.status.text(Lang::En),
+            "Library chassis-basic opened: 8 parts"
+        );
+        let tree = w.tree();
+        let group = tree.iter().find(|g| g.title == Msg::GroupLibrary).unwrap();
+        let names: Vec<&str> = group.items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "tube-20x20",
+                "tube-40x20",
+                "bar-10x10",
+                "bolt-m3x10",
+                "flat-m3x8",
+                "hex-m4x16",
+                "angle-30",
+                "angle-20"
+            ]
+        );
+        assert_eq!(group.items[3].selection, Selection::CatalogPart(3));
+        // no library, no group
+        assert!(!fresh().tree().iter().any(|g| g.title == Msg::GroupLibrary));
+        // 20 x 20 with a wall of 1.5 mm is 111 mm2: 33300 mm3 over the usual cut of 300 mm, 89.91 g of aluminium
+        w.select(Selection::CatalogPart(0));
+        assert_eq!(w.catalog_choice, 0);
+        assert_eq!(text_of(&w, Key::Name), "tube-20x20");
+        assert_eq!(text_of(&w, Key::PartKind), "profile");
+        assert_eq!(text_of(&w, Key::PartMaterial), "aluminium");
+        assert_eq!(
+            text_of(&w, Key::PartSize),
+            "20.000 mm x 20.000 mm x 300.000 mm"
+        );
+        assert_eq!(text_of(&w, Key::PartVolume), "33300.000 mm3");
+        assert_eq!(text_of(&w, Key::PartMass), "89.910 g");
+        assert!(w.fields.iter().all(|f| !f.editable));
+        // the screw M3 x 10: head 5.5 x 3, so 5.5 x 5.5 x 13 mm and 1.114 g of steel
+        choose_part(&mut w, "bolt-m3x10");
+        assert_eq!(w.catalog_choice, 3);
+        assert_eq!(
+            text_of(&w, Key::PartSize),
+            "5.500 mm x 5.500 mm x 13.000 mm"
+        );
+        assert_eq!(text_of(&w, Key::PartMass), "1.114 g");
+        // a part that is not there selects the box
+        w.select(Selection::CatalogPart(99));
+        assert_eq!(w.selection, Selection::Body);
+    }
+
+    #[test]
+    fn a_library_that_cannot_be_opened_leaves_the_one_that_is_open() {
+        let mut w = with_library();
+        assert!(!w.open_library(&library_path().with_file_name("none.phoenixlib")));
+        assert!(w.status.is_problem());
+        assert!(w.status.text(Lang::En).contains("PHOENIX-CAD-012"));
+        assert_eq!(w.library.as_ref().unwrap().parts.len(), 8);
+        // a project is not a library
+        assert!(!w.open_library(&example_path()));
+        assert!(w.status.text(Lang::En).contains("PHOENIX-CAD-044"));
+        // a material that the settings do not have
+        let dir = Scratch::new("library-material");
+        let file = dir.0.join("odd.phoenixlib");
+        std::fs::write(
+            &file,
+            "phoenix-library 1\nname odd\npart bar profile unobtainium 10000000 10000000 0 100000000 1000000000\n",
+        )
+        .unwrap();
+        assert!(!w.open_library(&file));
+        let text = w.status.text(Lang::En);
+        assert!(
+            text.contains("PHOENIX-CAD-044") && text.contains("unobtainium"),
+            "{text}"
+        );
+        assert_eq!(w.library.as_ref().unwrap().name, "chassis-basic");
+        // and the same library in Portuguese of Portugal
+        w.lang = Lang::Pt;
+        assert!(w
+            .status
+            .text(Lang::Pt)
+            .contains("Biblioteca de peças inválida"));
+    }
+
+    #[test]
+    fn a_part_is_added_from_the_library_where_the_settings_say_and_moves_along_to_a_free_place() {
+        let mut w = with_library();
+        choose_part(&mut w, "tube-40x20");
+        w.add_step(NewStep::Part);
+        assert!(!w.status.is_problem(), "{:?}", w.status);
+        assert_eq!(w.selection, Selection::Part(0));
+        assert_eq!(w.mech.steps[0].name, "Part 1");
+        let first = part_of(&w, 0);
+        assert_eq!(first.library, "chassis-basic");
+        assert_eq!(first.part.name, "tube-40x20");
+        assert_eq!(first.cut, Some(mm_len(300)));
+        assert_eq!(first.at, [mm_len(0), mm_len(0), mm_len(0)]);
+        let group = w
+            .tree()
+            .into_iter()
+            .find(|g| g.title == Msg::GroupParts)
+            .unwrap();
+        assert_eq!(group.items.len(), 1);
+        assert_eq!(group.items[0].selection, Selection::Part(0));
+        // the second one would share volume with the first (40 mm wide along x): the tries move
+        // it by 12 mm each, and the fourth try (48 mm) is the first that is clear of it
+        w.add_step(NewStep::Part);
+        assert_eq!(part_of(&w, 1).at, [mm_len(48), mm_len(0), mm_len(0)]);
+        assert_eq!(w.enclosure().parts().len(), 2);
+        // the part is highlighted and drawn
+        assert!(matches!(w.highlight(), Highlight::Object(_)));
+        // the kinds of parts that have no cut have none
+        choose_part(&mut w, "angle-30");
+        w.add_step(NewStep::Part);
+        assert_eq!(part_of(&w, 2).cut, None);
+        assert!(!w.fields.iter().any(|f| f.key == Key::PartCut));
+        // removing the step takes the part away and undo brings it back
+        w.remove_step();
+        assert_eq!(w.enclosure().parts().len(), 2);
+        w.undo();
+        assert_eq!(w.enclosure().parts().len(), 3);
+        w.redo();
+        assert_eq!(w.enclosure().parts().len(), 2);
+    }
+
+    #[test]
+    fn a_part_cannot_be_added_without_a_library() {
+        let mut w = fresh();
+        w.add_step(NewStep::Part);
+        assert!(w.status.is_problem());
+        assert!(w.status.text(Lang::En).contains("PHOENIX-CAD-045"));
+        assert!(w.mech.steps.is_empty());
+        assert!(!w.can_undo());
+    }
+
+    #[test]
+    fn editing_a_part_gives_new_numbers_and_every_limit_refuses_with_its_code() {
+        let mut w = with_library();
+        choose_part(&mut w, "tube-40x20");
+        w.add_step(NewStep::Part);
+        let keys: Vec<Key> = w.fields.iter().map(|f| f.key).collect();
+        assert_eq!(
+            keys,
+            [
+                Key::Name,
+                Key::PartLibrary,
+                Key::PartKind,
+                Key::PartMaterial,
+                Key::PartX,
+                Key::PartY,
+                Key::PartZ,
+                Key::PartDirection,
+                Key::PartRoll,
+                Key::PartCut,
+                Key::PartSize,
+                Key::PartVolume,
+                Key::PartMass
+            ]
+        );
+        assert_eq!(text_of(&w, Key::PartLibrary), "chassis-basic / tube-40x20");
+        // the usual cut: 40 x 20 with a wall of 2 mm is 224 mm2, 67200 mm3 over 300 mm, 181.44 g
+        assert_eq!(text_of(&w, Key::PartVolume), "67200.000 mm3");
+        assert_eq!(text_of(&w, Key::PartMass), "181.440 g");
+        // a length along +x with a quarter turn of roll: 250 mm along x, 20 along y, 40 along z
+        set(&mut w, Key::PartCut, "250");
+        set(&mut w, Key::PartDirection, "+x");
+        set(&mut w, Key::PartRoll, "90");
+        set(&mut w, Key::PartX, "100");
+        set(&mut w, Key::PartY, "-5 mm");
+        set(&mut w, Key::PartZ, "0.5 in");
+        assert!(!w.status.is_problem(), "{:?}", w.status);
+        let part = part_of(&w, 0);
+        assert_eq!(part.cut, Some(mm_len(250)));
+        assert_eq!(part.orientation.roll, 1);
+        assert_eq!(
+            part.at,
+            [mm_len(100), mm_len(-5), Length::new(12_700_000).unwrap()]
+        );
+        assert_eq!(
+            text_of(&w, Key::PartSize),
+            "250.000 mm x 20.000 mm x 40.000 mm"
+        );
+        // 224 mm2 over 250 mm is 56000 mm3 and 151.2 g
+        assert_eq!(text_of(&w, Key::PartVolume), "56000.000 mm3");
+        assert_eq!(text_of(&w, Key::PartMass), "151.200 g");
+        assert_eq!(text_of(&w, Key::PartRoll), "90");
+        // the refusals leave the part as it was
+        let before = w.mech.clone();
+        for (key, text, code) in [
+            (Key::PartCut, "2001", "PHOENIX-CAD-045"),
+            (Key::PartCut, "0.9 mm", "PHOENIX-CAD-045"),
+            (Key::PartCut, "long", "PHOENIX-CAD-008"),
+            (Key::PartDirection, "up", "PHOENIX-CAD-010"),
+            (Key::PartRoll, "45", "PHOENIX-CAD-007"),
+            (Key::PartRoll, "360", "PHOENIX-CAD-007"),
+            (Key::PartRoll, "-90", "PHOENIX-CAD-007"),
+            (Key::PartX, "7000", "PHOENIX-CAD-045"),
+            (Key::PartX, "far", "PHOENIX-CAD-008"),
+        ] {
+            set(&mut w, key, text);
+            assert!(w.status.is_problem(), "{key:?} {text}");
+            assert!(
+                w.status.text(Lang::En).contains(code),
+                "{key:?} {text}: {}",
+                w.status.text(Lang::En)
+            );
+            assert_eq!(w.mech, before, "{key:?} {text}");
+        }
+        // the bar is 2000 mm long: exactly that is allowed
+        set(&mut w, Key::PartCut, "2000");
+        assert!(!w.status.is_problem());
+        assert_eq!(part_of(&w, 0).cut, Some(mm_len(2000)));
+        // the name is free text
+        set(&mut w, Key::Name, "rail");
+        assert_eq!(part_of(&w, 0).name, "rail");
+        // the read only fields are not edited
+        let i = field(&w, Key::PartMass);
+        assert!(!w.fields[i].editable);
+        w.type_in(i, "1".to_string());
+        w.commit(i);
+        assert_eq!(part_of(&w, 0).name, "rail");
+        // every edit was one entry of the history
+        w.undo();
+        assert_eq!(part_of(&w, 0).name, "Part 1");
+        w.redo();
+        assert_eq!(part_of(&w, 0).name, "rail");
+    }
+
+    #[test]
+    fn two_profiles_cannot_share_volume_in_the_window_and_the_setting_can_allow_it() {
+        let mut w = with_library();
+        choose_part(&mut w, "tube-20x20");
+        w.add_step(NewStep::Part);
+        w.add_step(NewStep::Part);
+        // the second landed 24 mm along (20 mm wide, tries every 12 mm)
+        assert_eq!(part_of(&w, 1).at[0], mm_len(24));
+        set(&mut w, Key::PartX, "19.999999");
+        assert!(w.status.text(Lang::En).contains("PHOENIX-CAD-045"));
+        assert!(w.status.text(Lang::En).contains("shares volume with"));
+        set(&mut w, Key::PartX, "20");
+        assert!(!w.status.is_problem());
+        let mut loose =
+            Settings::with_user_config("[catalog]\nrefuse_profile_overlap = 0\n").unwrap();
+        loose.design.catalog.refuse_overlap = false;
+        let mut v = Window::new(Lang::En, loose, UiSettings::defaults()).unwrap();
+        assert!(v.open_library(&library_path()));
+        v.add_step(NewStep::Part);
+        v.add_step(NewStep::Part);
+        // with the overlap allowed the first try is clear
+        assert_eq!(part_of(&v, 1).at[0], mm_len(0));
+    }
+
+    #[test]
+    fn the_example_frame_opens_with_every_step_valid_and_has_a_bill_of_materials() {
+        let mut w = fresh();
+        assert!(w.open(&frame_path()), "{:?}", w.status);
+        assert_eq!(w.mech.steps.len(), 18);
+        assert_eq!(w.info.failed, 0);
+        assert_eq!(w.enclosure().parts().len(), 18);
+        let bill = w.bill().unwrap();
+        assert_eq!(bill.pieces, 18);
+        assert_eq!(bill.volume_nm3, 251_025_900_595_183_194_300_000);
+        assert_eq!(bill.mass_ug, 684_085_058);
+        assert_eq!(
+            w.bill_csv_text().unwrap(),
+            "kind,part,material,count,cut_mm,volume_mm3,mass_g\n\
+             profile,tube-20x20,aluminium,4,150,66600.000,179.820\n\
+             profile,tube-20x20,aluminium,2,160,35520.000,95.904\n\
+             profile,tube-40x20,aluminium,2,300,134400.000,362.880\n\
+             screw,bolt-m3x10,steel,4,,567.843,4.458\n\
+             screw,hex-m4x16,stainless,2,,639.761,5.118\n\
+             bracket,angle-30,aluminium,4,,13298.296,35.905\n\
+             total,,,18,,251025.901,684.085\n"
+        );
+        let report = w.report_text();
+        for line in [
+            "Parts: 18 pieces, 251025.901 mm3 of material, 684.085 g",
+            "  profile: tube-20x20, aluminium, 4 x 150 mm, 179.820 g",
+            "  screw: bolt-m3x10, steel, 4 x -, 4.458 g",
+            "  bracket: angle-30, aluminium, 4 x -, 35.905 g",
+            "Cut list tube-20x20: 2 x 160 mm + 4 x 150 mm, 920 mm in all",
+            "Cut list tube-40x20: 2 x 300 mm, 600 mm in all",
+        ] {
+            assert!(report.contains(line), "{line}\n{report}");
+        }
+        // the report speaks the language of the window
+        w.lang = Lang::De;
+        let german = w.report_text();
+        assert!(
+            german.contains("Teile: 18 Stück, 251025.901 mm3 Material, 684.085 g"),
+            "{german}"
+        );
+        assert!(
+            german.contains("  Profil: tube-20x20, aluminium, 4 x 150 mm, 179.820 g"),
+            "{german}"
+        );
+        assert!(
+            german.contains("Zuschnittliste tube-40x20: 2 x 300 mm, insgesamt 600 mm"),
+            "{german}"
+        );
+        // and a project without parts has no such lines
+        let plain = example().report_text();
+        assert!(!plain.contains("Parts:"));
+    }
+
+    #[test]
+    fn the_bill_is_exported_to_a_file_and_the_script_has_the_parts() {
+        let dir = Scratch::new("bill");
+        let mut w = fresh();
+        assert!(w.open(&frame_path()), "{:?}", w.status);
+        assert_eq!(w.export_name(Format::Bill), "frame.csv");
+        let target = dir.0.join("frame.csv");
+        assert!(w.export_to(Format::Bill, &target, false), "{:?}", w.status);
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            w.bill_csv_text().unwrap()
+        );
+        // the script has one block for each part and the STEP file says it does not draw them
+        let script = w.export_text(Format::Script).unwrap();
+        assert_eq!(script.matches("  // part ").count(), 18);
+        assert!(script.contains("  // part front rail, tube-40x20 of the library chassis-basic\n"));
+        let err = w.export_text(Format::Step).unwrap_err();
+        assert_eq!(err.code(), "PHOENIX-CAD-022");
+        // a project with no parts has a bill with only the totals
+        let plain = example().export_text(Format::Bill).unwrap();
+        assert_eq!(
+            plain,
+            "kind,part,material,count,cut_mm,volume_mm3,mass_g\ntotal,,,0,,0.000,0.000\n"
+        );
+    }
+
+    #[test]
+    fn a_project_with_parts_is_written_as_version_four_and_read_again_the_same() {
+        let dir = Scratch::new("parts-file");
+        let path = dir.0.join("rail.phoenixproj");
+        let mut w = with_library();
+        choose_part(&mut w, "bar-10x10");
+        w.add_step(NewStep::Part);
+        choose_part(&mut w, "hex-m4x16");
+        w.add_step(NewStep::Part);
+        assert!(w.save_to(&path), "{:?}", w.status);
+        let text = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+        assert!(text.contains("mechanical 4\n"), "{text}");
+        assert_eq!(text.matches(" add-part ").count(), 2);
+        let mut again = fresh();
+        assert!(again.open(&path), "{:?}", again.status);
+        assert_eq!(again.mech, w.mech);
+        assert_eq!(again.enclosure().parts().len(), 2);
+        // and written again it is the same bytes
+        let second = dir.0.join("again.phoenixproj");
+        assert!(again.save_to(&second));
+        assert_eq!(
+            std::fs::read(&second).unwrap(),
+            std::fs::read(&path).unwrap()
+        );
+        // the example written before the parts existed is still version 1 when it is saved
+        let mut old = example();
+        let plain = dir.0.join("plain.phoenixproj");
+        assert!(old.save_to(&plain));
+        let plain_text = String::from_utf8(std::fs::read(&plain).unwrap()).unwrap();
+        assert!(plain_text.contains("mechanical 1\n") && !plain_text.contains("add-part"));
     }
 }

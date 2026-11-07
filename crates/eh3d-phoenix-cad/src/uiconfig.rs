@@ -5,6 +5,7 @@
 //! They live in `phoenix-cad-window.default.cfg`, the same form as the settings of the library;
 //! the code holds none of the values. A user file only needs the keys it changes.
 
+use crate::catalog::Axis;
 use crate::config::Config;
 use crate::enclosure::{Enclosure, EnclosureParams, Face};
 use crate::export::Format;
@@ -78,6 +79,16 @@ pub struct NewStepDefaults {
     pub fin_start: Length,
     /// The length of a fin of a new set.
     pub fin_length: Length,
+    /// The position `x` of a new part of the catalog (the smallest corner of its bounding box).
+    pub part_x: Length,
+    /// The position `y` of a new part of the catalog.
+    pub part_y: Length,
+    /// The position `z` of a new part of the catalog.
+    pub part_z: Length,
+    /// The direction the length of a new part of the catalog runs along.
+    pub part_axis: Axis,
+    /// The roll of a new part about its length, in quarter turns (0 to 3).
+    pub part_roll: u8,
 }
 
 /// How a hole or a post is dragged with the mouse in the views.
@@ -207,6 +218,13 @@ impl NewStepDefaults {
         let kind = word(c, "new_step.post_kind")?;
         let fin_face = word(c, "new_step.fin_face")?;
         let fin_along = word(c, "new_step.fin_along")?;
+        let part_axis = word(c, "new_step.part_axis")?;
+        let part_roll = count(c, "new_step.part_roll", 0, 270)?;
+        if part_roll % 90 != 0 {
+            return Err(CadError::Config(
+                "new_step.part_roll must be 0, 90, 180 or 270".into(),
+            ));
+        }
         Ok(NewStepDefaults {
             tries: count(c, "new_step.tries", 1, 1000)?,
             pitch: c.length("new_step.pitch")?,
@@ -254,6 +272,15 @@ impl NewStepDefaults {
             fin_first: c.length("new_step.fin_first")?,
             fin_start: c.length("new_step.fin_start")?,
             fin_length: positive(c, "new_step.fin_length")?,
+            part_x: c.length("new_step.part_x")?,
+            part_y: c.length("new_step.part_y")?,
+            part_z: c.length("new_step.part_z")?,
+            part_axis: Axis::from_name(part_axis).ok_or_else(|| {
+                CadError::Config(format!(
+                    "new_step.part_axis: {part_axis} is not +x, -x, +y, -y, +z or -z"
+                ))
+            })?,
+            part_roll: u8::try_from(part_roll / 90).unwrap_or(0),
         })
     }
 }
@@ -431,6 +458,8 @@ mod tests {
             (n.fin_first, n.fin_start, n.fin_length),
             (mm(12), mm(10), mm(80))
         );
+        assert_eq!((n.part_x, n.part_y, n.part_z), (mm(0), mm(0), mm(0)));
+        assert_eq!((n.part_axis, n.part_roll), (Axis::PlusZ, 0));
     }
 
     #[test]
@@ -584,6 +613,16 @@ marker = big
             (Face::Right, FinAxis::V, 1000)
         );
         assert_eq!(s.new_step.fin_first, Length::ZERO);
+        let s = UiSettings::with_user_config(
+            "[new_step]\npart_x = -5 mm\npart_y = 1 in\npart_axis = -y\npart_roll = 270\n",
+        )
+        .unwrap();
+        assert_eq!(s.new_step.part_x, Length::new(-5_000_000).unwrap());
+        assert_eq!(s.new_step.part_y, Length::new(25_400_000).unwrap());
+        assert_eq!(
+            (s.new_step.part_axis, s.new_step.part_roll),
+            (Axis::MinusY, 3)
+        );
         for text in [
             "[new_step]\nhole_face = side\n",
             "[new_step]\npost_kind = glue\n",
@@ -603,6 +642,11 @@ marker = big
             "[new_step]\nfin_height = -2 mm\n",
             "[new_step]\nfin_pitch = 0 mm\n",
             "[new_step]\nfin_length = thin\n",
+            "[new_step]\npart_axis = up\n",
+            "[new_step]\npart_axis = z\n",
+            "[new_step]\npart_roll = 45\n",
+            "[new_step]\npart_roll = 360\n",
+            "[new_step]\npart_x = far\n",
         ] {
             let error = UiSettings::with_user_config(text).unwrap_err();
             assert_eq!(error.code(), "PHOENIX-CAD-011", "{text:?}: {error}");

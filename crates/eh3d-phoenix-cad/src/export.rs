@@ -30,11 +30,13 @@ pub enum Format {
     /// The text of the fit report: the measures, whether the board fits and the state of every
     /// step.
     Report,
+    /// The bill of materials of the parts placed in the model, as comma separated values.
+    Bill,
 }
 
 impl Format {
     /// Every format, in the order of the menu.
-    pub const ALL: [Format; 3] = [Format::Script, Format::Step, Format::Report];
+    pub const ALL: [Format; 4] = [Format::Script, Format::Step, Format::Report, Format::Bill];
 
     /// The extension of the files of the format, without the dot.
     pub fn extension(self) -> &'static str {
@@ -42,6 +44,7 @@ impl Format {
             Format::Script => "scad",
             Format::Step => "step",
             Format::Report => "txt",
+            Format::Bill => "csv",
         }
     }
 
@@ -51,6 +54,7 @@ impl Format {
             Format::Script => "script",
             Format::Step => "step",
             Format::Report => "report",
+            Format::Bill => "bill",
         }
     }
 
@@ -60,13 +64,15 @@ impl Format {
     }
 }
 
-/// The text of a format for a model. `report` is the text of the fit report, which is not a
-/// property of the enclosure alone. The STEP file can be refused with `PHOENIX-CAD-022`.
-pub fn render(format: Format, enclosure: &Enclosure, report: &str) -> Result<String, CadError> {
+/// The text of a format for a model. `text` is the text of the formats that are not a property of
+/// the enclosure alone: the fit report for [`Format::Report`] and the bill of materials for
+/// [`Format::Bill`], which need the settings and the language. The STEP file can be refused with
+/// `PHOENIX-CAD-022`.
+pub fn render(format: Format, enclosure: &Enclosure, text: &str) -> Result<String, CadError> {
     match format {
         Format::Script => Ok(to_scad(enclosure)),
         Format::Step => export_step(enclosure),
-        Format::Report => Ok(report.to_owned()),
+        Format::Report | Format::Bill => Ok(text.to_owned()),
     }
 }
 
@@ -222,7 +228,12 @@ mod tests {
             .collect();
         assert_eq!(
             all,
-            [("scad", "script"), ("step", "step"), ("txt", "report")]
+            [
+                ("scad", "script"),
+                ("step", "step"),
+                ("txt", "report"),
+                ("csv", "bill")
+            ]
         );
         for f in Format::ALL {
             assert_eq!(Format::from_name(f.name()), Some(f));
@@ -237,6 +248,7 @@ mod tests {
         assert_eq!(suggested_name(Some(project), Format::Script), "my box.scad");
         assert_eq!(suggested_name(Some(project), Format::Step), "my box.step");
         assert_eq!(suggested_name(Some(project), Format::Report), "my box.txt");
+        assert_eq!(suggested_name(Some(project), Format::Bill), "my box.csv");
         assert_eq!(suggested_name(None, Format::Step), "box.step");
         assert_eq!(
             suggested_name(Some(Path::new("")), Format::Report),
@@ -255,6 +267,7 @@ mod tests {
         let step = render(Format::Step, &e, "r").unwrap();
         assert!(step.starts_with("ISO-10303-21;"), "{step}");
         assert_eq!(render(Format::Report, &e, "one\ntwo").unwrap(), "one\ntwo");
+        assert_eq!(render(Format::Bill, &e, "a,b\n").unwrap(), "a,b\n");
     }
 
     #[test]
