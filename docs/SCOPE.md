@@ -13,11 +13,11 @@ Mechanical design for the PHOENIX family: parametric enclosures, chassis and hea
 * Parametric models of enclosures, chassis and heat sinks, regenerated from named parameters.
 * A mechanical space shared with the board tool inside the same project: changes travel as structured, reviewable operations (holes, connectors, component height, heat dissipation, envelope) and never as silent edits.
 * Export to STEP and to OpenSCAD-style scripts.
-* First step: a generator of simple parametric enclosures. Later steps: sketches with constraints, solid operations, assemblies and a dependency graph.
+* First step: a generator of simple parametric enclosures. Later steps: sketches with constraints, solid operations, assemblies and a dependency graph (simple assemblies of catalog parts, with mates along one axis and a check of interference, exist).
 
 ## What it will not do
 
-* Full parametric CAD (solid operations other than raising a profile from a face or cutting it into one, assemblies) is a later, separate effort; the sketch with its constraints, its solver and its window exists, and so do the extrusions and pockets of its closed outlines (`docs/SKETCH.md`) and the dependency graph.
+* Full parametric CAD (solid operations other than raising a profile from a face or cutting it into one, assemblies with joints that move or mates between faces and holes) is a later, separate effort; the sketch with its constraints, its solver and its window exists, and so do the extrusions and pockets of its closed outlines (`docs/SKETCH.md`) and the dependency graph.
 * No toolpaths and no G-code: the CAM programs of the suite read the project and do that.
 * No machine control and no motion of any kind.
 * The 3D view of the board and the fit check against an existing enclosure may live in the board tool; where they live is still open.

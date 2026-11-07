@@ -44,7 +44,7 @@ A part is refused with `PHOENIX-CAD-045` when:
 * it is a profile and shares volume with another profile (their bounding boxes overlap by more than a touch), when `catalog.refuse_profile_overlap` is 1; a screw is allowed to go through a profile and a bracket to sit against one;
 * there are already `catalog.max_instances` parts in the model.
 
-The parts are separate bodies: they are not added to the volume or the mass of the box, and a change of the box does not move or refuse them. The STEP file does not draw them and says so (`PHOENIX-CAD-022`); the script has one block for each part, placed with a `multmatrix`, and the views draw the bounding box of each.
+The parts are separate bodies: they are not added to the volume or the mass of the box, and a change of the box does not move or refuse them. A part can be placed relative to another with a mate instead of by typing its position, and the parts that share volume can be found: see [ASSEMBLY.md](ASSEMBLY.md). The STEP file does not draw them and says so (`PHOENIX-CAD-022`); the script has one block for each part, placed with a `multmatrix`, and the views draw the bounding box of each.
 
 ## Volume, mass, bill of materials and cut list
 
