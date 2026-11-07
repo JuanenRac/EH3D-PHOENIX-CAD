@@ -28,6 +28,7 @@
 //! * [`sketch`]: the 2D sketch on a face of the box: points, lines, circles, arcs, polylines and rectangles, geometric and dimensional constraints (a dimension may be an expression over the variables), a numeric solver that reports the degrees of freedom left, the constraints that repeat or contradict each other, or that it did not converge, its settings file, the sketch file (the way in and out of a sketch) and the domain `sketch` of the project file, where the sketches of a project are kept;
 //! * [`profile`]: the closed outlines of a sketch (chains of lines and arcs and circles, with the holes found by containment), checked for being closed, simple and large enough, with their area; the extrusions and pockets of the enclosure are made from them;
 //! * [`projection`], [`drag`] and [`measure`]: the lines of the drawing put on a pane and the way back from a point of the pane to a point of a plane of the model, the picking and the snapping of what is dragged with the mouse, and the distances and angles between points and edges of the model;
+//! * [`export`]: writing the script, the STEP file and the text of the fit report to a file chosen from the window, with the checks that nothing is written over a file unless it was ordered, nor over the project that is open;
 //! * [`window`], [`scene`], [`history`], [`uiconfig`], [`lang`], [`shot`] and [`browse`]: the state of the window (the tree of the model, the properties, the
 //!   views, the history of the changes), the lines it draws, its settings, its texts in the eight languages, the picture mode and the list of files; the window itself is
 //!   `gui` (built with `--features gui`).
@@ -66,6 +67,7 @@ pub mod config;
 pub mod datum;
 pub mod drag;
 pub mod enclosure;
+pub mod export;
 pub mod expr;
 pub mod fit;
 pub mod graph;
@@ -263,6 +265,13 @@ pub enum CadError {
     /// A hole or a post that cannot be dragged where the pointer is: the view does not show where
     /// it is on the plane of the object.
     Drag(String),
+    /// A file that is not written because one is already there and nothing ordered to write over
+    /// it; the name of the file.
+    ExportExists(String),
+    /// A file that cannot be written from the window: a name that belongs to a project or a
+    /// sketch, the project that is open, a folder, a folder that does not exist, a text larger
+    /// than the settings allow or a writing that failed.
+    Export(String),
 }
 
 impl CadError {
@@ -308,6 +317,8 @@ impl CadError {
             CadError::Feature(_) => "PHOENIX-CAD-037",
             CadError::Measure(_) => "PHOENIX-CAD-038",
             CadError::Drag(_) => "PHOENIX-CAD-039",
+            CadError::ExportExists(_) => "PHOENIX-CAD-040",
+            CadError::Export(_) => "PHOENIX-CAD-041",
         }
     }
 }
@@ -360,7 +371,9 @@ impl fmt::Display for CadError {
             | CadError::Profile(why)
             | CadError::Feature(why)
             | CadError::Measure(why)
-            | CadError::Drag(why) => write!(f, "{title}: {why}"),
+            | CadError::Drag(why)
+            | CadError::ExportExists(why)
+            | CadError::Export(why) => write!(f, "{title}: {why}"),
         }
     }
 }
@@ -411,6 +424,8 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-037", "Extrusion or pocket not valid"),
     ("PHOENIX-CAD-038", "Measurement not valid"),
     ("PHOENIX-CAD-039", "Drag not possible"),
+    ("PHOENIX-CAD-040", "File exists and was not written over"),
+    ("PHOENIX-CAD-041", "Export not possible"),
 ];
 
 #[cfg(test)]
@@ -603,6 +618,8 @@ mod tests {
             CadError::Feature("depth".into()),
             CadError::Measure("edge".into()),
             CadError::Drag("view".into()),
+            CadError::ExportExists("a.scad".into()),
+            CadError::Export("folder".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));

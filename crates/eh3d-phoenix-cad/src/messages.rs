@@ -519,6 +519,32 @@ const TEXTS: &[Row] = &[
             "Arrastamento impossível",
         ],
     ),
+    (
+        "PHOENIX-CAD-040",
+        [
+            "File exists and was not written over",
+            "El fichero existe y no se sobrescribió",
+            "Datei vorhanden und nicht überschrieben",
+            "Le fichier existe et n'a pas été écrasé",
+            "Il file esiste e non è stato sovrascritto",
+            "ファイルが存在するため上書きしませんでした",
+            "文件已存在，未覆盖",
+            "O ficheiro existe e não foi substituído",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-041",
+        [
+            "Export not possible",
+            "Exportación no posible",
+            "Export nicht möglich",
+            "Exportation impossible",
+            "Esportazione non possibile",
+            "エクスポートできません",
+            "无法导出",
+            "Exportação impossível",
+        ],
+    ),
 ];
 
 /// The text of a diagnostic in a language (`en`, `es`, `de`, `fr`, `it`, `ja`, `zh` or `pt`), or
