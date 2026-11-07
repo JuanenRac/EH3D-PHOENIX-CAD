@@ -2,7 +2,7 @@
   "repo": "EH3D-PHOENIX-CAD",
   "ecosystem": "eh3d",
   "tagline": "Early code: a parametric mechanical CAD for enclosures, chassis and heat sinks.",
-  "description": "EH3D-PHOENIX-CAD is early code for a parametric mechanical CAD focused on the design of enclosures, chassis and heat sinks. Today it has the base of every repository of the suite and a first library with a parametric enclosure; nothing has been run on a machine.",
+  "description": "EH3D-PHOENIX-CAD is early code for a parametric mechanical CAD focused on the design of enclosures, chassis and heat sinks. Today it has the base of every repository of the suite and a library with a parametric enclosure, a 2D sketch with a solver and the extrusions and pockets of its outlines; nothing has been run on a machine.",
   "columns": [
     "WHO USES IT",
     "THIS REPOSITORY",
@@ -40,10 +40,12 @@
       "title": "The code",
       "lines": [
         "enclosure, holes, change operations,",
-        "script and fit check"
+        "sketches, extrusions, script and fit check"
       ],
       "code": [
         "crates/eh3d-phoenix-cad/src/enclosure.rs",
+        "crates/eh3d-phoenix-cad/src/profile.rs",
+        "crates/eh3d-phoenix-cad/src/sketch.rs",
         "crates/eh3d-phoenix-cad/src/scad.rs",
         "crates/eh3d-phoenix-cad/src/fit.rs"
       ]

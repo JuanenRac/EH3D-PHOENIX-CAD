@@ -131,14 +131,14 @@
         {
           "name": "SKETCH.md",
           "desc": {
-            "en": "the 2D sketch: constraints, solver and file",
-            "es": "el croquis 2D: restricciones, solucionador y archivo",
-            "de": "die 2D-Skizze: Bedingungen, Löser und Datei",
-            "fr": "l'esquisse 2D : contraintes, solveur et fichier",
-            "it": "lo schizzo 2D: vincoli, risolutore e file",
-            "ja": "2D スケッチ：拘束、ソルバー、ファイル",
-            "zh": "2D 草图：约束、求解器和文件",
-            "pt": "o esboço 2D: restrições, solucionador e ficheiro"
+            "en": "the 2D sketch: constraints, solver, project file and extrusions",
+            "es": "el croquis 2D: restricciones, solucionador, archivo de proyecto y extrusiones",
+            "de": "die 2D-Skizze: Bedingungen, Löser, Projektdatei und Extrusionen",
+            "fr": "l'esquisse 2D : contraintes, solveur, fichier de projet et extrusions",
+            "it": "lo schizzo 2D: vincoli, risolutore, file di progetto ed estrusioni",
+            "ja": "2D スケッチ：拘束、ソルバー、プロジェクトファイル、押し出し",
+            "zh": "2D 草图：约束、求解器、项目文件和拉伸",
+            "pt": "o esboço 2D: restrições, solucionador, ficheiro de projeto e extrusões"
           }
         },
         {
@@ -198,14 +198,14 @@
         {
           "name": "crates/",
           "desc": {
-            "en": "the mechanical model: enclosure, operations, script, fit check, window",
-            "es": "el modelo mecánico: caja, operaciones, script, comprobación de encaje, ventana",
-            "de": "das mechanische Modell: Gehäuse, Operationen, Skript, Passprüfung, Fenster",
-            "fr": "le modèle mécanique : boîtier, opérations, script, contrôle d'ajustement, fenêtre",
-            "it": "il modello meccanico: contenitore, operazioni, script, controllo di alloggiamento, finestra",
-            "ja": "機械モデル：筐体、操作、スクリプト、収まりの検査、ウィンドウ",
-            "zh": "机械模型：外壳、操作、脚本、装配检查、窗口",
-            "pt": "o modelo mecânico: caixa, operações, script, verificação de encaixe, janela"
+            "en": "the mechanical model: enclosure, operations, sketches, script, fit check, window",
+            "es": "el modelo mecánico: caja, operaciones, croquis, script, comprobación de encaje, ventana",
+            "de": "das mechanische Modell: Gehäuse, Operationen, Skizzen, Skript, Passprüfung, Fenster",
+            "fr": "le modèle mécanique : boîtier, opérations, esquisses, script, contrôle d'ajustement, fenêtre",
+            "it": "il modello meccanico: contenitore, operazioni, schizzi, script, controllo di alloggiamento, finestra",
+            "ja": "機械モデル：筐体、操作、スケッチ、スクリプト、収まりの検査、ウィンドウ",
+            "zh": "机械模型：外壳、操作、草图、脚本、装配检查、窗口",
+            "pt": "o modelo mecânico: caixa, operações, esboços, script, verificação de encaixe, janela"
           }
         },
         {
