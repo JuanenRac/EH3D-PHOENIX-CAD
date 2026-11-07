@@ -511,6 +511,18 @@ pub fn scene_of(
         };
         push_fins(&mut out, enclosure, set, kind);
     }
+    for (id, part) in enclosure.parts() {
+        // a placed part is drawn as its bounding box, like material
+        let kind = if highlight == Highlight::Object(*id) {
+            Kind::Selected
+        } else {
+            Kind::Post
+        };
+        if let Ok((lo, hi)) = part.bounds() {
+            let point = |p: [i64; 3]| -> Point3 { [mm(p[0]), mm(p[1]), mm(p[2])] };
+            push_box(&mut out, point(lo), point(hi), kind);
+        }
+    }
     if let Some(b) = board {
         push_box(&mut out, b.min, b.max, Kind::Board);
     }
@@ -869,5 +881,124 @@ mod tests {
         assert!(close(vertical(&frame), expected));
         frame.camera.yaw = 90.0;
         assert!(close(vertical(&frame), expected));
+    }
+
+    fn catalog_part(kind: &str) -> crate::catalog::Part {
+        use crate::catalog::{Head, Part, Shape};
+        let um = |v: i64| Length::from_um(v).unwrap();
+        match kind {
+            "tube" => Part {
+                name: "tube-20x20".into(),
+                material: "aluminium".into(),
+                shape: Shape::Profile {
+                    width: um(20_000),
+                    height: um(20_000),
+                    wall: um(1_500),
+                    default_cut: um(300_000),
+                    max_cut: um(2_000_000),
+                },
+            },
+            "bolt" => Part {
+                name: "bolt".into(),
+                material: "steel".into(),
+                shape: Shape::Screw {
+                    metric: "M3".into(),
+                    diameter: um(3_000),
+                    length: um(10_000),
+                    head: Head::Cylinder,
+                    head_diameter: um(5_500),
+                    head_height: um(3_000),
+                },
+            },
+            "flat" => Part {
+                name: "flat".into(),
+                material: "steel".into(),
+                shape: Shape::Screw {
+                    metric: "M3".into(),
+                    diameter: um(3_000),
+                    length: um(8_000),
+                    head: Head::Countersunk,
+                    head_diameter: um(6_000),
+                    head_height: um(1_700),
+                },
+            },
+            "hex" => Part {
+                name: "hex".into(),
+                material: "stainless".into(),
+                shape: Shape::Screw {
+                    metric: "M4".into(),
+                    diameter: um(4_000),
+                    length: um(16_000),
+                    head: Head::Hex,
+                    head_diameter: um(7_000),
+                    head_height: um(2_800),
+                },
+            },
+            _ => Part {
+                name: "angle-30".into(),
+                material: "aluminium".into(),
+                shape: Shape::Bracket {
+                    leg_a: um(30_000),
+                    leg_b: um(30_000),
+                    width: um(20_000),
+                    thickness: um(3_000),
+                    hole_diameter: um(4_500),
+                },
+            },
+        }
+    }
+
+    fn place(
+        e: &mut Enclosure,
+        n: u64,
+        kind: &str,
+        at: [i64; 3],
+        axis: crate::catalog::Axis,
+        roll: u8,
+        cut: Option<i64>,
+    ) {
+        use crate::catalog::{Orientation, PartInstance};
+        e.apply(Operation::AddPart {
+            id: ObjectId::from_parts(1_700_000_000_000, n as u16, n).unwrap(),
+            part: PartInstance {
+                name: format!("piece {n}"),
+                library: "lib".into(),
+                part: catalog_part(kind),
+                at: at.map(mmlen),
+                orientation: Orientation { axis, roll },
+                cut: cut.map(mmlen),
+            },
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn a_placed_part_is_drawn_as_its_bounding_box_and_in_the_colour_of_the_selection_when_picked() {
+        use crate::catalog::Axis;
+        let mut e = enclosure();
+        place(&mut e, 1, "tube", [10, -5, 2], Axis::PlusX, 0, Some(250));
+        let plain = scene_of(&e, None, Highlight::Nothing, 16);
+        let base = scene_of(&enclosure(), None, Highlight::Nothing, 16);
+        // twelve lines more, drawn like material
+        assert_eq!(plain.len(), base.len() + 12);
+        let part: Vec<&Segment> = plain.iter().filter(|s| s.kind == Kind::Post).collect();
+        assert_eq!(part.len(), 12);
+        // +x/0 sends the length to x: 250 mm along x from 10 mm, 20 along y from -5, 20 along z from 2
+        let xs: Vec<f64> = part.iter().flat_map(|s| [s.a[0], s.b[0]]).collect();
+        let ys: Vec<f64> = part.iter().flat_map(|s| [s.a[1], s.b[1]]).collect();
+        let zs: Vec<f64> = part.iter().flat_map(|s| [s.a[2], s.b[2]]).collect();
+        let span = |v: &Vec<f64>| {
+            v.iter()
+                .fold((f64::MAX, f64::MIN), |(l, h), x| (l.min(*x), h.max(*x)))
+        };
+        assert_eq!(span(&xs), (10.0, 260.0));
+        assert_eq!(span(&ys), (-5.0, 15.0));
+        assert_eq!(span(&zs), (2.0, 22.0));
+        let picked = scene_of(&e, None, Highlight::Object(id(1)), 16);
+        assert_eq!(
+            picked.iter().filter(|s| s.kind == Kind::Selected).count(),
+            12
+        );
+        assert_eq!(picked.iter().filter(|s| s.kind == Kind::Post).count(), 0);
     }
 }

@@ -74,6 +74,13 @@ impl PrinterProfile {
                 fins: fins.clone(),
             })?;
         }
+        // placed parts are not printed by this model: they stay where they are
+        for (id, part) in design.parts() {
+            out.apply(Operation::AddPart {
+                id: *id,
+                part: part.clone(),
+            })?;
+        }
         Ok(out)
     }
 }
@@ -268,5 +275,104 @@ mod tests {
         assert_eq!(holes.len(), 1);
         assert_eq!(holes[0].diameter, um(3_550));
         assert_eq!(holes[0].u, mm(27));
+    }
+
+    fn catalog_part(kind: &str) -> crate::catalog::Part {
+        use crate::catalog::{Head, Part, Shape};
+        let um = |v: i64| Length::from_um(v).unwrap();
+        match kind {
+            "tube" => Part {
+                name: "tube-20x20".into(),
+                material: "aluminium".into(),
+                shape: Shape::Profile {
+                    width: um(20_000),
+                    height: um(20_000),
+                    wall: um(1_500),
+                    default_cut: um(300_000),
+                    max_cut: um(2_000_000),
+                },
+            },
+            "bolt" => Part {
+                name: "bolt".into(),
+                material: "steel".into(),
+                shape: Shape::Screw {
+                    metric: "M3".into(),
+                    diameter: um(3_000),
+                    length: um(10_000),
+                    head: Head::Cylinder,
+                    head_diameter: um(5_500),
+                    head_height: um(3_000),
+                },
+            },
+            "flat" => Part {
+                name: "flat".into(),
+                material: "steel".into(),
+                shape: Shape::Screw {
+                    metric: "M3".into(),
+                    diameter: um(3_000),
+                    length: um(8_000),
+                    head: Head::Countersunk,
+                    head_diameter: um(6_000),
+                    head_height: um(1_700),
+                },
+            },
+            "hex" => Part {
+                name: "hex".into(),
+                material: "stainless".into(),
+                shape: Shape::Screw {
+                    metric: "M4".into(),
+                    diameter: um(4_000),
+                    length: um(16_000),
+                    head: Head::Hex,
+                    head_diameter: um(7_000),
+                    head_height: um(2_800),
+                },
+            },
+            _ => Part {
+                name: "angle-30".into(),
+                material: "aluminium".into(),
+                shape: Shape::Bracket {
+                    leg_a: um(30_000),
+                    leg_b: um(30_000),
+                    width: um(20_000),
+                    thickness: um(3_000),
+                    hole_diameter: um(4_500),
+                },
+            },
+        }
+    }
+
+    fn place(
+        e: &mut Enclosure,
+        n: u64,
+        kind: &str,
+        at: [i64; 3],
+        axis: crate::catalog::Axis,
+        roll: u8,
+        cut: Option<i64>,
+    ) {
+        use crate::catalog::{Orientation, PartInstance};
+        e.apply(Operation::AddPart {
+            id: ObjectId::from_parts(1_700_000_000_000, n as u16, n).unwrap(),
+            part: PartInstance {
+                name: format!("piece {n}"),
+                library: "lib".into(),
+                part: catalog_part(kind),
+                at: at.map(mm),
+                orientation: Orientation { axis, roll },
+                cut: cut.map(mm),
+            },
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn the_parts_stay_where_they_are_in_the_model_for_fabrication() {
+        use crate::catalog::Axis;
+        let mut e = design();
+        place(&mut e, 1, "tube", [0, 0, 0], Axis::PlusZ, 0, Some(300));
+        place(&mut e, 2, "bolt", [100, 100, 100], Axis::PlusZ, 0, None);
+        let f = profile().for_fabrication(&e).unwrap();
+        assert_eq!(f.parts(), e.parts());
     }
 }

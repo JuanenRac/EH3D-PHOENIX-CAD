@@ -6,6 +6,7 @@
 
 use std::fmt::Write as _;
 
+use crate::catalog::{Head, PartInstance, Shape};
 use crate::enclosure::{Enclosure, Face, Hole, HoleStyle, Treatment};
 use crate::fins::FinSet;
 use crate::mount::{Lid, Lip, Post};
@@ -435,6 +436,114 @@ fn fins_text(enclosure: &Enclosure, set: &FinSet) -> String {
     out
 }
 
+/// A part of the catalog: its shape in its own frame (the smallest corner of its bounding box at
+/// the origin), placed with the `multmatrix` of its orientation so that the smallest corner of the
+/// turned part lies at its position.
+fn part_text(part: &PartInstance) -> String {
+    let (_, shift) = part.extent();
+    let cols = part.orientation.columns();
+    let dir = |c: [i8; 3]| -> Dir { (c[0], c[1], c[2]) };
+    let origin = (
+        part.at[0].get() + shift[0],
+        part.at[1].get() + shift[1],
+        part.at[2].get() + shift[2],
+    );
+    let frame = frame_text(origin, [dir(cols[0]), dir(cols[1]), dir(cols[2])]);
+    let size = part.part.size(part.cut);
+    let [sx, sy, sz] = size.map(mm_text);
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "  // part {}, {} of the library {}",
+        part.name, part.part.name, part.library
+    );
+    let _ = writeln!(out, "  {frame} {{");
+    match &part.part.shape {
+        Shape::Profile { wall, .. } => {
+            if wall.get() > 0 {
+                let t = wall.get();
+                let _ = writeln!(
+                    out,
+                    "    difference() {{ cube([{sx}, {sy}, {sz}]); translate([{}, {}, -1]) cube([{}, {}, {} + 2]); }}",
+                    mm_text(t),
+                    mm_text(t),
+                    mm_text(size[0] - 2 * t),
+                    mm_text(size[1] - 2 * t),
+                    sz
+                );
+            } else {
+                let _ = writeln!(out, "    cube([{sx}, {sy}, {sz}]);");
+            }
+        }
+        Shape::Screw {
+            diameter,
+            head,
+            head_diameter,
+            head_height,
+            ..
+        } => {
+            let (d, hd, hh) = (
+                mm_text(diameter.get()),
+                mm_text(head_diameter.get()),
+                mm_text(head_height.get()),
+            );
+            let _ = writeln!(out, "    translate([{hd} / 2, {hd} / 2, 0]) {{");
+            let _ = match head {
+                Head::Cylinder => writeln!(
+                    out,
+                    "      cylinder(d = {hd}, h = {hh}, $fn = {CIRCLE_SEGMENTS});"
+                ),
+                Head::Countersunk => writeln!(
+                    out,
+                    "      cylinder(d1 = {hd}, d2 = {d}, h = {hh}, $fn = {CIRCLE_SEGMENTS});"
+                ),
+                Head::Hex => writeln!(
+                    out,
+                    "      cylinder(d = {hd} / cos(30), h = {hh}, $fn = 6);"
+                ),
+            };
+            let _ = writeln!(
+                out,
+                "      cylinder(d = {d}, h = {sz}, $fn = {CIRCLE_SEGMENTS});"
+            );
+            out.push_str("    }\n");
+        }
+        Shape::Bracket {
+            leg_a,
+            leg_b,
+            width,
+            thickness,
+            hole_diameter,
+        } => {
+            let (a, b, w, t) = (
+                mm_text(leg_a.get()),
+                mm_text(leg_b.get()),
+                mm_text(width.get()),
+                mm_text(thickness.get()),
+            );
+            let legs = format!("union() {{ cube([{a}, {w}, {t}]); cube([{t}, {w}, {b}]); }}");
+            if hole_diameter.get() > 0 {
+                let h = mm_text(hole_diameter.get());
+                let _ = writeln!(out, "    difference() {{");
+                let _ = writeln!(out, "      {legs}");
+                let _ = writeln!(
+                    out,
+                    "      translate([{t} + ({a} - {t}) / 2, {w} / 2, -1]) cylinder(d = {h}, h = {t} + 2, $fn = {CIRCLE_SEGMENTS});"
+                );
+                let _ = writeln!(
+                    out,
+                    "      translate([-1, {w} / 2, {t} + ({b} - {t}) / 2]) rotate([0, 90, 0]) cylinder(d = {h}, h = {t} + 2, $fn = {CIRCLE_SEGMENTS});"
+                );
+                let _ = writeln!(out, "    }}");
+            } else {
+                let _ = writeln!(out, "    {legs}");
+            }
+        }
+    }
+    out.push_str("  }\n");
+    out
+}
+
 fn mounting_text(enclosure: &Enclosure) -> String {
     let mut out = String::new();
     for post in enclosure.posts().values() {
@@ -442,6 +551,9 @@ fn mounting_text(enclosure: &Enclosure) -> String {
     }
     for set in enclosure.fins().values() {
         out.push_str(&fins_text(enclosure, set));
+    }
+    for part in enclosure.parts().values() {
+        out.push_str(&part_text(part));
     }
     if let Some(lid) = enclosure.lid() {
         if let Some(lip) = &lid.lip {
@@ -891,5 +1003,174 @@ mod tests {
         let third = t.find("// post p3").unwrap();
         assert!(first < second && second < third);
         assert_eq!(t.matches("// hole lid screw p").count(), 3);
+    }
+
+    fn catalog_part(kind: &str) -> crate::catalog::Part {
+        use crate::catalog::{Head, Part, Shape};
+        let um = |v: i64| Length::from_um(v).unwrap();
+        match kind {
+            "tube" => Part {
+                name: "tube-20x20".into(),
+                material: "aluminium".into(),
+                shape: Shape::Profile {
+                    width: um(20_000),
+                    height: um(20_000),
+                    wall: um(1_500),
+                    default_cut: um(300_000),
+                    max_cut: um(2_000_000),
+                },
+            },
+            "bolt" => Part {
+                name: "bolt".into(),
+                material: "steel".into(),
+                shape: Shape::Screw {
+                    metric: "M3".into(),
+                    diameter: um(3_000),
+                    length: um(10_000),
+                    head: Head::Cylinder,
+                    head_diameter: um(5_500),
+                    head_height: um(3_000),
+                },
+            },
+            "flat" => Part {
+                name: "flat".into(),
+                material: "steel".into(),
+                shape: Shape::Screw {
+                    metric: "M3".into(),
+                    diameter: um(3_000),
+                    length: um(8_000),
+                    head: Head::Countersunk,
+                    head_diameter: um(6_000),
+                    head_height: um(1_700),
+                },
+            },
+            "hex" => Part {
+                name: "hex".into(),
+                material: "stainless".into(),
+                shape: Shape::Screw {
+                    metric: "M4".into(),
+                    diameter: um(4_000),
+                    length: um(16_000),
+                    head: Head::Hex,
+                    head_diameter: um(7_000),
+                    head_height: um(2_800),
+                },
+            },
+            _ => Part {
+                name: "angle-30".into(),
+                material: "aluminium".into(),
+                shape: Shape::Bracket {
+                    leg_a: um(30_000),
+                    leg_b: um(30_000),
+                    width: um(20_000),
+                    thickness: um(3_000),
+                    hole_diameter: um(4_500),
+                },
+            },
+        }
+    }
+
+    fn place(
+        e: &mut Enclosure,
+        n: u64,
+        kind: &str,
+        at: [i64; 3],
+        axis: crate::catalog::Axis,
+        roll: u8,
+        cut: Option<i64>,
+    ) {
+        use crate::catalog::{Orientation, PartInstance};
+        e.apply(Operation::AddPart {
+            id: ObjectId::from_parts(1_700_000_000_000, n as u16, n).unwrap(),
+            part: PartInstance {
+                name: format!("piece {n}"),
+                library: "lib".into(),
+                part: catalog_part(kind),
+                at: at.map(mm),
+                orientation: Orientation { axis, roll },
+                cut: cut.map(mm),
+            },
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn a_hollow_profile_is_placed_with_the_matrix_of_its_orientation() {
+        use crate::catalog::Axis;
+        let mut e = enclosure();
+        // the length runs along +x and the section is rolled a quarter turn: the local x goes to
+        // +z, the local y to -y (so the part is moved up by its 20 mm there) and the local z to +x
+        place(&mut e, 1, "tube", [10, -5, 2], Axis::PlusX, 1, Some(250));
+        let text = to_scad(&e);
+        let expect = "  // part piece 1, tube-20x20 of the library lib\n\
+             \x20 multmatrix([[0, 0, 1, 10], [0, -1, 0, 15], [1, 0, 0, 2], [0, 0, 0, 1]]) {\n\
+             \x20   difference() { cube([20, 20, 250]); translate([1.5, 1.5, -1]) cube([17, 17, 250 + 2]); }\n\
+             \x20 }\n";
+        assert!(text.contains(expect), "{text}");
+        // a part makes the box a union with it
+        assert!(text.contains("union() {\n"), "{text}");
+        // the same model gives the same text
+        assert_eq!(text, to_scad(&e.clone()));
+    }
+
+    #[test]
+    fn a_solid_bar_is_one_cube_and_a_part_turned_the_other_way_is_moved_by_its_size() {
+        use crate::catalog::{Axis, Part, Shape};
+        let mut e = enclosure();
+        let bar = Part {
+            name: "bar".into(),
+            material: "aluminium".into(),
+            shape: Shape::Profile {
+                width: mm(10),
+                height: mm(30),
+                wall: Length::ZERO,
+                default_cut: mm(100),
+                max_cut: mm(1000),
+            },
+        };
+        e.apply(Operation::AddPart {
+            id: ObjectId::from_parts(1_700_000_000_000, 1, 1).unwrap(),
+            part: crate::catalog::PartInstance {
+                name: "bar".into(),
+                library: "lib".into(),
+                part: bar,
+                at: [mm(1), mm(2), mm(3)],
+                orientation: crate::catalog::Orientation {
+                    axis: Axis::MinusZ,
+                    roll: 0,
+                },
+                cut: Some(mm(100)),
+            },
+        })
+        .unwrap();
+        let text = to_scad(&e);
+        // -z/0 turns the local y to -y and the local z to -z: moved by 30 in y and 100 in z
+        assert!(
+            text.contains("multmatrix([[1, 0, 0, 1], [0, -1, 0, 32], [0, 0, -1, 103], [0, 0, 0, 1]]) {\n    cube([10, 30, 100]);\n  }\n"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_three_heads_of_a_screw_and_the_bracket_with_its_holes() {
+        use crate::catalog::Axis;
+        let mut e = enclosure();
+        place(&mut e, 1, "bolt", [0, 0, 0], Axis::PlusZ, 0, None);
+        place(&mut e, 2, "flat", [20, 0, 0], Axis::PlusZ, 0, None);
+        place(&mut e, 3, "hex", [40, 0, 0], Axis::PlusZ, 0, None);
+        place(&mut e, 4, "angle", [60, 0, 0], Axis::PlusZ, 0, None);
+        let text = to_scad(&e);
+        for line in [
+            "    translate([5.5 / 2, 5.5 / 2, 0]) {\n      cylinder(d = 5.5, h = 3, $fn = 64);\n      cylinder(d = 3, h = 13, $fn = 64);\n    }\n",
+            "      cylinder(d1 = 6, d2 = 3, h = 1.7, $fn = 64);\n      cylinder(d = 3, h = 9.7, $fn = 64);\n",
+            "      cylinder(d = 7 / cos(30), h = 2.8, $fn = 6);\n      cylinder(d = 4, h = 18.8, $fn = 64);\n",
+            "      union() { cube([30, 20, 3]); cube([3, 20, 30]); }\n",
+            "      translate([3 + (30 - 3) / 2, 20 / 2, -1]) cylinder(d = 4.5, h = 3 + 2, $fn = 64);\n",
+            "      translate([-1, 20 / 2, 3 + (30 - 3) / 2]) rotate([0, 90, 0]) cylinder(d = 4.5, h = 3 + 2, $fn = 64);\n",
+        ] {
+            assert!(text.contains(line), "{line}\n{text}");
+        }
+        // every block that is opened is closed
+        assert_eq!(text.matches('{').count(), text.matches('}').count());
     }
 }

@@ -25,7 +25,9 @@
 //! programs that only know version 1. Version 3 adds the steps `add-pattern` and `remove-pattern`
 //! (a hole or a post repeated along a line or round a centre) and `add-fins` and `remove-fins`
 //! (a set of cooling fins on a face); a recipe with one of them is written as version 3, one with only the steps of version 2 as version 2 and one with neither
-//! as version 1, so every project that did not use the newer steps keeps its bytes. The sketches
+//! as version 1, so every project that did not use the newer steps keeps its bytes. Version 4 adds the steps `add-part` and
+//! `remove-part` (a part of a library of parts placed in the model, with a copy of the part, its position, its orientation on
+//! the axes and the length it is cut to); only a recipe that places a part is written as version 4. The sketches
 //! are not in this domain: they have their own domain, `sketch` (see [`crate::sketch::domain`]).
 
 use std::collections::BTreeSet;
@@ -34,6 +36,7 @@ use std::str::FromStr;
 use eh3d_container::ObjectId;
 
 use crate::body::{Body, Built, Step};
+use crate::catalog::PartInstance;
 use crate::config::{DesignLimits, MechanicalLimits};
 use crate::enclosure::{Edging, EnclosureParams, Face, Hole, HoleStyle, Id, Operation, Treatment};
 use crate::expr::{Constants, ExprLimits};
@@ -52,7 +55,7 @@ use crate::{CadError, Length};
 pub const MECHANICAL_DOMAIN: &str = "mechanical";
 
 /// The newest version of the text of the domain that this program writes and reads.
-pub const DOMAIN_VERSION: u32 = 3;
+pub const DOMAIN_VERSION: u32 = 4;
 
 /// The version of a recipe that has no extrusion, no pocket and no pattern.
 pub const FIRST_VERSION: u32 = 1;
@@ -501,6 +504,16 @@ fn operation_words(op: &Operation, limits: &MechanicalLimits) -> Result<Vec<Stri
             words.push("remove-fins".to_string());
             words.push(id.to_string());
         }
+        Operation::AddPart { id, part } => {
+            words.push("add-part".to_string());
+            words.push(id.to_string());
+            words.push(escape(&part.name, limits)?);
+            words.extend(part.words());
+        }
+        Operation::RemovePart { id } => {
+            words.push("remove-part".to_string());
+            words.push(id.to_string());
+        }
     }
     Ok(words)
 }
@@ -562,10 +575,11 @@ fn layout_of(word: &str) -> Result<Layout, CadError> {
     }
 }
 
-/// The version of the domain a step needs: 3 for a pattern or cooling fins, 2 for an extrusion or
-/// a pocket and 1 for the rest.
+/// The version of the domain a step needs: 4 for a placed part, 3 for a pattern or cooling fins, 2
+/// for an extrusion or a pocket and 1 for the rest.
 fn step_version(op: &Operation) -> u32 {
     match op {
+        Operation::AddPart { .. } | Operation::RemovePart { .. } => 4,
         Operation::AddPattern { .. }
         | Operation::RemovePattern { .. }
         | Operation::AddFins { .. }
@@ -697,6 +711,11 @@ fn operation_of(words: &[&str], limits: &MechanicalLimits) -> Result<Operation, 
             })
         }
         ["remove-fins", id] => Ok(Operation::RemoveFins { id: id_of(id)? }),
+        ["add-part", id, name, rest @ ..] => Ok(Operation::AddPart {
+            id: id_of(id)?,
+            part: PartInstance::from_words(&unescape(name, limits)?, rest).map_err(|e| bad(&e))?,
+        }),
+        ["remove-part", id] => Ok(Operation::RemovePart { id: id_of(id)? }),
         _ => Err(bad("a step is not understood")),
     }
 }
@@ -2220,11 +2239,11 @@ hole 018bcfe5-6800-7004-8000-000000000004 H4 55000000 35000000 3200000\n";
     #[test]
     fn a_domain_of_a_newer_version_is_neither_read_nor_overwritten() {
         let s = settings();
-        let future = b"mechanical 4\nwhatever \xff comes next\n".to_vec();
+        let future = b"mechanical 5\nwhatever \xff comes next\n".to_vec();
         let mut d = Document::new();
         d.set(MECHANICAL_DOMAIN, true, future.clone()).unwrap();
         d.set("notes", false, b"x".to_vec()).unwrap();
-        assert_eq!(d.mechanical_version().unwrap(), Some(4));
+        assert_eq!(d.mechanical_version().unwrap(), Some(5));
         let err = d.mechanical(&s.expr, &s.mechanical).unwrap_err();
         assert_eq!(err.code(), "PHOENIX-CAD-018");
         assert!(err.to_string().contains("newer version"), "{err}");
@@ -2496,9 +2515,9 @@ mod feature_tests {
     fn a_future_version_is_neither_read_nor_overwritten() {
         let s = Settings::defaults();
         let mut d = Document::new();
-        let future = b"mechanical 4\nwhatever\n".to_vec();
+        let future = b"mechanical 5\nwhatever\n".to_vec();
         d.set(MECHANICAL_DOMAIN, true, future.clone()).unwrap();
-        assert_eq!(d.mechanical_version().unwrap(), Some(4));
+        assert_eq!(d.mechanical_version().unwrap(), Some(5));
         assert!(d.mechanical(&s.expr, &s.mechanical).is_err());
         assert!(d.set_mechanical(&with_features(), &s.mechanical).is_err());
         assert_eq!(d.get(MECHANICAL_DOMAIN).unwrap().data, future);
@@ -2882,5 +2901,204 @@ mod feature_tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    fn chassis_tube() -> crate::catalog::Part {
+        use crate::catalog::{Part, Shape};
+        Part {
+            name: "tube-20x20".into(),
+            material: "aluminium".into(),
+            shape: Shape::Profile {
+                width: mm(20),
+                height: mm(20),
+                wall: Length::new(1_500_000).unwrap(),
+                default_cut: mm(300),
+                max_cut: mm(2000),
+            },
+        }
+    }
+
+    fn with_parts() -> Mechanical {
+        use crate::catalog::{Axis, Orientation, PartInstance};
+        let mut m = Mechanical::new(ParamModel::new(base()).unwrap(), Variables::new());
+        m.steps.push(step(
+            "rail",
+            Operation::AddPart {
+                id: id(1),
+                part: PartInstance {
+                    name: "front rail".into(),
+                    library: "chassis-basic".into(),
+                    part: chassis_tube(),
+                    at: [mm(10), Length::new(-5_000_000).unwrap(), mm(2)],
+                    orientation: Orientation {
+                        axis: Axis::PlusX,
+                        roll: 1,
+                    },
+                    cut: Some(mm(250)),
+                },
+            },
+        ));
+        m.steps
+            .push(step("no rail", Operation::RemovePart { id: id(1) }));
+        m.tip = 1;
+        m
+    }
+
+    #[test]
+    fn placed_parts_are_steps_of_version_four_with_a_golden_text() {
+        let s = Settings::defaults();
+        let m = with_parts();
+        assert_eq!(m.version(), 4);
+        let text = String::from_utf8(m.to_bytes(&s.mechanical).unwrap()).unwrap();
+        assert!(text.starts_with("mechanical 4\n[parameters]\n"));
+        let steps = text.split("[steps]\n").nth(1).unwrap();
+        let expect = format!(
+            "tip 1\n\
+             step 0 rail add-part {a} front%20rail chassis-basic tube-20x20 profile aluminium 20000000 20000000 1500000 300000000 2000000000 10000000 -5000000 2000000 +x/1 250000000\n\
+             step 0 no%20rail remove-part {a}\n",
+            a = id(1)
+        );
+        assert_eq!(steps, expect);
+        let read = Mechanical::from_bytes(text.as_bytes(), &s.expr, &s.mechanical).unwrap();
+        assert_eq!(read, m);
+        assert_eq!(read.to_bytes(&s.mechanical).unwrap(), text.as_bytes());
+        // up to the tip the part is there; with the tip after the removal it is gone
+        let built = m.build(&s.constants, &s.expr).unwrap();
+        assert_eq!(built.enclosure.parts().len(), 1);
+        assert_eq!(built.states[1], StepState::AfterTip);
+        let mut all = m.clone();
+        all.tip = 2;
+        let built = all.build(&s.constants, &s.expr).unwrap();
+        assert!(built.enclosure.parts().is_empty());
+    }
+
+    #[test]
+    fn a_project_without_parts_keeps_the_version_and_the_bytes_it_had() {
+        let s = Settings::defaults();
+        // each older recipe is still written in the lowest version that can hold it
+        assert_eq!(with_fins().version(), 3);
+        assert_eq!(with_patterns().version(), 3);
+        assert_eq!(with_features().version(), 2);
+        let plain = Mechanical::new(ParamModel::new(base()).unwrap(), Variables::new());
+        assert_eq!(plain.version(), 1);
+        let text = String::from_utf8(plain.to_bytes(&s.mechanical).unwrap()).unwrap();
+        assert!(text.starts_with("mechanical 1\n"));
+        // the parts do not change what the other steps are written as
+        let mut both = with_fins();
+        both.steps.extend(with_parts().steps);
+        both.tip = both.steps.len();
+        assert_eq!(both.version(), 4);
+        let fins_only = String::from_utf8(with_fins().to_bytes(&s.mechanical).unwrap()).unwrap();
+        let mixed = String::from_utf8(both.to_bytes(&s.mechanical).unwrap()).unwrap();
+        assert_eq!(
+            fins_only
+                .replacen("mechanical 3", "mechanical 4", 1)
+                .split("tip ")
+                .next(),
+            mixed.split("tip ").next()
+        );
+        let read = Mechanical::from_bytes(mixed.as_bytes(), &s.expr, &s.mechanical).unwrap();
+        assert_eq!(read, both);
+    }
+
+    #[test]
+    fn parts_that_are_not_written_in_the_one_form_are_refused() {
+        let s = Settings::defaults();
+        let good = String::from_utf8(with_parts().to_bytes(&s.mechanical).unwrap()).unwrap();
+        let parse = |t: &str| Mechanical::from_bytes(t.as_bytes(), &s.expr, &s.mechanical);
+        let line = "tube-20x20 profile aluminium 20000000 20000000 1500000 300000000 2000000000 10000000 -5000000 2000000 +x/1 250000000";
+        for bad in [
+            "tube-20x20 ring aluminium 20000000 20000000 1500000 300000000 2000000000 10000000 -5000000 2000000 +x/1 250000000",
+            "tube-20x20 profile aluminium 20000000 20000000 1500000 300000000 2000000000 10000000 -5000000 2000000 +x/4 250000000",
+            "tube-20x20 profile aluminium 20000000 20000000 1500000 300000000 2000000000 10000000 -5000000 2000000 +q/1 250000000",
+            "tube-20x20 profile aluminium 20000000 20000000 1500000 300000000 2000000000 +10000000 -5000000 2000000 +x/1 250000000",
+            "tube-20x20 profile aluminium 20000000 20000000 1500000 300000000 2000000000 10000000 -05000000 2000000 +x/1 250000000",
+            "tube-20x20 profile aluminium 20000000 20000000 1500000 300000000 2000000000 10000000 -5000000 2000000 +x/1 0250000000",
+            "tube-20x20 profile aluminium 20000000 20000000 1500000 300000000 2000000000 10000000 -5000000 2000000 +x/1",
+            "tube-20x20 profile aluminium 20000000 20000000 1500000 300000000 10000000 -5000000 2000000 +x/1 250000000",
+            "tube-20x20 profile aluminium 20000000 20000000 1.5e6 300000000 2000000000 10000000 -5000000 2000000 +x/1 250000000",
+            "tube-20x20 profile aluminium 20000000 20000000 1500000 300000000 2000000000 10000000 -5000000 2000000 +x/1 250000000 1",
+        ] {
+            let text = good.replace(line, bad);
+            assert_ne!(text, good);
+            let e = parse(&text).unwrap_err();
+            assert_eq!(e.code(), "PHOENIX-CAD-018", "{bad}: {e}");
+        }
+        // the removal takes exactly one id
+        for bad in ["remove-part", "remove-part X"] {
+            let text = good.replace(&format!("remove-part {}", id(1)), bad);
+            assert!(parse(&text).is_err(), "{bad}");
+        }
+        // the version has to agree with the steps, in both directions
+        let e = parse(&good.replacen("mechanical 4", "mechanical 3", 1)).unwrap_err();
+        assert!(
+            e.to_string()
+                .contains("version 4 is in a domain of version 3"),
+            "{e}"
+        );
+        let plain = String::from_utf8(
+            Mechanical::new(ParamModel::new(base()).unwrap(), Variables::new())
+                .to_bytes(&s.mechanical)
+                .unwrap(),
+        )
+        .unwrap();
+        let e = parse(&plain.replacen("mechanical 1", "mechanical 4", 1)).unwrap_err();
+        assert!(e.to_string().contains("has no step that needs it"), "{e}");
+        // a domain of version 5 is a newer one
+        let e = parse(&plain.replacen("mechanical 1", "mechanical 5", 1)).unwrap_err();
+        assert!(e.to_string().contains("newer version"), "{e}");
+    }
+
+    #[test]
+    fn the_limits_of_the_catalog_fail_the_step_with_the_code_of_the_part() {
+        let s = Settings::defaults();
+        // a cut longer than the bar of 2000 mm
+        let mut m = with_parts();
+        if let Operation::AddPart { part, .. } = &mut m.steps[0].op {
+            part.cut = Some(mm(2001));
+        }
+        let built = m.build(&s.constants, &s.expr).unwrap();
+        match &built.states[0] {
+            StepState::Failed(e) => {
+                assert_eq!(e.code(), "PHOENIX-CAD-045");
+                assert!(
+                    e.to_string().contains("longer than the bar of 2000 mm"),
+                    "{e}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        // the settings limit how many parts there can be
+        let tight = Settings::with_user_config("[catalog]\nmax_instances = 1\n").unwrap();
+        let mut two = with_parts();
+        let mut second = two.steps[0].clone();
+        if let Operation::AddPart { id: i, part } = &mut second.op {
+            *i = id(2);
+            part.at = [mm(100), mm(100), mm(100)];
+        }
+        two.steps.insert(1, second);
+        two.tip = 2;
+        let built = two
+            .build_with_limits(&tight.constants, &tight.expr, None, Some(tight.design))
+            .unwrap();
+        assert_eq!(built.states[0], StepState::Valid);
+        match &built.states[1] {
+            StepState::Failed(e) => {
+                assert_eq!(e.code(), "PHOENIX-CAD-045");
+                assert!(e.to_string().contains("more than the 1 parts"), "{e}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_project_with_parts_goes_through_the_file() {
+        let s = Settings::defaults();
+        let m = with_parts();
+        let mut d = Document::new();
+        d.set_mechanical(&m, &s.mechanical).unwrap();
+        assert_eq!(d.mechanical_version().unwrap(), Some(4));
+        let read = Document::from_bytes(&d.to_bytes(), 1 << 24).unwrap();
+        assert_eq!(read.mechanical(&s.expr, &s.mechanical).unwrap(), Some(m));
     }
 }

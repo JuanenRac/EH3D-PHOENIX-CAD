@@ -1908,7 +1908,7 @@ mod tests {
     #[test]
     fn the_cut_list_gives_the_lengths_of_each_profile_longest_first() {
         let d = densities();
-        let items = vec![
+        let items = [
             instance(tube(), Some(mm(150))),
             instance(tube(), Some(mm(300))),
             instance(tube(), Some(mm(300))),

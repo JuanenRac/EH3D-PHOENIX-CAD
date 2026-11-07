@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 
 use eh3d_container::ObjectId;
 
+use crate::catalog::{check_overlap, PartInstance};
 use crate::config::DesignLimits;
 use crate::fins::{FinContext, FinSet};
 use crate::mount::{lid_holes_of, Lid, Post};
@@ -557,6 +558,20 @@ pub enum Operation {
         /// The id of the set.
         id: Id,
     },
+    /// Places a part of a library in the model: a profile cut to a length, a screw or a bracket,
+    /// at a position and turned onto the axes. The part is checked against the limits of the
+    /// settings and, when they say so, against the profiles that are already there.
+    AddPart {
+        /// The id of the instance.
+        id: Id,
+        /// The part, its position, its orientation and its cut.
+        part: PartInstance,
+    },
+    /// Takes a placed part away.
+    RemovePart {
+        /// The id of the instance.
+        id: Id,
+    },
 }
 
 /// What a feature does to the box.
@@ -618,6 +633,7 @@ pub struct Enclosure {
     patterns: BTreeMap<Id, PatternOp>,
     pattern_members: BTreeMap<Id, Id>,
     fins: BTreeMap<Id, FinSet>,
+    parts: BTreeMap<Id, PartInstance>,
     design: Option<DesignLimits>,
 }
 
@@ -637,8 +653,15 @@ impl Enclosure {
             patterns: BTreeMap::new(),
             pattern_members: BTreeMap::new(),
             fins: BTreeMap::new(),
+            parts: BTreeMap::new(),
             design: None,
         })
+    }
+
+    /// The parts placed in the model by id (ordered by id). They are separate bodies: they are not
+    /// part of the volume of the box.
+    pub fn parts(&self) -> &BTreeMap<Id, PartInstance> {
+        &self.parts
     }
 
     /// The sets of cooling fins by id (ordered by id).
@@ -1391,6 +1414,26 @@ impl Enclosure {
             }
             Operation::RemoveFins { id } => match self.fins.remove(&id) {
                 Some(fins) => Ok(Operation::AddFins { id, fins }),
+                None => Err(CadError::HoleId(id)),
+            },
+            Operation::AddPart { id, part } => {
+                let limits = self.design_limits().catalog;
+                if self.parts.contains_key(&id) {
+                    return Err(CadError::HoleId(id));
+                }
+                if self.parts.len() >= limits.max_instances {
+                    return Err(CadError::Part(format!(
+                        "more than the {} parts the settings allow",
+                        limits.max_instances
+                    )));
+                }
+                part.check(&limits)?;
+                check_overlap(&part, self.parts.iter(), &limits)?;
+                self.parts.insert(id, part);
+                Ok(Operation::RemovePart { id })
+            }
+            Operation::RemovePart { id } => match self.parts.remove(&id) {
+                Some(part) => Ok(Operation::AddPart { id, part }),
                 None => Err(CadError::HoleId(id)),
             },
             Operation::RemoveFeature { id } => {
@@ -2248,5 +2291,137 @@ mod feature_tests {
         assert_eq!(code(crate::step::export_step(&e)), "PHOENIX-CAD-022");
         assert_eq!(code(printer.for_fabrication(&e)), "PHOENIX-CAD-022");
         assert!(crate::scad::to_scad(&e).contains("not drawn in this script"));
+    }
+
+    fn tube() -> crate::catalog::Part {
+        use crate::catalog::{Part, Shape};
+        Part {
+            name: "tube-20x20".into(),
+            material: "aluminium".into(),
+            shape: Shape::Profile {
+                width: mm(20),
+                height: mm(20),
+                wall: Length::ZERO,
+                default_cut: mm(300),
+                max_cut: mm(2000),
+            },
+        }
+    }
+
+    fn bolt() -> crate::catalog::Part {
+        use crate::catalog::{Head, Part, Shape};
+        Part {
+            name: "bolt".into(),
+            material: "steel".into(),
+            shape: Shape::Screw {
+                metric: "M3".into(),
+                diameter: mm(3),
+                length: mm(10),
+                head: Head::Cylinder,
+                head_diameter: Length::new(5_500_000).unwrap(),
+                head_height: mm(3),
+            },
+        }
+    }
+
+    fn placed(n: u64, part: crate::catalog::Part, at: [i64; 3], cut: Option<i64>) -> Operation {
+        Operation::AddPart {
+            id: id(n),
+            part: crate::catalog::PartInstance {
+                name: format!("piece {n}"),
+                library: "lib".into(),
+                part,
+                at: at.map(mm),
+                orientation: crate::catalog::Orientation::default(),
+                cut: cut.map(mm),
+            },
+        }
+    }
+
+    #[test]
+    fn a_part_is_placed_removed_and_put_back_by_its_inverse() {
+        let mut e = Enclosure::new(params()).unwrap();
+        let before = e.clone();
+        let undo = e.apply(placed(1, tube(), [0, 0, 0], Some(300))).unwrap();
+        assert_eq!(undo, Operation::RemovePart { id: id(1) });
+        assert_eq!(e.parts().len(), 1);
+        // the box is not changed by a part: they are separate bodies
+        assert_eq!(e.params(), before.params());
+        assert_eq!(e.material_volume_nm3(), before.material_volume_nm3());
+        let redo = e.apply(undo).unwrap();
+        assert_eq!(redo, placed(1, tube(), [0, 0, 0], Some(300)));
+        assert_eq!(e, before);
+        e.apply(redo).unwrap();
+        // an id that is used, and one that is not
+        let e2 = e.apply(placed(1, bolt(), [100, 100, 100], None));
+        assert_eq!(e2.unwrap_err().code(), "PHOENIX-CAD-005");
+        assert_eq!(
+            e.apply(Operation::RemovePart { id: id(9) })
+                .unwrap_err()
+                .code(),
+            "PHOENIX-CAD-005"
+        );
+        assert_eq!(e.parts().len(), 1);
+    }
+
+    #[test]
+    fn a_refused_part_leaves_the_model_as_it_was() {
+        let mut e = Enclosure::new(params()).unwrap();
+        e.apply(placed(1, tube(), [0, 0, 0], Some(300))).unwrap();
+        let before = e.clone();
+        for op in [
+            // a cut shorter than the least cut, and longer than the bar
+            placed(2, tube(), [100, 0, 0], Some(0)),
+            placed(2, tube(), [100, 0, 0], Some(2001)),
+            // a profile with no cut, and a screw with one
+            placed(2, tube(), [100, 0, 0], None),
+            placed(2, bolt(), [100, 0, 0], Some(5)),
+            // sharing volume with the profile that is there: it fills x from 0 to 20 mm
+            placed(2, tube(), [19, 0, 0], Some(300)),
+            // farther from the origin than the largest dimension of the settings
+            placed(2, tube(), [6_001, 0, 0], Some(300)),
+        ] {
+            let e2 = e.apply(op);
+            assert_eq!(e2.unwrap_err().code(), "PHOENIX-CAD-045");
+            assert_eq!(e, before);
+        }
+        // touching is not sharing, and a screw may go where a profile is
+        e.apply(placed(2, tube(), [20, 0, 0], Some(300))).unwrap();
+        e.apply(placed(3, bolt(), [5, 5, 5], None)).unwrap();
+        assert_eq!(e.parts().len(), 3);
+    }
+
+    #[test]
+    fn the_settings_say_how_many_parts_there_can_be_and_whether_profiles_may_overlap() {
+        let mut e = Enclosure::new(params()).unwrap();
+        let mut design = DesignLimits::shipped();
+        design.catalog.max_instances = 2;
+        design.catalog.refuse_overlap = false;
+        e.set_design_limits(design);
+        e.apply(placed(1, tube(), [0, 0, 0], Some(300))).unwrap();
+        // the overlap is allowed by these settings
+        e.apply(placed(2, tube(), [10, 0, 0], Some(300))).unwrap();
+        let third = e.apply(placed(3, bolt(), [100, 100, 100], None));
+        let error = third.unwrap_err();
+        assert_eq!(error.code(), "PHOENIX-CAD-045");
+        assert!(
+            error.to_string().contains("more than the 2 parts"),
+            "{error}"
+        );
+        assert_eq!(e.parts().len(), 2);
+    }
+
+    #[test]
+    fn the_parts_come_in_the_order_of_their_ids_and_are_not_part_of_the_box() {
+        let mut e = Enclosure::new(params()).unwrap();
+        e.apply(placed(5, bolt(), [100, 100, 100], None)).unwrap();
+        e.apply(placed(2, tube(), [0, 0, 0], Some(300))).unwrap();
+        let ids: Vec<Id> = e.parts().keys().copied().collect();
+        assert_eq!(ids, vec![id(2), id(5)]);
+        // a change of the box does not move or refuse the parts
+        let mut wide = params();
+        wide.inner_length = mm(120);
+        e.apply(Operation::SetParams(wide)).unwrap();
+        assert_eq!(e.parts().len(), 2);
     }
 }

@@ -428,7 +428,7 @@ pub fn to_step(enclosure: &Enclosure) -> String {
 /// The enclosure as STEP text, or the error `PHOENIX-CAD-022` when the model has a shape that the
 /// file does not draw: a rounded or chamfered edge, a hole that is not a straight round one (the
 /// holes of the lid fixing included), the reinforced foot of a post, the centring lip of a lid or an
-/// extrusion or a pocket of a sketch or a set of cooling fins.
+/// extrusion or a pocket of a sketch, a set of cooling fins or a placed part.
 pub fn export_step(enclosure: &Enclosure) -> Result<String, CadError> {
     if !enclosure.features().is_empty() {
         return Err(CadError::NotExported(
@@ -437,6 +437,9 @@ pub fn export_step(enclosure: &Enclosure) -> Result<String, CadError> {
     }
     if !enclosure.fins().is_empty() {
         return Err(CadError::NotExported("cooling fins".into()));
+    }
+    if !enclosure.parts().is_empty() {
+        return Err(CadError::NotExported("placed parts".into()));
     }
     if !enclosure.edging().is_sharp() {
         return Err(CadError::NotExported("rounded or chamfered edges".into()));
@@ -825,6 +828,107 @@ mod tests {
         assert_eq!(
             export_step(&sunk).unwrap_err(),
             CadError::NotExported("the shape of hole lid screw front left".into())
+        );
+    }
+
+    fn catalog_part(kind: &str) -> crate::catalog::Part {
+        use crate::catalog::{Head, Part, Shape};
+        let um = |v: i64| Length::from_um(v).unwrap();
+        match kind {
+            "tube" => Part {
+                name: "tube-20x20".into(),
+                material: "aluminium".into(),
+                shape: Shape::Profile {
+                    width: um(20_000),
+                    height: um(20_000),
+                    wall: um(1_500),
+                    default_cut: um(300_000),
+                    max_cut: um(2_000_000),
+                },
+            },
+            "bolt" => Part {
+                name: "bolt".into(),
+                material: "steel".into(),
+                shape: Shape::Screw {
+                    metric: "M3".into(),
+                    diameter: um(3_000),
+                    length: um(10_000),
+                    head: Head::Cylinder,
+                    head_diameter: um(5_500),
+                    head_height: um(3_000),
+                },
+            },
+            "flat" => Part {
+                name: "flat".into(),
+                material: "steel".into(),
+                shape: Shape::Screw {
+                    metric: "M3".into(),
+                    diameter: um(3_000),
+                    length: um(8_000),
+                    head: Head::Countersunk,
+                    head_diameter: um(6_000),
+                    head_height: um(1_700),
+                },
+            },
+            "hex" => Part {
+                name: "hex".into(),
+                material: "stainless".into(),
+                shape: Shape::Screw {
+                    metric: "M4".into(),
+                    diameter: um(4_000),
+                    length: um(16_000),
+                    head: Head::Hex,
+                    head_diameter: um(7_000),
+                    head_height: um(2_800),
+                },
+            },
+            _ => Part {
+                name: "angle-30".into(),
+                material: "aluminium".into(),
+                shape: Shape::Bracket {
+                    leg_a: um(30_000),
+                    leg_b: um(30_000),
+                    width: um(20_000),
+                    thickness: um(3_000),
+                    hole_diameter: um(4_500),
+                },
+            },
+        }
+    }
+
+    fn place(
+        e: &mut Enclosure,
+        n: u64,
+        kind: &str,
+        at: [i64; 3],
+        axis: crate::catalog::Axis,
+        roll: u8,
+        cut: Option<i64>,
+    ) {
+        use crate::catalog::{Orientation, PartInstance};
+        e.apply(Operation::AddPart {
+            id: ObjectId::from_parts(1_700_000_000_000, n as u16, n).unwrap(),
+            part: PartInstance {
+                name: format!("piece {n}"),
+                library: "lib".into(),
+                part: catalog_part(kind),
+                at: at.map(mm),
+                orientation: Orientation { axis, roll },
+                cut: cut.map(mm),
+            },
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn a_placed_part_is_not_drawn_by_the_step_file_and_the_answer_is_the_code_of_the_shape() {
+        use crate::catalog::Axis;
+        let mut e = enclosure(&[]);
+        assert!(export_step(&e).is_ok());
+        place(&mut e, 1, "bolt", [0, 0, 0], Axis::PlusZ, 0, None);
+        assert_eq!(
+            export_step(&e).unwrap_err(),
+            CadError::NotExported("placed parts".into())
         );
     }
 }
