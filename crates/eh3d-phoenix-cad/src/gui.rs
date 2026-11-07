@@ -285,6 +285,8 @@ impl App {
                         (NewStep::Edging, Msg::AddEdging),
                         (NewStep::Extrude, Msg::AddExtrude),
                         (NewStep::Pocket, Msg::AddPocket),
+                        (NewStep::HolePattern, Msg::AddHolePattern),
+                        (NewStep::PostPattern, Msg::AddPostPattern),
                     ] {
                         if ui
                             .add_enabled(editable, egui::Button::new(msg.tr(lang)))
