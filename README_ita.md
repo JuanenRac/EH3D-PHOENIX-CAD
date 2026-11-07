@@ -11,14 +11,14 @@
   <img src="https://img.shields.io/badge/License-GPL%203.0--or--later-blue.svg" alt="GPL 3.0 or later">
   <img src="https://img.shields.io/badge/Stack-Rust%20%2B%20Markdown%20%2B%20Python-blue.svg" alt="Rust, Markdown and Python">
   <img src="https://img.shields.io/badge/Languages-8-00E5FF.svg" alt="Languages">
-  <img src="https://img.shields.io/badge/Tests-515-2EA043.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-564-2EA043.svg" alt="Tests">
   <img src="https://img.shields.io/badge/Version-0.0.4-0f6cbd.svg" alt="Version">
   <img src="https://img.shields.io/badge/Maturity-scaffolding-FFB020.svg" alt="Maturity">
 </p>
 
 ---
 
-**Verifica di onestà - cosa funziona oggi:** una libreria Rust con un contenitore parametrico: lunghezze in nanometri interi con un proprio intervallo, fori nelle facce (rotondi, svasati, con spianatura per la testa, rettangolari e ovali), spigoli arrotondati e smussati, parametri scritti come formule con unità su variabili, costanti e altri parametri (frazioni esatte, overflow controllato), operazioni di modifica strutturate che segnalano i conflitti e lasciano il modello intatto, colonnine sotto i fori di fissaggio di una scheda con un coperchio avvitato su di esse, la ricetta del contenitore conservata nel dominio meccanico del file di progetto, uno script in stile OpenSCAD e un controllo di alloggiamento rispetto all'ingombro di una scheda. Una finestra (egui, con `--features gui`) mostra l'albero del modello, le proprietà di ogni elemento, una vista 3D e una vista dall'alto (dove si trascinano fori e colonnine con il mouse e si misurano distanze e angoli; lo script, il file STEP e il rapporto di adattamento si scrivono in un file da un menu, mai sopra un file esistente a meno che la casella apposita sia spuntata), e un comando `check` legge un progetto e stampa le sue misure, l'alloggiamento e lo stato di ogni passaggio; la logica della finestra è provata senza schermo. Ha 512 test propri e passano su un computer. È stata provata solo su modelli creati dai suoi stessi test; la finestra non è mai stata aperta su uno schermo e nulla è stato eseguito su una macchina, e il file STEP che scrive è stato controllato solo nella struttura, e lo schizzo 2D (geometria, vincoli, un risolutore e una finestra per disegnarlo e quotarlo), che è conservato nel file di progetto e i cui contorni chiusi possono essere estrusi da una faccia o scavati in essa come passi della ricetta, è stato provato solo su schizzi creati dai suoi stessi test e la sua finestra non è ancora stata aperta su uno schermo, mentre dissipatori e assiemi sono solo pianificati.
+**Verifica di onestà - cosa funziona oggi:** una libreria Rust con un contenitore parametrico: lunghezze in nanometri interi con un proprio intervallo, fori nelle facce (rotondi, svasati, con spianatura per la testa, rettangolari e ovali), spigoli arrotondati e smussati, parametri scritti come formule con unità su variabili, costanti e altri parametri (frazioni esatte, overflow controllato), operazioni di modifica strutturate che segnalano i conflitti e lasciano il modello intatto, colonnine sotto i fori di fissaggio di una scheda con un coperchio avvitato su di esse, la ricetta del contenitore conservata nel dominio meccanico del file di progetto, uno script in stile OpenSCAD e un controllo di alloggiamento rispetto all'ingombro di una scheda. Una finestra (egui, con `--features gui`) mostra l'albero del modello, le proprietà di ogni elemento, una vista 3D e una vista dall'alto (dove si trascinano fori e colonnine con il mouse e si misurano distanze e angoli; lo script, il file STEP e il rapporto di adattamento si scrivono in un file da un menu, mai sopra un file esistente a meno che la casella apposita sia spuntata), e un comando `check` legge un progetto e stampa le sue misure, l'alloggiamento e lo stato di ogni passaggio; la logica della finestra è provata senza schermo. Ha 561 test propri e passano su un computer. È stata provata solo su modelli creati dai suoi stessi test; la finestra non è mai stata aperta su uno schermo e nulla è stato eseguito su una macchina, e il file STEP che scrive è stato controllato solo nella struttura, e lo schizzo 2D (geometria, vincoli, un risolutore e una finestra per disegnarlo e quotarlo), che è conservato nel file di progetto e i cui contorni chiusi possono essere estrusi da una faccia o scavati in essa come passi della ricetta, è stato provato solo su schizzi creati dai suoi stessi test e la sua finestra non è ancora stata aperta su uno schermo, mentre gli schemi di fori e colonnine e le alette di raffreddamento (con una stima semplice del calore che cedono all'aria ferma, confrontata con nessuna misura) esistono ma sono stati provati solo su modelli creati dai suoi stessi test, e gli assiemi sono solo pianificati.
 
 ---
 
@@ -30,7 +30,7 @@
 |---|---|
 | Versione | `0.0.4` |
 | Maturità | Impalcatura |
-| Test | 515 |
+| Test | 564 |
 | Stack tecnologico | Rust, Markdown, Python 3.10+ |
 | Su hardware reale | Non ancora eseguito su hardware |
 
@@ -45,14 +45,14 @@ Ogni riga è una parte di questo repository e il semaforo dice a che punto è og
 | Area | Stato | Cosa significa qui |
 |---|---|---|
 | Controlli del repository | 🟡 | Il controllo del repository, quello delle immagini e i 3 test della base girano nella CI e passano. |
-| Test | 🟡 | I 512 test della libreria Rust e i 3 della base passano su un computer. Usano solo modelli creati dai test stessi. |
+| Test | 🟡 | I 561 test della libreria Rust e i 3 della base passano su un computer. Usano solo modelli creati dai test stessi. |
 | Hardware reale | 🟠 | Non eseguito su nessuna macchina né scheda: nulla qui è stato provato su hardware. |
-| Funzione pianificata | 🟠 | Fatta in parte: esistono un contenitore parametrico con fori, colonnine e coperchio avvitato, uno script in stile OpenSCAD, un controllo di alloggiamento e la ricetta del contenitore nel file di progetto, più un primo scrittore STEP controllato solo nella struttura; esiste uno schizzo 2D con vincoli, un risolutore e una finestra per disegnarlo, conservato nel file di progetto e che può essere estruso da una faccia o scavato in essa, ma la sua finestra non è ancora stata aperta su uno schermo; i dissipatori e gli assiemi non sono iniziati. |
-| Requisiti | 🟠 | 4 requisiti su 6 sono in prototipo (il contenitore, lo script, le operazioni di modifica e l'intervallo meccanico), 2 sono solo pianificati e nessuno è validato. |
+| Funzione pianificata | 🟠 | Fatta in parte: esistono un contenitore parametrico con fori, colonnine e coperchio avvitato, uno script in stile OpenSCAD, un controllo di alloggiamento e la ricetta del contenitore nel file di progetto, più un primo scrittore STEP controllato solo nella struttura; esiste uno schizzo 2D con vincoli, un risolutore e una finestra per disegnarlo, conservato nel file di progetto e che può essere estruso da una faccia o scavato in essa, ma la sua finestra non è ancora stata aperta su uno schermo; esistono schemi di fori e colonnine e alette di raffreddamento con una stima del loro calore, provati solo su modelli creati dai test; gli assiemi non sono iniziati. |
+| Requisiti | 🟠 | 5 requisiti su 6 sono in prototipo (il contenitore, lo script, le operazioni di modifica, il modello del dissipatore e l'intervallo meccanico), 1 è solo pianificato e nessuno è validato. |
 
 ## 🎯 Panoramica
 
-* **Pianificato:** EH3D-PHOENIX-CAD vuole essere un CAD meccanico parametrico incentrato sulla progettazione di scatole, telai e dissipatori termici, come libreria con finestra, con interfaccia a riga di comando e, quando serve, un tipo di attività del server. La libreria esiste con un primo contenitore parametrico, una finestra che mostra l'albero, le proprietà, una vista 3D e una vista dall'alto, dove si trascinano fori e colonnine con il mouse e si misurano distanze e angoli (mai aperta su uno schermo) e un comando `check`; l'attività del server e i dissipatori non esistono ancora, e il file STEP è stato controllato solo nella struttura.
+* **Pianificato:** EH3D-PHOENIX-CAD vuole essere un CAD meccanico parametrico incentrato sulla progettazione di scatole, telai e dissipatori termici, come libreria con finestra, con interfaccia a riga di comando e, quando serve, un tipo di attività del server. La libreria esiste con un primo contenitore parametrico, una finestra che mostra l'albero, le proprietà, una vista 3D e una vista dall'alto, dove si trascinano fori e colonnine con il mouse e si misurano distanze e angoli (mai aperta su uno schermo) e un comando `check`; l'attività del server non esiste ancora, le alette di raffreddamento (con una stima del loro calore) non sono nel file STEP, e il file STEP è stato controllato solo nella struttura.
 
 ## 🧩 Ruolo in EH3D
 
@@ -89,7 +89,7 @@ cargo run --release -p eh3d-phoenix-cad --features gui -- gui crates/eh3d-phoeni
 
 ## 🧪 Test
 
-La libreria Rust ha 512 test (`cargo test`) e la base ne ha 3 (`python -I -m unittest discover -s tools -p "test_*.py"`); tutti passano su un computer. La CI esegue il controllo del repository, quello delle immagini, i test della base e, per il codice Rust, il controllo del formato, clippy con gli avvisi come errori e i test su Linux e Windows, e controlla anche la finestra con clippy (`--features gui`).
+La libreria Rust ha 561 test (`cargo test`) e la base ne ha 3 (`python -I -m unittest discover -s tools -p "test_*.py"`); tutti passano su un computer. La CI esegue il controllo del repository, quello delle immagini, i test della base e, per il codice Rust, il controllo del formato, clippy con gli avvisi come errori e i test su Linux e Windows, e controlla anche la finestra con clippy (`--features gui`).
 
 ## 🏗️ Compilazione e rilascio
 
@@ -118,7 +118,7 @@ EH3D-PHOENIX-CAD/
 │   ├── SKETCH.md                                lo schizzo 2D: vincoli, risolutore, file di progetto ed estrusioni
 │   └── adr/                                     i registri delle decisioni accettate
 ├── Cargo.toml Cargo.lock                        il workspace Rust e le sue dipendenze bloccate
-├── crates/                                      il modello meccanico: contenitore, operazioni, schizzi, script, controllo di alloggiamento, finestra
+├── crates/                                      modello meccanico: contenitore, schemi, alette, schizzi, script, controllo di alloggiamento, finestra
 ├── AGENTS.md                                    regole per chi modifica il repository
 ├── tools/                                       il controllo del repository, i suoi test e gli strumenti delle immagini
 ├── images/                                      banner e le immagini di Architettura e Struttura del repository
@@ -140,7 +140,7 @@ EH3D-PHOENIX-CAD/
 
 **Prossimi passi**
 
-* Far leggere e scrivere il dominio meccanico del formato di progetto allo strumento per schede, aprire il file STEP in un programma CAD e poi aggiungere i dissipatori e gli assiemi, ciascuno con i suoi test.
+* Far leggere e scrivere il dominio meccanico del formato di progetto allo strumento per schede, aprire il file STEP in un programma CAD e poi aggiungere gli assiemi e confrontare la stima delle alette di raffreddamento con una misura, ciascuno con i suoi test.
 
 ## 🌍 Lingue
 

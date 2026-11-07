@@ -198,14 +198,14 @@
         {
           "name": "crates/",
           "desc": {
-            "en": "the mechanical model: enclosure, operations, sketches, script, fit check, window",
-            "es": "el modelo mecánico: caja, operaciones, croquis, script, comprobación de encaje, ventana",
-            "de": "das mechanische Modell: Gehäuse, Operationen, Skizzen, Skript, Passprüfung, Fenster",
-            "fr": "le modèle mécanique : boîtier, opérations, esquisses, script, contrôle d'ajustement, fenêtre",
-            "it": "il modello meccanico: contenitore, operazioni, schizzi, script, controllo di alloggiamento, finestra",
-            "ja": "機械モデル：筐体、操作、スケッチ、スクリプト、収まりの検査、ウィンドウ",
-            "zh": "机械模型：外壳、操作、草图、脚本、装配检查、窗口",
-            "pt": "o modelo mecânico: caixa, operações, esboços, script, verificação de encaixe, janela"
+            "en": "mechanical model: enclosure, patterns, fins, sketches, script, fit check, window",
+            "es": "modelo mecánico: caja, patrones, aletas, croquis, script, comprobación de encaje, ventana",
+            "de": "mechanisches Modell: Gehäuse, Muster, Kühlrippen, Skizzen, Skript, Passprüfung, Fenster",
+            "fr": "modèle mécanique : boîtier, motifs, ailettes, esquisses, script, contrôle d'ajustement, fenêtre",
+            "it": "modello meccanico: contenitore, schemi, alette, schizzi, script, controllo di alloggiamento, finestra",
+            "ja": "機械モデル：筐体、パターン、冷却フィン、スケッチ、スクリプト、収まりの検査、ウィンドウ",
+            "zh": "机械模型：外壳、阵列、散热片、草图、脚本、装配检查、窗口",
+            "pt": "modelo mecânico: caixa, padrões, alhetas, esboços, script, verificação de encaixe, janela"
           }
         },
         {
