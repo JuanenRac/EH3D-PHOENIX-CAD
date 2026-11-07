@@ -493,6 +493,32 @@ const TEXTS: &[Row] = &[
             "Extrusão ou cavidade inválida",
         ],
     ),
+    (
+        "PHOENIX-CAD-038",
+        [
+            "Measurement not valid",
+            "Medición no válida",
+            "Messung ungültig",
+            "Mesure non valide",
+            "Misura non valida",
+            "測定が無効です",
+            "测量无效",
+            "Medição inválida",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-039",
+        [
+            "Drag not possible",
+            "Arrastre no posible",
+            "Ziehen nicht möglich",
+            "Déplacement impossible",
+            "Trascinamento non possibile",
+            "ドラッグできません",
+            "无法拖动",
+            "Arrastamento impossível",
+        ],
+    ),
 ];
 
 /// The text of a diagnostic in a language (`en`, `es`, `de`, `fr`, `it`, `ja`, `zh` or `pt`), or

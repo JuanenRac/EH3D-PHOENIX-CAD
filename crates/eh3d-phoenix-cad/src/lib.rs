@@ -27,6 +27,7 @@
 //! * [`fit`]: whether an envelope (the outline of a board and its tallest part) fits inside;
 //! * [`sketch`]: the 2D sketch on a face of the box: points, lines, circles, arcs, polylines and rectangles, geometric and dimensional constraints (a dimension may be an expression over the variables), a numeric solver that reports the degrees of freedom left, the constraints that repeat or contradict each other, or that it did not converge, its settings file, the sketch file (the way in and out of a sketch) and the domain `sketch` of the project file, where the sketches of a project are kept;
 //! * [`profile`]: the closed outlines of a sketch (chains of lines and arcs and circles, with the holes found by containment), checked for being closed, simple and large enough, with their area; the extrusions and pockets of the enclosure are made from them;
+//! * [`projection`], [`drag`] and [`measure`]: the lines of the drawing put on a pane and the way back from a point of the pane to a point of a plane of the model, the picking and the snapping of what is dragged with the mouse, and the distances and angles between points and edges of the model;
 //! * [`window`], [`scene`], [`history`], [`uiconfig`], [`lang`], [`shot`] and [`browse`]: the state of the window (the tree of the model, the properties, the
 //!   views, the history of the changes), the lines it draws, its settings, its texts in the eight languages, the picture mode and the list of files; the window itself is
 //!   `gui` (built with `--features gui`).
@@ -63,6 +64,7 @@ pub mod body;
 pub mod browse;
 pub mod config;
 pub mod datum;
+pub mod drag;
 pub mod enclosure;
 pub mod expr;
 pub mod fit;
@@ -72,6 +74,7 @@ pub mod gui;
 pub mod history;
 pub mod lang;
 pub mod mass;
+pub mod measure;
 pub mod mechanical;
 pub mod messages;
 pub mod mount;
@@ -81,6 +84,7 @@ pub mod pattern;
 pub mod printer;
 pub mod profile;
 pub mod project;
+pub mod projection;
 pub mod scad;
 pub mod scene;
 pub mod shot;
@@ -253,6 +257,12 @@ pub enum CadError {
     Profile(String),
     /// An extrusion or a pocket that does not fit the box.
     Feature(String),
+    /// A measurement that cannot be made: an edge or a leg of an angle with no length, or too
+    /// few or the wrong kind of references.
+    Measure(String),
+    /// A hole or a post that cannot be dragged where the pointer is: the view does not show where
+    /// it is on the plane of the object.
+    Drag(String),
 }
 
 impl CadError {
@@ -296,6 +306,8 @@ impl CadError {
             CadError::SketchFile(_) => "PHOENIX-CAD-035",
             CadError::Profile(_) => "PHOENIX-CAD-036",
             CadError::Feature(_) => "PHOENIX-CAD-037",
+            CadError::Measure(_) => "PHOENIX-CAD-038",
+            CadError::Drag(_) => "PHOENIX-CAD-039",
         }
     }
 }
@@ -346,7 +358,9 @@ impl fmt::Display for CadError {
             | CadError::SketchNoConvergence(why)
             | CadError::SketchFile(why)
             | CadError::Profile(why)
-            | CadError::Feature(why) => write!(f, "{title}: {why}"),
+            | CadError::Feature(why)
+            | CadError::Measure(why)
+            | CadError::Drag(why) => write!(f, "{title}: {why}"),
         }
     }
 }
@@ -395,6 +409,8 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-035", "Sketch file not valid"),
     ("PHOENIX-CAD-036", "Profile of the sketch not valid"),
     ("PHOENIX-CAD-037", "Extrusion or pocket not valid"),
+    ("PHOENIX-CAD-038", "Measurement not valid"),
+    ("PHOENIX-CAD-039", "Drag not possible"),
 ];
 
 #[cfg(test)]
@@ -585,6 +601,8 @@ mod tests {
             CadError::SketchFile("line 3".into()),
             CadError::Profile("open".into()),
             CadError::Feature("depth".into()),
+            CadError::Measure("edge".into()),
+            CadError::Drag("view".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));

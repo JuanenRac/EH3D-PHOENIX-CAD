@@ -7,49 +7,14 @@
 //! for a picture and is never used to decide anything about the model.
 
 use crate::datum::Datum;
+use crate::drag::Plane;
 use crate::enclosure::{Enclosure, EnclosureParams, Face, Feature, FeatureKind, Hole, Id};
+use crate::measure::{Label, Reference};
 use crate::mount::Post;
-
-/// A point in millimetres: x along the length of the box, y along its width, z up. The smallest
-/// corner of the outer box is the origin.
-pub type Point3 = [f64; 3];
-
-/// A length in nanometres as millimetres.
-pub fn mm(nm: i64) -> f64 {
-    nm as f64 / 1_000_000.0
-}
-
-/// What a segment is part of, which decides its colour.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
-    /// The outer box.
-    Outer,
-    /// The inner space.
-    Cavity,
-    /// The plane where the lid meets the walls.
-    LidPlane,
-    /// A hole of a face.
-    Hole,
-    /// A screw hole of the lid.
-    Screw,
-    /// A post.
-    Post,
-    /// The board (or the envelope that is checked).
-    Board,
-    /// The object that is selected in the tree.
-    Selected,
-}
-
-/// A line of the drawing.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Segment {
-    /// One end.
-    pub a: Point3,
-    /// The other end.
-    pub b: Point3,
-    /// What it belongs to.
-    pub kind: Kind,
-}
+pub use crate::projection::{
+    mm, project, project_with, rotate, Camera, Fit, Frame, Kind, Line2, Mapping, Point3, Seen,
+    Segment,
+};
 
 /// What is drawn in the colour of a selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -304,6 +269,116 @@ pub fn outer_size(enclosure: &Enclosure) -> Point3 {
     [mm(x.get()), mm(y.get()), mm(z.get())]
 }
 
+/// The plane of a face, in millimetres: the position `(u, v)` of a hole is the point `origin + u *
+/// a + v * b`, with `u` to the right and `v` up as seen from outside the box.
+pub fn face_plane(enclosure: &Enclosure, face: Face) -> Plane {
+    let datum = Datum::of_face(enclosure, face);
+    let unit = |axis: [i64; 3]| -> Point3 {
+        let r = datum.rotation.apply(axis);
+        [r[0] as f64, r[1] as f64, r[2] as f64]
+    };
+    Plane {
+        origin: [
+            mm(datum.origin[0].get()),
+            mm(datum.origin[1].get()),
+            mm(datum.origin[2].get()),
+        ],
+        a: unit([1, 0, 0]),
+        b: unit([0, 1, 0]),
+    }
+}
+
+/// The plane of the floor, in millimetres: the position `(x, y)` of a post is the point `origin +
+/// x * a + y * b`, with `x` along the length and `y` along the width from the inner faces of the
+/// walls.
+pub fn floor_plane(params: &EnclosureParams) -> Plane {
+    Plane {
+        origin: [
+            mm(params.wall.get()),
+            mm(params.wall.get()),
+            mm(params.floor.get()),
+        ],
+        a: [1.0, 0.0, 0.0],
+        b: [0.0, 1.0, 0.0],
+    }
+}
+
+/// The centre of a hole, on its face.
+pub fn hole_centre(enclosure: &Enclosure, hole: &Hole) -> Point3 {
+    face_plane(enclosure, hole.face).at(mm(hole.u.get()), mm(hole.v.get()))
+}
+
+/// The centre of the top of a post.
+pub fn post_centre(params: &EnclosureParams, post: &Post) -> Point3 {
+    let mut at = floor_plane(params).at(mm(post.x.get()), mm(post.y.get()));
+    at[2] += mm(post.height.get());
+    at
+}
+
+/// The corners of a box, numbered by the bits of the number: bit 0 is the length, bit 1 the width
+/// and bit 2 the height, set for the larger end.
+fn box_corner(lo: Point3, hi: Point3, i: usize) -> Point3 {
+    [
+        if i & 1 == 0 { lo[0] } else { hi[0] },
+        if i & 2 == 0 { lo[1] } else { hi[1] },
+        if i & 4 == 0 { lo[2] } else { hi[2] },
+    ]
+}
+
+/// Everything that can be measured: the centres of the holes and of the posts, the corners and the
+/// edges of the outer box and of the inner space.
+pub fn references(enclosure: &Enclosure) -> Vec<Reference> {
+    let p = enclosure.params();
+    let mut out = Vec::new();
+    for hole in enclosure.holes().values() {
+        out.push(Reference::point(
+            Label::Hole(hole.name.clone()),
+            hole_centre(enclosure, hole),
+        ));
+    }
+    for post in enclosure.posts().values() {
+        out.push(Reference::point(
+            Label::Post(post.name.clone()),
+            post_centre(p, post),
+        ));
+    }
+    let wall = mm(p.wall.get());
+    let floor = mm(p.floor.get());
+    let inner_low = [wall, wall, floor];
+    let inner_high = [
+        wall + mm(p.inner_length.get()),
+        wall + mm(p.inner_width.get()),
+        floor + mm(p.inner_height.get()),
+    ];
+    for (lo, hi, corner, edge) in [
+        (
+            [0.0; 3],
+            outer_size(enclosure),
+            Label::OuterCorner,
+            Label::OuterEdge,
+        ),
+        (inner_low, inner_high, Label::InnerCorner, Label::InnerEdge),
+    ] {
+        for i in 0..8 {
+            out.push(Reference::point(corner.clone(), box_corner(lo, hi, i)));
+        }
+        for i in 0..8usize {
+            for bit in [1usize, 2, 4] {
+                if i & bit == 0 {
+                    if let Ok(r) = Reference::edge(
+                        edge.clone(),
+                        box_corner(lo, hi, i),
+                        box_corner(lo, hi, i | bit),
+                    ) {
+                        out.push(r);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The lines of the whole model: the outer box, the inner space, the plane of the lid, the holes
 /// of the faces, the screw holes of the lid, the posts and the board. `segments` is the number of
 /// lines of a circle.
@@ -376,137 +451,6 @@ pub fn scene_of(
         push_box(&mut out, b.min, b.max, Kind::Board);
     }
     out
-}
-
-/// A point of view: the turn about the vertical axis and the angle above the horizon, in degrees.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Camera {
-    /// The turn about the vertical axis.
-    pub yaw: f64,
-    /// The angle above the horizon; 90 looks straight down.
-    pub pitch: f64,
-}
-
-impl Camera {
-    /// The point of view of the plan: straight down, the length to the right and the width up.
-    pub const TOP: Camera = Camera {
-        yaw: 0.0,
-        pitch: 90.0,
-    };
-}
-
-/// A point of the model seen from a camera: to the right, up and the depth (larger is farther
-/// from the viewer).
-pub type Seen = (f64, f64, f64);
-
-/// A point of the model seen from a camera, about `centre`.
-pub fn rotate(p: Point3, centre: Point3, camera: Camera) -> Seen {
-    let (x, y, z) = (p[0] - centre[0], p[1] - centre[1], p[2] - centre[2]);
-    let (sy, cy) = camera.yaw.to_radians().sin_cos();
-    let (sp, cp) = camera.pitch.to_radians().sin_cos();
-    let right = x * cy - y * sy;
-    let ahead = x * sy + y * cy;
-    (right, ahead * sp + z * cp, ahead * cp - z * sp)
-}
-
-/// How the size of the drawing is chosen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Fit {
-    /// The sphere that holds the box fits the pane, so the size does not change when it turns.
-    Sphere,
-    /// The rectangle that holds the drawing fits the pane.
-    Bounds,
-}
-
-/// A line on the pane, in pixels from its upper left corner.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Line2 {
-    /// One end.
-    pub a: (f64, f64),
-    /// The other end.
-    pub b: (f64, f64),
-    /// What it belongs to.
-    pub kind: Kind,
-    /// The depth of its middle (larger is farther from the viewer).
-    pub depth: f64,
-}
-
-/// What a view needs to put the lines on a pane.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Frame {
-    /// The point of view.
-    pub camera: Camera,
-    /// The zoom over the size that fits the pane.
-    pub zoom: f64,
-    /// The movement of the drawing, in pixels.
-    pub pan: (f64, f64),
-    /// The width and the height of the pane, in pixels.
-    pub pane: (f64, f64),
-    /// The pixels left empty around the drawing.
-    pub margin: f64,
-    /// How the size is chosen.
-    pub fit: Fit,
-}
-
-/// Puts the lines on a pane. `size` is the size of the outer box, whose centre is the point the
-/// camera turns about.
-pub fn project(segments: &[Segment], size: Point3, frame: &Frame) -> Vec<Line2> {
-    let centre = [size[0] / 2.0, size[1] / 2.0, size[2] / 2.0];
-    let seen: Vec<(Seen, Seen, Kind)> = segments
-        .iter()
-        .map(|s| {
-            (
-                rotate(s.a, centre, frame.camera),
-                rotate(s.b, centre, frame.camera),
-                s.kind,
-            )
-        })
-        .collect();
-    let (width, height) = frame.pane;
-    let room = (
-        (width - 2.0 * frame.margin).max(1.0),
-        (height - 2.0 * frame.margin).max(1.0),
-    );
-    let (scale, middle) = match frame.fit {
-        Fit::Sphere => {
-            let radius = 0.5 * (size[0] * size[0] + size[1] * size[1] + size[2] * size[2]).sqrt();
-            (room.0.min(room.1) / (2.0 * radius.max(1e-9)), (0.0, 0.0))
-        }
-        Fit::Bounds => {
-            let mut low = (f64::INFINITY, f64::INFINITY);
-            let mut high = (f64::NEG_INFINITY, f64::NEG_INFINITY);
-            for (a, b, _) in &seen {
-                for p in [a, b] {
-                    low = (low.0.min(p.0), low.1.min(p.1));
-                    high = (high.0.max(p.0), high.1.max(p.1));
-                }
-            }
-            if low.0 > high.0 {
-                (1.0, (0.0, 0.0))
-            } else {
-                let (w, h) = ((high.0 - low.0).max(1e-9), (high.1 - low.1).max(1e-9));
-                (
-                    (room.0 / w).min(room.1 / h),
-                    ((low.0 + high.0) / 2.0, (low.1 + high.1) / 2.0),
-                )
-            }
-        }
-    };
-    let scale = scale * frame.zoom;
-    let to_pane = |p: &Seen| -> (f64, f64) {
-        (
-            width / 2.0 + (p.0 - middle.0) * scale + frame.pan.0,
-            height / 2.0 - (p.1 - middle.1) * scale + frame.pan.1,
-        )
-    };
-    seen.iter()
-        .map(|(a, b, kind)| Line2 {
-            a: to_pane(a),
-            b: to_pane(b),
-            kind: *kind,
-            depth: (a.2 + b.2) / 2.0,
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -657,6 +601,92 @@ mod tests {
         .unwrap();
         let lines = scene_of(&e, None, Highlight::Nothing, 16);
         assert_eq!(lines.iter().filter(|s| s.kind == Kind::Hole).count(), 36);
+    }
+
+    fn plain_hole(name: &str, face: Face, u: i64, v: i64) -> crate::Hole {
+        crate::Hole {
+            name: name.into(),
+            face,
+            u: mmlen(u),
+            v: mmlen(v),
+            diameter: mmlen(6),
+            style: HoleStyle::Plain,
+        }
+    }
+
+    #[test]
+    fn the_position_of_a_hole_is_a_point_of_the_plane_of_its_face() {
+        let e = enclosure();
+        // the outer box is 104 by 64 by 35: u to the right and v up as seen from outside
+        let at = |face: Face, u: i64, v: i64| {
+            let h = plain_hole("h", face, u, v);
+            hole_centre(&e, &h)
+        };
+        assert_eq!(at(Face::Front, 14, 15), [14.0, 0.0, 15.0]);
+        assert_eq!(at(Face::Back, 14, 15), [90.0, 64.0, 15.0]);
+        assert_eq!(at(Face::Left, 14, 15), [0.0, 50.0, 15.0]);
+        assert_eq!(at(Face::Right, 14, 15), [104.0, 14.0, 15.0]);
+        assert_eq!(at(Face::Top, 14, 15), [14.0, 15.0, 35.0]);
+        assert_eq!(at(Face::Bottom, 14, 15), [14.0, 49.0, 0.0]);
+        let plane = face_plane(&e, Face::Top);
+        assert_eq!(plane.origin, [0.0, 0.0, 35.0]);
+        assert_eq!((plane.a, plane.b), ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]));
+    }
+
+    #[test]
+    fn the_position_of_a_post_is_a_point_of_the_floor_and_its_centre_is_on_top() {
+        let e = enclosure();
+        let plane = floor_plane(e.params());
+        // x and y count from the inner faces of the walls (2 mm), on the floor (2 mm)
+        assert_eq!(plane.at(10.0, 12.0), [12.0, 14.0, 2.0]);
+        let post = Post {
+            name: "p".into(),
+            board_hole: None,
+            x: mmlen(10),
+            y: mmlen(12),
+            outer_diameter: mmlen(8),
+            height: mmlen(6),
+            kind: crate::mount::BoreKind::Insert,
+            bore_diameter: mmlen(4),
+            bore_depth: mmlen(5),
+            base: None,
+        };
+        assert_eq!(post_centre(e.params(), &post), [12.0, 14.0, 8.0]);
+    }
+
+    #[test]
+    fn everything_that_can_be_measured_is_listed() {
+        let mut e = enclosure();
+        let empty = references(&e);
+        // 8 corners and 12 edges of the outer box, and the same of the inner space
+        assert_eq!(empty.len(), 40);
+        assert_eq!(empty.iter().filter(|r| r.is_point()).count(), 16);
+        e.apply(Operation::AddHole {
+            id: id(1),
+            hole: plain_hole("usb", Face::Front, 30, 17),
+        })
+        .unwrap();
+        let listed = references(&e);
+        assert_eq!(listed.len(), 41);
+        assert_eq!(listed[0].label, Label::Hole("usb".into()));
+        assert_eq!(
+            listed[0].geometry,
+            crate::measure::Geometry::Point([30.0, 0.0, 17.0])
+        );
+        // the corners of the inner space are 2 mm inside the outer ones and 2 mm above the floor
+        let inner: Vec<_> = listed
+            .iter()
+            .filter(|r| r.label == Label::InnerCorner)
+            .collect();
+        assert_eq!(inner.len(), 8);
+        assert_eq!(
+            inner[0].geometry,
+            crate::measure::Geometry::Point([2.0, 2.0, 2.0])
+        );
+        assert_eq!(
+            inner[7].geometry,
+            crate::measure::Geometry::Point([102.0, 62.0, 32.0])
+        );
     }
 
     #[test]
