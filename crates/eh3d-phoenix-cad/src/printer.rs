@@ -81,6 +81,13 @@ impl PrinterProfile {
                 part: part.clone(),
             })?;
         }
+        // the mates keep the parts relative to each other
+        for (id, mate) in design.mates() {
+            out.apply(Operation::AddMate {
+                id: *id,
+                mate: *mate,
+            })?;
+        }
         Ok(out)
     }
 }

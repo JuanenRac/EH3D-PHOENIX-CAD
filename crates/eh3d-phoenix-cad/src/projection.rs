@@ -35,6 +35,8 @@ pub enum Kind {
     Selected,
     /// A measurement: the line it measures and the points that were picked for it.
     Measure,
+    /// A placed part that shares volume with another one.
+    Conflict,
 }
 
 /// A line of the drawing.

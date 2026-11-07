@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 
 use eh3d_container::ObjectId;
 
+use crate::assembly::{interference, place, Mate, Report};
 use crate::catalog::{check_overlap, PartInstance};
 use crate::config::DesignLimits;
 use crate::fins::{FinContext, FinSet};
@@ -567,9 +568,23 @@ pub enum Operation {
         /// The part, its position, its orientation and its cut.
         part: PartInstance,
     },
-    /// Takes a placed part away.
+    /// Takes a placed part away. A part that a mate uses is refused.
     RemovePart {
         /// The id of the instance.
+        id: Id,
+    },
+    /// Places a part relative to another along one axis. The mate is a constraint: the position
+    /// typed for the part stays in the model and [`Enclosure::placed_parts`] applies the mates. It
+    /// is refused when it cannot be solved together with the mates that are already there.
+    AddMate {
+        /// The id of the mate.
+        id: Id,
+        /// What it asks for.
+        mate: Mate,
+    },
+    /// Takes a mate away; the part goes back to the position typed for it.
+    RemoveMate {
+        /// The id of the mate.
         id: Id,
     },
 }
@@ -634,6 +649,7 @@ pub struct Enclosure {
     pattern_members: BTreeMap<Id, Id>,
     fins: BTreeMap<Id, FinSet>,
     parts: BTreeMap<Id, PartInstance>,
+    mates: BTreeMap<Id, Mate>,
     design: Option<DesignLimits>,
 }
 
@@ -654,6 +670,7 @@ impl Enclosure {
             pattern_members: BTreeMap::new(),
             fins: BTreeMap::new(),
             parts: BTreeMap::new(),
+            mates: BTreeMap::new(),
             design: None,
         })
     }
@@ -662,6 +679,22 @@ impl Enclosure {
     /// part of the volume of the box.
     pub fn parts(&self) -> &BTreeMap<Id, PartInstance> {
         &self.parts
+    }
+
+    /// The mates by id (ordered by id).
+    pub fn mates(&self) -> &BTreeMap<Id, Mate> {
+        &self.mates
+    }
+
+    /// The placed parts with the mates applied: the positions the parts really have. They are the
+    /// positions typed for them where no mate places them.
+    pub fn placed_parts(&self) -> BTreeMap<Id, PartInstance> {
+        place(&self.parts, &self.mates).unwrap_or_else(|_| self.parts.clone())
+    }
+
+    /// The pairs of placed parts that share volume (see [`crate::assembly::interference`]).
+    pub fn interference(&self) -> Result<Report, CadError> {
+        interference(&self.placed_parts(), &self.design_limits().assembly)
     }
 
     /// The sets of cooling fins by id (ordered by id).
@@ -1432,8 +1465,46 @@ impl Enclosure {
                 self.parts.insert(id, part);
                 Ok(Operation::RemovePart { id })
             }
-            Operation::RemovePart { id } => match self.parts.remove(&id) {
-                Some(part) => Ok(Operation::AddPart { id, part }),
+            Operation::RemovePart { id } => {
+                if self.mates.values().any(|m| m.a == id || m.b == id) {
+                    let name = self
+                        .parts
+                        .get(&id)
+                        .map_or_else(String::new, |p| p.name.clone());
+                    return Err(CadError::Mate(format!(
+                        "{name} is used by a mate (remove the mate first)"
+                    )));
+                }
+                match self.parts.remove(&id) {
+                    Some(part) => Ok(Operation::AddPart { id, part }),
+                    None => Err(CadError::HoleId(id)),
+                }
+            }
+            Operation::AddMate { id, mate } => {
+                let limits = self.design_limits();
+                if self.mates.contains_key(&id) {
+                    return Err(CadError::HoleId(id));
+                }
+                if self.mates.len() >= limits.assembly.max_mates {
+                    return Err(CadError::Mate(format!(
+                        "more than the {} mates the settings allow",
+                        limits.assembly.max_mates
+                    )));
+                }
+                mate.check(limits.catalog.max_dimension)?;
+                self.mates.insert(id, mate);
+                let solved = place(&self.parts, &self.mates)
+                    .and_then(|placed| placed.values().try_for_each(|p| p.check(&limits.catalog)));
+                match solved {
+                    Ok(()) => Ok(Operation::RemoveMate { id }),
+                    Err(e) => {
+                        self.mates.remove(&id);
+                        Err(e)
+                    }
+                }
+            }
+            Operation::RemoveMate { id } => match self.mates.remove(&id) {
+                Some(mate) => Ok(Operation::AddMate { id, mate }),
                 None => Err(CadError::HoleId(id)),
             },
             Operation::RemoveFeature { id } => {
@@ -2423,5 +2494,176 @@ mod feature_tests {
         wide.inner_length = mm(120);
         e.apply(Operation::SetParams(wide)).unwrap();
         assert_eq!(e.parts().len(), 2);
+    }
+
+    fn mate(n: u64, a: u64, b: u64, kind: crate::assembly::MateKind) -> Operation {
+        Operation::AddMate {
+            id: id(n),
+            mate: crate::assembly::Mate {
+                a: id(a),
+                b: id(b),
+                kind,
+            },
+        }
+    }
+
+    fn two_tubes() -> Enclosure {
+        let mut e = Enclosure::new(params()).unwrap();
+        e.apply(placed(1, tube(), [0, 0, 0], Some(300))).unwrap();
+        e.apply(placed(2, tube(), [100, 100, 100], Some(100)))
+            .unwrap();
+        e
+    }
+
+    #[test]
+    fn a_mate_is_added_removed_and_put_back_by_its_inverse() {
+        use crate::assembly::MateKind;
+        let mut e = two_tubes();
+        let before = e.clone();
+        let undo = e.apply(mate(5, 1, 2, MateKind::Stack)).unwrap();
+        assert_eq!(undo, Operation::RemoveMate { id: id(5) });
+        assert_eq!(e.mates().len(), 1);
+        // the second tube is 20 x 20 x 100: stacked on the first one (300 mm tall) it is at z = 300
+        let placed = e.placed_parts();
+        assert_eq!(placed[&id(2)].at[2], mm(300));
+        assert_eq!(placed[&id(2)].at[0], mm(100));
+        // the position typed for it is still in the model
+        assert_eq!(e.parts()[&id(2)].at[2], mm(100));
+        let redo = e.apply(undo).unwrap();
+        assert_eq!(redo, mate(5, 1, 2, MateKind::Stack));
+        assert_eq!(e, before);
+        assert_eq!(e.placed_parts()[&id(2)].at[2], mm(100));
+        e.apply(redo).unwrap();
+        // an id that is used, and one that is not
+        let again = e.apply(mate(5, 2, 1, MateKind::Stack));
+        assert_eq!(again.unwrap_err().code(), "PHOENIX-CAD-005");
+        assert_eq!(
+            e.apply(Operation::RemoveMate { id: id(9) })
+                .unwrap_err()
+                .code(),
+            "PHOENIX-CAD-005"
+        );
+        assert_eq!(e.mates().len(), 1);
+    }
+
+    #[test]
+    fn a_refused_mate_leaves_the_model_as_it_was() {
+        use crate::assembly::{Dim, Edge, MateKind};
+        let mut e = two_tubes();
+        e.apply(placed(3, bolt(), [200, 200, 200], None)).unwrap();
+        e.apply(mate(5, 1, 2, MateKind::Stack)).unwrap();
+        let before = e.clone();
+        for op in [
+            // a part that is not there, and a part joined to itself
+            mate(6, 1, 9, MateKind::Stack),
+            mate(6, 2, 2, MateKind::Stack),
+            // the second tube placed twice along z
+            mate(
+                6,
+                3,
+                2,
+                MateKind::Align {
+                    axis: Dim::Z,
+                    edge: Edge::Min,
+                },
+            ),
+            // a cycle: the first tube on the second, which is on the first
+            mate(6, 2, 1, MateKind::Stack),
+        ] {
+            let result = e.apply(op);
+            assert_eq!(result.unwrap_err().code(), "PHOENIX-CAD-046");
+            assert_eq!(e, before);
+        }
+        // a part a mate uses cannot be removed, the mate can, and then the part can
+        let result = e.apply(Operation::RemovePart { id: id(2) });
+        let error = result.unwrap_err();
+        assert_eq!(error.code(), "PHOENIX-CAD-046");
+        assert!(error.to_string().contains("used by a mate"), "{error}");
+        assert_eq!(e, before);
+        e.apply(Operation::RemoveMate { id: id(5) }).unwrap();
+        e.apply(Operation::RemovePart { id: id(2) }).unwrap();
+    }
+
+    #[test]
+    fn a_gap_that_leaves_the_largest_distance_is_refused_and_the_count_is_limited() {
+        use crate::assembly::MateKind;
+        use crate::catalog::Axis;
+        let mut e = two_tubes();
+        // the first tube ends at z = 300 mm and the farthest a part may lie is 6000 mm
+        let far = MateKind::Gap {
+            direction: Axis::PlusZ,
+            distance: mm(5_800),
+        };
+        let result = e.apply(mate(5, 1, 2, far));
+        assert_eq!(result.unwrap_err().code(), "PHOENIX-CAD-045");
+        assert!(e.mates().is_empty());
+        let near = MateKind::Gap {
+            direction: Axis::PlusZ,
+            distance: mm(5_000),
+        };
+        e.apply(mate(5, 1, 2, near)).unwrap();
+        let mut e = two_tubes();
+        let mut design = DesignLimits::shipped();
+        design.assembly.max_mates = 1;
+        e.set_design_limits(design);
+        e.apply(mate(5, 1, 2, MateKind::Stack)).unwrap();
+        let second = crate::assembly::MateKind::Gap {
+            direction: Axis::PlusX,
+            distance: mm(1),
+        };
+        let result = e.apply(mate(6, 1, 2, second));
+        let error = result.unwrap_err();
+        assert_eq!(error.code(), "PHOENIX-CAD-046");
+        assert!(
+            error.to_string().contains("more than the 1 mates"),
+            "{error}"
+        );
+        assert_eq!(e.mates().len(), 1);
+    }
+
+    #[test]
+    fn the_interference_is_found_in_the_positions_the_mates_give() {
+        use crate::assembly::{Dim, Edge, MateKind};
+        let mut e = two_tubes();
+        // typed at (100, 100, 100) the second tube is clear of the first (x 0..20)
+        assert!(e.interference().unwrap().conflicts.is_empty());
+        // aligned by the lower face in x and y it is over the first one, which is 300 mm tall
+        for (n, axis) in [(5, Dim::X), (6, Dim::Y)] {
+            e.apply(mate(
+                n,
+                1,
+                2,
+                MateKind::Align {
+                    axis,
+                    edge: Edge::Min,
+                },
+            ))
+            .unwrap();
+        }
+        let report = e.interference().unwrap();
+        assert_eq!(report.conflicts.len(), 1);
+        assert_eq!(
+            (report.conflicts[0].a, report.conflicts[0].b),
+            (id(1), id(2))
+        );
+        // the second tube is 20 x 20 x 100 and lies wholly in the first: 40000 mm3 shared
+        assert_eq!(
+            report.conflicts[0].shared_nm3,
+            40_000_000_000_000_000_000_000
+        );
+        // stacked it only touches
+        e.apply(mate(7, 1, 2, MateKind::Stack)).unwrap();
+        assert!(e.interference().unwrap().conflicts.is_empty());
+    }
+
+    #[test]
+    fn the_mates_are_kept_when_the_model_is_made_for_fabrication() {
+        use crate::assembly::MateKind;
+        let mut e = two_tubes();
+        e.apply(mate(5, 1, 2, MateKind::Stack)).unwrap();
+        let printer = crate::config::Settings::defaults().printer;
+        let f = printer.for_fabrication(&e).unwrap();
+        assert_eq!(f.mates(), e.mates());
+        assert_eq!(f.placed_parts(), e.placed_parts());
     }
 }

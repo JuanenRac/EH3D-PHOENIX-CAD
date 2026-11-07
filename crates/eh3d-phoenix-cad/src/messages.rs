@@ -597,6 +597,32 @@ const TEXTS: &[Row] = &[
             "Peça inválida",
         ],
     ),
+    (
+        "PHOENIX-CAD-046",
+        [
+            "Assembly not valid",
+            "Ensamblaje no válido",
+            "Baugruppe ungültig",
+            "Assemblage non valide",
+            "Assieme non valido",
+            "アセンブリが無効です",
+            "装配无效",
+            "Montagem inválida",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-047",
+        [
+            "Parts interfere",
+            "Las piezas interfieren",
+            "Teile durchdringen sich",
+            "Les pièces s'interpénètrent",
+            "Le parti si interferiscono",
+            "部品が干渉しています",
+            "零件相互干涉",
+            "As peças interferem",
+        ],
+    ),
 ];
 
 /// The text of a diagnostic in a language (`en`, `es`, `de`, `fr`, `it`, `ja`, `zh` or `pt`), or

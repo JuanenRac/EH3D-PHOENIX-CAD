@@ -864,8 +864,9 @@ fn rank(kind: Kind) -> u8 {
         Kind::Post => 4,
         Kind::Hole => 5,
         Kind::Screw => 6,
-        Kind::Selected => 7,
-        Kind::Measure => 8,
+        Kind::Conflict => 7,
+        Kind::Selected => 8,
+        Kind::Measure => 9,
     }
 }
 
@@ -881,6 +882,7 @@ fn style_of(line: &Line2, board: Color32) -> (Color32, f32) {
         Kind::Board => (board, 1.2),
         Kind::Selected => (ACCENT, 2.4),
         Kind::Measure => (MEASURE, 1.8),
+        Kind::Conflict => (DANGER, 2.0),
     }
 }
 
@@ -2207,6 +2209,7 @@ mod tests {
             Kind::Post,
             Kind::Hole,
             Kind::Screw,
+            Kind::Conflict,
             Kind::Selected,
         ];
         for (k, kind) in kinds.into_iter().enumerate() {

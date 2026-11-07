@@ -12,6 +12,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::assembly::AssemblyLimits;
 use crate::catalog::CatalogLimits;
 use crate::enclosure::{Face, Hole, HoleStyle};
 use crate::expr::{parse, Constants, ExprLimits, Value};
@@ -97,6 +98,8 @@ pub struct DesignLimits {
     pub fin_max_ratio: u32,
     /// The limits of the catalog of parts and of the instances placed in a model.
     pub catalog: CatalogLimits,
+    /// The limits of the mates between placed parts and of the report of the interferences.
+    pub assembly: AssemblyLimits,
 }
 
 impl DesignLimits {
@@ -154,6 +157,7 @@ impl DesignLimits {
             fin_min_gap,
             fin_max_ratio,
             catalog: CatalogLimits::from_config(c)?,
+            assembly: AssemblyLimits::from_config(c)?,
         })
     }
 }

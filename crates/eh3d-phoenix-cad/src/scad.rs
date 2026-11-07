@@ -552,7 +552,7 @@ fn mounting_text(enclosure: &Enclosure) -> String {
     for set in enclosure.fins().values() {
         out.push_str(&fins_text(enclosure, set));
     }
-    for part in enclosure.parts().values() {
+    for part in enclosure.placed_parts().values() {
         out.push_str(&part_text(part));
     }
     if let Some(lid) = enclosure.lid() {

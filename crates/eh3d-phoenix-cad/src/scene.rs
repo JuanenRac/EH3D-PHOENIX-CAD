@@ -6,6 +6,8 @@
 //! lines this module gives. Lengths become millimetres as floating point numbers, which is fine
 //! for a picture and is never used to decide anything about the model.
 
+use std::collections::BTreeSet;
+
 use crate::datum::Datum;
 use crate::drag::Plane;
 use crate::enclosure::{Enclosure, EnclosureParams, Face, Feature, FeatureKind, Hole, Id};
@@ -438,6 +440,19 @@ pub fn scene_of(
     highlight: Highlight,
     segments: u32,
 ) -> Vec<Segment> {
+    scene_with(enclosure, board, highlight, segments, &BTreeSet::new())
+}
+
+/// The lines of the whole model like [`scene_of`], with the placed parts of `conflicts` (the ones
+/// that share volume with another part) drawn in their own colour unless they are selected. A
+/// part is drawn where its mates put it.
+pub fn scene_with(
+    enclosure: &Enclosure,
+    board: Option<BoardBox>,
+    highlight: Highlight,
+    segments: u32,
+    conflicts: &BTreeSet<Id>,
+) -> Vec<Segment> {
     let p = enclosure.params();
     let size = outer_size(enclosure);
     let mut out = Vec::new();
@@ -511,10 +526,13 @@ pub fn scene_of(
         };
         push_fins(&mut out, enclosure, set, kind);
     }
-    for (id, part) in enclosure.parts() {
-        // a placed part is drawn as its bounding box, like material
+    for (id, part) in &enclosure.placed_parts() {
+        // a placed part is drawn as its bounding box, like material; one that shares volume with
+        // another part has the colour of a conflict
         let kind = if highlight == Highlight::Object(*id) {
             Kind::Selected
+        } else if conflicts.contains(id) {
+            Kind::Conflict
         } else {
             Kind::Post
         };

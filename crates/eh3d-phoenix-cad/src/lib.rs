@@ -17,6 +17,7 @@
 //! * [`mount`]: posts that rise from the floor (made from the mounting holes of a board, with a bore for an insert or a self-tapping screw and an optional foot) and a lid that is screwed onto them, with the checks of collisions and heights;
 //! * [`pattern`]: rows, grids and circles of holes with exact positions, batches of operations that apply all or nothing, and the pattern as one step of the history (a hole or a post repeated along a line or round a centre, each position checked like a hole or a post of its own);
 //! * [`catalog`]: libraries of parts in a plain text file (profiles cut to a length, screws and angle brackets, with a material each), parts placed in the model by their position, orientation on the axes and cut, the bill of materials with the volume and the mass for the density of the material, and the cut list;
+//! * [`assembly`]: simple assemblies of the parts of the catalog: mates that place a part relative to another along one axis (a gap, an alignment or a stack, solved in whole nanometres, a chain solved from its free end, a cycle refused) and the check of which parts share volume (bounding boxes, then the exact shapes of profiles, brackets and screws, with a screw through the hole of a bracket allowed when its shank fits), with a report of the pairs in conflict;
 //! * [`fins`]: sets of cooling fins that rise from a face (how many, how thick, how tall, how far apart, where they start and how long they run), checked against the limits of the settings, the edges and the holes of the face and the other sets, and an estimate, marked as one, of the heat they give to still air from a coefficient of the settings;
 //! * [`graph`]: the graph of dependencies between objects, with a deterministic order of calculation, refused cycles, a recalculation that reuses what did not change, and a Graphviz dump;
 //! * [`vars`]: named variables for the master dimensions, the binding of the parameters of an enclosure to them, and families of variants (small, medium, large);
@@ -63,6 +64,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod assembly;
 pub mod body;
 pub mod browse;
 pub mod catalog;
@@ -290,6 +292,13 @@ pub enum CadError {
     /// not a profile, too far away, sharing volume with another profile, a material that has no
     /// density, or more parts than the settings allow.
     Part(String),
+    /// A mate that cannot be solved: it names a part that is not in the model, joins a part to
+    /// itself, places a part twice along one axis, makes a cycle with other mates, leaves a part
+    /// outside the range of lengths or puts the middles of two parts half a nanometre apart, or
+    /// there are more mates than the settings allow.
+    Mate(String),
+    /// Parts that share volume: the pairs in conflict, as the check of the assembly reports them.
+    Interference(String),
 }
 
 impl CadError {
@@ -341,6 +350,8 @@ impl CadError {
             CadError::Fins(_) => "PHOENIX-CAD-043",
             CadError::Library(_) => "PHOENIX-CAD-044",
             CadError::Part(_) => "PHOENIX-CAD-045",
+            CadError::Mate(_) => "PHOENIX-CAD-046",
+            CadError::Interference(_) => "PHOENIX-CAD-047",
         }
     }
 }
@@ -399,7 +410,9 @@ impl fmt::Display for CadError {
             | CadError::Pattern(why)
             | CadError::Fins(why)
             | CadError::Library(why)
-            | CadError::Part(why) => write!(f, "{title}: {why}"),
+            | CadError::Part(why)
+            | CadError::Mate(why)
+            | CadError::Interference(why) => write!(f, "{title}: {why}"),
         }
     }
 }
@@ -456,6 +469,8 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-043", "Cooling fins not valid"),
     ("PHOENIX-CAD-044", "Library of parts not valid"),
     ("PHOENIX-CAD-045", "Part not valid"),
+    ("PHOENIX-CAD-046", "Assembly not valid"),
+    ("PHOENIX-CAD-047", "Parts interfere"),
 ];
 
 #[cfg(test)]
@@ -654,6 +669,8 @@ mod tests {
             CadError::Fins("thickness".into()),
             CadError::Library("line 2".into()),
             CadError::Part("cut".into()),
+            CadError::Mate("cycle".into()),
+            CadError::Interference("pairs".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));

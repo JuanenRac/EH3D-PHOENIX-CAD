@@ -283,7 +283,7 @@ pub struct Part {
 }
 
 /// A length written as a canonical decimal number of nanometres, from zero up.
-fn length_word(word: &str, what: &str) -> Result<Length, String> {
+pub(crate) fn length_word(word: &str, what: &str) -> Result<Length, String> {
     let nm = word
         .parse::<i64>()
         .ok()

@@ -27,7 +27,9 @@
 //! (a set of cooling fins on a face); a recipe with one of them is written as version 3, one with only the steps of version 2 as version 2 and one with neither
 //! as version 1, so every project that did not use the newer steps keeps its bytes. Version 4 adds the steps `add-part` and
 //! `remove-part` (a part of a library of parts placed in the model, with a copy of the part, its position, its orientation on
-//! the axes and the length it is cut to); only a recipe that places a part is written as version 4. The sketches
+//! the axes and the length it is cut to); only a recipe that places a part is written as version 4. Version 5 adds the steps `add-mate` and `remove-mate`
+//! (a part placed relative to another along one axis: a gap, an alignment or a stack); only a recipe that has a mate is written
+//! as version 5, so a project without one keeps the version and the bytes it had. The sketches
 //! are not in this domain: they have their own domain, `sketch` (see [`crate::sketch::domain`]).
 
 use std::collections::BTreeSet;
@@ -35,6 +37,7 @@ use std::str::FromStr;
 
 use eh3d_container::ObjectId;
 
+use crate::assembly::Mate;
 use crate::body::{Body, Built, Step};
 use crate::catalog::PartInstance;
 use crate::config::{DesignLimits, MechanicalLimits};
@@ -55,7 +58,7 @@ use crate::{CadError, Length};
 pub const MECHANICAL_DOMAIN: &str = "mechanical";
 
 /// The newest version of the text of the domain that this program writes and reads.
-pub const DOMAIN_VERSION: u32 = 4;
+pub const DOMAIN_VERSION: u32 = 5;
 
 /// The version of a recipe that has no extrusion, no pocket and no pattern.
 pub const FIRST_VERSION: u32 = 1;
@@ -514,6 +517,15 @@ fn operation_words(op: &Operation, limits: &MechanicalLimits) -> Result<Vec<Stri
             words.push("remove-part".to_string());
             words.push(id.to_string());
         }
+        Operation::AddMate { id, mate } => {
+            words.push("add-mate".to_string());
+            words.push(id.to_string());
+            words.extend(mate.words());
+        }
+        Operation::RemoveMate { id } => {
+            words.push("remove-mate".to_string());
+            words.push(id.to_string());
+        }
     }
     Ok(words)
 }
@@ -575,10 +587,11 @@ fn layout_of(word: &str) -> Result<Layout, CadError> {
     }
 }
 
-/// The version of the domain a step needs: 4 for a placed part, 3 for a pattern or cooling fins, 2
-/// for an extrusion or a pocket and 1 for the rest.
+/// The version of the domain a step needs: 5 for a mate, 4 for a placed part, 3 for a pattern or
+/// cooling fins, 2 for an extrusion or a pocket and 1 for the rest.
 fn step_version(op: &Operation) -> u32 {
     match op {
+        Operation::AddMate { .. } | Operation::RemoveMate { .. } => 5,
         Operation::AddPart { .. } | Operation::RemovePart { .. } => 4,
         Operation::AddPattern { .. }
         | Operation::RemovePattern { .. }
@@ -716,6 +729,11 @@ fn operation_of(words: &[&str], limits: &MechanicalLimits) -> Result<Operation, 
             part: PartInstance::from_words(&unescape(name, limits)?, rest).map_err(|e| bad(&e))?,
         }),
         ["remove-part", id] => Ok(Operation::RemovePart { id: id_of(id)? }),
+        ["add-mate", id, rest @ ..] => Ok(Operation::AddMate {
+            id: id_of(id)?,
+            mate: Mate::from_words(rest).map_err(|e| bad(&e))?,
+        }),
+        ["remove-mate", id] => Ok(Operation::RemoveMate { id: id_of(id)? }),
         _ => Err(bad("a step is not understood")),
     }
 }
@@ -2239,11 +2257,11 @@ hole 018bcfe5-6800-7004-8000-000000000004 H4 55000000 35000000 3200000\n";
     #[test]
     fn a_domain_of_a_newer_version_is_neither_read_nor_overwritten() {
         let s = settings();
-        let future = b"mechanical 5\nwhatever \xff comes next\n".to_vec();
+        let future = b"mechanical 6\nwhatever \xff comes next\n".to_vec();
         let mut d = Document::new();
         d.set(MECHANICAL_DOMAIN, true, future.clone()).unwrap();
         d.set("notes", false, b"x".to_vec()).unwrap();
-        assert_eq!(d.mechanical_version().unwrap(), Some(5));
+        assert_eq!(d.mechanical_version().unwrap(), Some(6));
         let err = d.mechanical(&s.expr, &s.mechanical).unwrap_err();
         assert_eq!(err.code(), "PHOENIX-CAD-018");
         assert!(err.to_string().contains("newer version"), "{err}");
@@ -2515,9 +2533,9 @@ mod feature_tests {
     fn a_future_version_is_neither_read_nor_overwritten() {
         let s = Settings::defaults();
         let mut d = Document::new();
-        let future = b"mechanical 5\nwhatever\n".to_vec();
+        let future = b"mechanical 6\nwhatever\n".to_vec();
         d.set(MECHANICAL_DOMAIN, true, future.clone()).unwrap();
-        assert_eq!(d.mechanical_version().unwrap(), Some(5));
+        assert_eq!(d.mechanical_version().unwrap(), Some(6));
         assert!(d.mechanical(&s.expr, &s.mechanical).is_err());
         assert!(d.set_mechanical(&with_features(), &s.mechanical).is_err());
         assert_eq!(d.get(MECHANICAL_DOMAIN).unwrap().data, future);
@@ -3044,8 +3062,8 @@ mod feature_tests {
         .unwrap();
         let e = parse(&plain.replacen("mechanical 1", "mechanical 4", 1)).unwrap_err();
         assert!(e.to_string().contains("has no step that needs it"), "{e}");
-        // a domain of version 5 is a newer one
-        let e = parse(&plain.replacen("mechanical 1", "mechanical 5", 1)).unwrap_err();
+        // a domain of version 6 is a newer one
+        let e = parse(&plain.replacen("mechanical 1", "mechanical 6", 1)).unwrap_err();
         assert!(e.to_string().contains("newer version"), "{e}");
     }
 
@@ -3098,6 +3116,276 @@ mod feature_tests {
         let mut d = Document::new();
         d.set_mechanical(&m, &s.mechanical).unwrap();
         assert_eq!(d.mechanical_version().unwrap(), Some(4));
+        let read = Document::from_bytes(&d.to_bytes(), 1 << 24).unwrap();
+        assert_eq!(read.mechanical(&s.expr, &s.mechanical).unwrap(), Some(m));
+    }
+
+    fn mated_tube(n: u64, name: &str, at: [i64; 3], cut: i64) -> Step {
+        use crate::catalog::{Orientation, PartInstance};
+        step(
+            name,
+            Operation::AddPart {
+                id: id(n),
+                part: PartInstance {
+                    name: name.into(),
+                    library: "chassis-basic".into(),
+                    part: chassis_tube(),
+                    at: at.map(mm),
+                    orientation: Orientation::default(),
+                    cut: Some(mm(cut)),
+                },
+            },
+        )
+    }
+
+    fn mate_step(name: &str, n: u64, a: u64, b: u64, kind: crate::assembly::MateKind) -> Step {
+        step(
+            name,
+            Operation::AddMate {
+                id: id(n),
+                mate: crate::assembly::Mate {
+                    a: id(a),
+                    b: id(b),
+                    kind,
+                },
+            },
+        )
+    }
+
+    fn with_mates() -> Mechanical {
+        use crate::assembly::{Dim, Edge, MateKind};
+        use crate::catalog::Axis;
+        let mut m = Mechanical::new(ParamModel::new(base()).unwrap(), Variables::new());
+        m.steps.push(mated_tube(1, "first", [0, 0, 0], 300));
+        m.steps.push(mated_tube(2, "second", [100, 100, 100], 100));
+        m.steps.push(mate_step("on top", 3, 1, 2, MateKind::Stack));
+        m.steps.push(mate_step(
+            "aligned",
+            4,
+            1,
+            2,
+            MateKind::Align {
+                axis: Dim::X,
+                edge: Edge::Max,
+            },
+        ));
+        m.steps.push(mate_step(
+            "apart",
+            5,
+            1,
+            2,
+            MateKind::Gap {
+                direction: Axis::MinusY,
+                distance: mm(5),
+            },
+        ));
+        m.steps
+            .push(step("free", Operation::RemoveMate { id: id(5) }));
+        m.tip = 5;
+        m
+    }
+
+    #[test]
+    fn mates_are_steps_of_version_five_with_a_golden_text() {
+        let s = Settings::defaults();
+        let m = with_mates();
+        assert_eq!(m.version(), 5);
+        let text = String::from_utf8(m.to_bytes(&s.mechanical).unwrap()).unwrap();
+        assert!(text.starts_with("mechanical 5\n[parameters]\n"));
+        let steps = text.split("[steps]\n").nth(1).unwrap();
+        let tube = "chassis-basic tube-20x20 profile aluminium 20000000 20000000 1500000 300000000 2000000000";
+        let expect = format!(
+            "tip 5\n\
+             step 0 first add-part {i1} first {tube} 0 0 0 +z/0 300000000\n\
+             step 0 second add-part {i2} second {tube} 100000000 100000000 100000000 +z/0 100000000\n\
+             step 0 on%20top add-mate {i3} {i1} {i2} stack\n\
+             step 0 aligned add-mate {i4} {i1} {i2} align x max\n\
+             step 0 apart add-mate {i5} {i1} {i2} gap -y 5000000\n\
+             step 0 free remove-mate {i5}\n",
+            i1 = id(1),
+            i2 = id(2),
+            i3 = id(3),
+            i4 = id(4),
+            i5 = id(5)
+        );
+        assert_eq!(steps, expect);
+        let read = Mechanical::from_bytes(text.as_bytes(), &s.expr, &s.mechanical).unwrap();
+        assert_eq!(read, m);
+        assert_eq!(read.to_bytes(&s.mechanical).unwrap(), text.as_bytes());
+    }
+
+    #[test]
+    fn the_mates_up_to_the_tip_decide_where_the_parts_are() {
+        let s = Settings::defaults();
+        let m = with_mates();
+        // the first tube is 20 x 20 x 300 at the origin and the second 20 x 20 x 100 typed at
+        // (100, 100, 100): stacked it is at z = 300, aligned by the upper face in x it is at
+        // x = 0 + 20 - 20 = 0, and 5 mm on the side of smaller y it is at y = 0 - 5 - 20 = -25
+        let built = m.build(&s.constants, &s.expr).unwrap();
+        assert!(built.states[..5].iter().all(|s| *s == StepState::Valid));
+        assert_eq!(built.states[5], StepState::AfterTip);
+        let at = |built: &crate::body::Built| {
+            let placed = built.enclosure.placed_parts();
+            placed[&id(2)].at.map(|l| l.get())
+        };
+        assert_eq!(at(&built), [0, -25_000_000, 300_000_000]);
+        // the typed position is kept in the model
+        assert_eq!(built.enclosure.parts()[&id(2)].at[1], mm(100));
+        // with the removal of the third mate the part goes back to y = 100
+        let mut all = m.clone();
+        all.tip = 6;
+        let built = all.build(&s.constants, &s.expr).unwrap();
+        assert_eq!(at(&built), [0, 100_000_000, 300_000_000]);
+        // with the tip before the mates nothing is placed by them
+        let mut early = m;
+        early.tip = 2;
+        let built = early.build(&s.constants, &s.expr).unwrap();
+        assert_eq!(at(&built), [100_000_000, 100_000_000, 100_000_000]);
+    }
+
+    #[test]
+    fn a_project_without_mates_keeps_the_version_and_the_bytes_it_had() {
+        let s = Settings::defaults();
+        assert_eq!(with_parts().version(), 4);
+        assert_eq!(with_fins().version(), 3);
+        assert_eq!(with_features().version(), 2);
+        let parts = String::from_utf8(with_parts().to_bytes(&s.mechanical).unwrap()).unwrap();
+        assert!(parts.starts_with("mechanical 4\n"));
+        // a mate makes the whole recipe version 5 and nothing else in the text changes
+        let mut both = with_parts();
+        both.steps
+            .push(mate_step("m", 7, 1, 2, crate::assembly::MateKind::Stack));
+        assert_eq!(both.version(), 5);
+        let mixed = String::from_utf8(both.to_bytes(&s.mechanical).unwrap()).unwrap();
+        assert!(mixed.starts_with("mechanical 5\n"));
+        assert_eq!(
+            parts
+                .replacen("mechanical 4", "mechanical 5", 1)
+                .split("tip ")
+                .next(),
+            mixed.split("tip ").next()
+        );
+        let read = Mechanical::from_bytes(mixed.as_bytes(), &s.expr, &s.mechanical).unwrap();
+        assert_eq!(read, both);
+    }
+
+    #[test]
+    fn mates_that_are_not_written_in_the_one_form_are_refused() {
+        let s = Settings::defaults();
+        let good = String::from_utf8(with_mates().to_bytes(&s.mechanical).unwrap()).unwrap();
+        let parse = |t: &str| Mechanical::from_bytes(t.as_bytes(), &s.expr, &s.mechanical);
+        let (i1, i2) = (id(1).to_string(), id(2).to_string());
+        for (from, to) in [
+            ("stack", "stack now"),
+            ("stack", "glue"),
+            ("align x max", "align w max"),
+            ("align x max", "align x top"),
+            ("align x max", "align x"),
+            ("gap -y 5000000", "gap -y -5000000"),
+            ("gap -y 5000000", "gap -y 05000000"),
+            ("gap -y 5000000", "gap y 5000000"),
+            ("gap -y 5000000", "gap -y 5e6"),
+            ("gap -y 5000000", "gap -y"),
+        ] {
+            let text = good.replace(&format!("{i1} {i2} {from}\n"), &format!("{i1} {i2} {to}\n"));
+            assert_ne!(text, good, "{from}");
+            let e = parse(&text).unwrap_err();
+            assert_eq!(e.code(), "PHOENIX-CAD-018", "{to}: {e}");
+        }
+        // the removal takes exactly one id
+        for bad in ["remove-mate", "remove-mate X"] {
+            let text = good.replace(&format!("remove-mate {}", id(5)), bad);
+            assert!(parse(&text).is_err(), "{bad}");
+        }
+        // the version has to agree with the steps, in both directions
+        let e = parse(&good.replacen("mechanical 5", "mechanical 4", 1)).unwrap_err();
+        assert!(
+            e.to_string()
+                .contains("version 5 is in a domain of version 4"),
+            "{e}"
+        );
+        let e = parse(&good.replacen("mechanical 5", "mechanical 6", 1)).unwrap_err();
+        assert!(e.to_string().contains("newer version"), "{e}");
+        let parts = String::from_utf8(with_parts().to_bytes(&s.mechanical).unwrap()).unwrap();
+        let e = parse(&parts.replacen("mechanical 4", "mechanical 5", 1)).unwrap_err();
+        assert!(e.to_string().contains("has no step that needs it"), "{e}");
+    }
+
+    #[test]
+    fn a_mate_that_cannot_be_solved_fails_its_step_with_the_code_of_the_assembly() {
+        use crate::assembly::{Dim, Edge, MateKind};
+        let s = Settings::defaults();
+        // a mate with a part that is not in the model
+        let mut m = with_mates();
+        m.steps[2] = mate_step("lost", 3, 1, 9, MateKind::Stack);
+        let built = m.build(&s.constants, &s.expr).unwrap();
+        match &built.states[2] {
+            StepState::Failed(e) => {
+                assert_eq!(e.code(), "PHOENIX-CAD-046");
+                assert!(e.to_string().contains("not in the model"), "{e}");
+            }
+            other => panic!("{other:?}"),
+        }
+        // two mates that place the second tube along z
+        let mut m = with_mates();
+        m.steps.insert(
+            3,
+            mate_step(
+                "again",
+                8,
+                1,
+                2,
+                MateKind::Align {
+                    axis: Dim::Z,
+                    edge: Edge::Min,
+                },
+            ),
+        );
+        m.tip = 6;
+        let built = m.build(&s.constants, &s.expr).unwrap();
+        match &built.states[3] {
+            StepState::Failed(e) => {
+                assert_eq!(e.code(), "PHOENIX-CAD-046");
+                assert!(e.to_string().contains("two mates along z"), "{e}");
+            }
+            other => panic!("{other:?}"),
+        }
+        // the settings limit how many mates there can be
+        let tight = Settings::with_user_config("[assembly]\nmax_mates = 1\n").unwrap();
+        let m = with_mates();
+        let built = m
+            .build_with_limits(&tight.constants, &tight.expr, None, Some(tight.design))
+            .unwrap();
+        assert_eq!(built.states[2], StepState::Valid);
+        match &built.states[3] {
+            StepState::Failed(e) => {
+                assert_eq!(e.code(), "PHOENIX-CAD-046");
+                assert!(e.to_string().contains("more than the 1 mates"), "{e}");
+            }
+            other => panic!("{other:?}"),
+        }
+        // a part that a mate uses cannot be taken away
+        let mut m = with_mates();
+        m.steps
+            .push(step("gone", Operation::RemovePart { id: id(2) }));
+        m.tip = 7;
+        let built = m.build(&s.constants, &s.expr).unwrap();
+        match &built.states[6] {
+            StepState::Failed(e) => {
+                assert_eq!(e.code(), "PHOENIX-CAD-046");
+                assert!(e.to_string().contains("used by a mate"), "{e}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_project_with_mates_goes_through_the_file() {
+        let s = Settings::defaults();
+        let m = with_mates();
+        let mut d = Document::new();
+        d.set_mechanical(&m, &s.mechanical).unwrap();
+        assert_eq!(d.mechanical_version().unwrap(), Some(5));
         let read = Document::from_bytes(&d.to_bytes(), 1 << 24).unwrap();
         assert_eq!(read.mechanical(&s.expr, &s.mechanical).unwrap(), Some(m));
     }
