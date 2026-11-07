@@ -18,7 +18,7 @@ The design tool stores everything in its own project format, with one folder per
 
 State: **proposed**.
 
-No geometry kernel or constraint solver has been chosen. Candidates are compared on the same fixtures, checking robustness with degenerate input, licence compatibility with GPL-3.0-or-later and the ability to export STEP.
+No geometry kernel has been chosen. The constraint solver of the 2D sketch is written in this repository (damped least squares over the residuals of the constraints, with no dependency) and the box, its holes, posts, lid and the extrusions and pockets of sketches are computed in integers and rounded areas without a kernel. Candidates for a kernel are compared on the same fixtures, checking robustness with degenerate input, licence compatibility with GPL-3.0-or-later and the ability to export STEP.
 
 ## Stable diagnostic codes
 

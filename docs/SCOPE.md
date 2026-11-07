@@ -17,7 +17,7 @@ Mechanical design for the PHOENIX family: parametric enclosures, chassis and hea
 
 ## What it will not do
 
-* Full parametric CAD (solid operations from sketches, assemblies) is a later, separate effort; the sketch with its constraints, its solver and its window exists (`docs/SKETCH.md`) and so does the dependency graph.
+* Full parametric CAD (solid operations other than raising a profile from a face or cutting it into one, assemblies) is a later, separate effort; the sketch with its constraints, its solver and its window exists, and so do the extrusions and pockets of its closed outlines (`docs/SKETCH.md`) and the dependency graph.
 * No toolpaths and no G-code: the CAM programs of the suite read the project and do that.
 * No machine control and no motion of any kind.
 * The 3D view of the board and the fit check against an existing enclosure may live in the board tool; where they live is still open.
