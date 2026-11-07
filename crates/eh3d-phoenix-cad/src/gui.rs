@@ -287,6 +287,7 @@ impl App {
                         (NewStep::Pocket, Msg::AddPocket),
                         (NewStep::HolePattern, Msg::AddHolePattern),
                         (NewStep::PostPattern, Msg::AddPostPattern),
+                        (NewStep::Fins, Msg::AddFins),
                     ] {
                         if ui
                             .add_enabled(editable, egui::Button::new(msg.tr(lang)))
