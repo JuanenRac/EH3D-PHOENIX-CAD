@@ -16,7 +16,7 @@ use crate::sketch_ui::{
 };
 use crate::uiconfig::UiSettings;
 use crate::window::{
-    error_text, Input, Mark, NewStep, Selection, ViewKind, Window, PROJECT_EXTENSIONS,
+    error_text, Input, Mark, MeasureTool, NewStep, Selection, ViewKind, Window, PROJECT_EXTENSIONS,
 };
 use eframe::egui::{
     self, Color32, FontData, FontDefinitions, FontFamily, Pos2, Rect, Stroke, Vec2,
@@ -39,6 +39,7 @@ const CAVITY: Color32 = Color32::from_rgb(0x6e, 0x64, 0x58);
 const HOLE: Color32 = Color32::from_rgb(0x4c, 0xc9, 0xf0);
 const SCREW: Color32 = Color32::from_rgb(0xb4, 0x8c, 0xf0);
 const POST: Color32 = Color32::from_rgb(0xf0, 0x8a, 0x4c);
+const MEASURE: Color32 = Color32::from_rgb(0xff, 0xe0, 0x66);
 
 /// The extensions of the sketch files that the window opens and writes.
 const SKETCH_EXTENSIONS: [&str; 1] = [sketch_file::EXTENSION];
@@ -76,6 +77,9 @@ struct App {
     /// The name and the value being typed for a new variable.
     new_name: String,
     new_value: String,
+    /// True from the moment a drag of a hole or a post is cancelled with Esc until the button
+    /// is let go, so that the rest of that drag does not turn or move the view.
+    ignore_drag: bool,
 }
 
 impl App {
@@ -91,6 +95,7 @@ impl App {
             var_edits: HashMap::new(),
             new_name: String::new(),
             new_value: String::new(),
+            ignore_drag: false,
         }
     }
 
@@ -522,6 +527,66 @@ impl App {
         });
     }
 
+    /// The tools of the views: the two measurements, the grid a dragged hole or post snaps to,
+    /// and the readings kept.
+    fn measure_panel(&mut self, ui: &mut egui::Ui) {
+        let lang = self.win.lang;
+        egui::Panel::bottom("measure").show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new(Msg::MeasureTitle.tr(lang))
+                        .strong()
+                        .color(ACCENT),
+                );
+                for (tool, msg) in [
+                    (MeasureTool::Distance, Msg::MeasureDistanceTool),
+                    (MeasureTool::Angle, Msg::MeasureAngleTool),
+                ] {
+                    let on = self.win.measure_tool == tool;
+                    if ui.selectable_label(on, msg.tr(lang)).clicked() {
+                        self.win
+                            .set_measure_tool(if on { MeasureTool::Off } else { tool });
+                    }
+                }
+                ui.checkbox(&mut self.win.snap_to_grid, Msg::GridSnap.tr(lang));
+                if ui.button(Msg::MeasureClear.tr(lang)).clicked() {
+                    self.win.clear_measurements();
+                }
+                let hint = if self.win.measure_tool == MeasureTool::Off {
+                    Msg::DragHint
+                } else {
+                    Msg::MeasureHint
+                };
+                ui.label(egui::RichText::new(hint.tr(lang)).color(DIM));
+            });
+            let rows: Vec<String> = self
+                .win
+                .measurements()
+                .iter()
+                .map(|m| self.win.reading_text(m))
+                .collect();
+            let mut removed = None;
+            egui::ScrollArea::vertical()
+                .max_height(84.0)
+                .show(ui, |ui| {
+                    if rows.is_empty() {
+                        ui.label(egui::RichText::new(Msg::NoMeasurements.tr(lang)).color(DIM));
+                    }
+                    for (i, row) in rows.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            if ui.small_button(Msg::DeleteSelection.tr(lang)).clicked() {
+                                removed = Some(i);
+                            }
+                            ui.label(egui::RichText::new(row.as_str()).color(MEASURE));
+                        });
+                    }
+                });
+            if let Some(i) = removed {
+                self.win.remove_measurement(i);
+            }
+        });
+    }
+
     fn views(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::no_frame().show(ui, |ui| {
             let total = ui.available_size();
@@ -541,7 +606,26 @@ impl App {
         let (response, painter) = ui.allocate_painter(size, egui::Sense::click_and_drag());
         let rect = response.rect;
         painter.rect_filled(rect, 0.0, BACKGROUND);
-        if response.dragged() {
+        let pane = (f64::from(rect.width()), f64::from(rect.height()));
+        let local = |p: Pos2| (f64::from(p.x - rect.min.x), f64::from(p.y - rect.min.y));
+        // a press on a hole or a post drags it; anywhere else the drag turns or moves the view
+        if response.drag_started_by(egui::PointerButton::Primary) {
+            if let Some(p) = response.interact_pointer_pos() {
+                self.win.drag_begin(view, pane, local(p));
+            }
+        }
+        if self.win.dragging() {
+            if response.dragged_by(egui::PointerButton::Primary) {
+                if let Some(p) = response.interact_pointer_pos() {
+                    self.win.drag_move(pane, local(p));
+                }
+            }
+            if response.drag_stopped() {
+                self.win.drag_end();
+            }
+        } else if response.drag_stopped() {
+            self.ignore_drag = false;
+        } else if response.dragged() && !self.ignore_drag {
             let d = response.drag_delta();
             match view {
                 ViewKind::Iso => self.win.rotate_3d(f64::from(d.x), f64::from(d.y)),
@@ -549,6 +633,11 @@ impl App {
                     .win
                     .control_mut(ViewKind::Plan)
                     .pan_by(f64::from(d.x), f64::from(d.y)),
+            }
+        }
+        if response.clicked() {
+            if let Some(p) = response.interact_pointer_pos() {
+                self.win.measure_click(view, pane, local(p));
             }
         }
         if response.double_clicked() {
@@ -659,6 +748,7 @@ fn rank(kind: Kind) -> u8 {
         Kind::Hole => 5,
         Kind::Screw => 6,
         Kind::Selected => 7,
+        Kind::Measure => 8,
     }
 }
 
@@ -673,6 +763,7 @@ fn style_of(line: &Line2, board: Color32) -> (Color32, f32) {
         Kind::Post => (POST, 1.3),
         Kind::Board => (board, 1.2),
         Kind::Selected => (ACCENT, 2.4),
+        Kind::Measure => (MEASURE, 1.8),
     }
 }
 
@@ -1579,6 +1670,14 @@ impl eframe::App for App {
             self.sketch.set_variables(&self.win.mech.vars);
             self.sketch_keys(&ctx);
         } else if !ctx.egui_wants_keyboard_input() {
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                if self.win.dragging() {
+                    self.win.drag_cancel();
+                    self.ignore_drag = true;
+                } else if self.win.measure_tool != MeasureTool::Off {
+                    self.win.set_measure_tool(MeasureTool::Off);
+                }
+            }
             let (open, save, undo, redo) = ctx.input(|i| {
                 let command = i.modifiers.command;
                 (
@@ -1607,6 +1706,7 @@ impl eframe::App for App {
         match self.workspace {
             StartView::Model => {
                 self.status_bar(ui);
+                self.measure_panel(ui);
                 self.model_panel(ui);
                 self.properties_panel(ui);
                 self.views(ui);
