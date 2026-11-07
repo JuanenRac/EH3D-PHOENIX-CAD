@@ -155,6 +155,19 @@
           }
         },
         {
+          "name": "ASSEMBLY.md",
+          "desc": {
+            "en": "simple assemblies: mates and the check of interference",
+            "es": "ensamblajes simples: restricciones e interferencias",
+            "de": "einfache Baugruppen: Bedingungen und Durchdringungsprüfung",
+            "fr": "assemblages simples : contraintes et interférences",
+            "it": "assiemi semplici: vincoli e interferenze",
+            "ja": "簡易アセンブリ：拘束と干渉の検査",
+            "zh": "简易装配：约束与干涉检查",
+            "pt": "montagens simples: restrições e interferências"
+          }
+        },
+        {
           "desc": {
             "en": "the accepted decision records",
             "es": "los registros de decisiones aceptadas",
@@ -211,14 +224,14 @@
         {
           "name": "crates/",
           "desc": {
-            "en": "model: enclosure, patterns, fins, parts, sketches, script, fit check, window",
-            "es": "modelo mecánico: caja, patrones, aletas, piezas, croquis, script, comprobación de encaje, ventana",
-            "de": "mechanisches Modell: Gehäuse, Muster, Kühlrippen, Teile, Skizzen, Skript, Passprüfung, Fenster",
-            "fr": "modèle mécanique : boîtier, motifs, ailettes, pièces, esquisses, script, contrôle d'ajustement, fenêtre",
-            "it": "modello meccanico: contenitore, schemi, alette, parti, schizzi, script, controllo di alloggiamento, finestra",
-            "ja": "機械モデル：筐体、パターン、冷却フィン、部品、スケッチ、スクリプト、収まりの検査、ウィンドウ",
-            "zh": "机械模型：外壳、阵列、散热片、零件、草图、脚本、装配检查、窗口",
-            "pt": "modelo mecânico: caixa, padrões, alhetas, peças, esboços, script, verificação de encaixe, janela"
+            "en": "model: enclosure, patterns, fins, parts, assemblies, sketches, script, window",
+            "es": "modelo mecánico: caja, patrones, aletas, piezas, ensamblajes, croquis, script, ventana",
+            "de": "mechanisches Modell: Gehäuse, Muster, Kühlrippen, Teile, Baugruppen, Skizzen, Skript, Fenster",
+            "fr": "modèle mécanique : boîtier, motifs, ailettes, pièces, assemblages, esquisses, script, fenêtre",
+            "it": "modello meccanico: contenitore, schemi, alette, parti, assiemi, schizzi, script, finestra",
+            "ja": "機械モデル：筐体、パターン、冷却フィン、部品、アセンブリ、スケッチ、スクリプト、ウィンドウ",
+            "zh": "机械模型：外壳、阵列、散热片、零件、装配、草图、脚本、窗口",
+            "pt": "modelo mecânico: caixa, padrões, alhetas, peças, montagens, esboços, script, janela"
           }
         },
         {

@@ -39,15 +39,16 @@
       "level": "tested",
       "title": "The code",
       "lines": [
-        "enclosure, holes, patterns, fins,",
-        "parts catalog, change operations,",
-        "sketches, extrusions, script, fit check"
+        "enclosure, holes, patterns, fins, parts,",
+        "assemblies, change operations, sketches,",
+        "extrusions, script, fit check"
       ],
       "code": [
         "crates/eh3d-phoenix-cad/src/enclosure.rs",
         "crates/eh3d-phoenix-cad/src/pattern.rs",
         "crates/eh3d-phoenix-cad/src/fins.rs",
         "crates/eh3d-phoenix-cad/src/catalog.rs",
+        "crates/eh3d-phoenix-cad/src/assembly.rs",
         "crates/eh3d-phoenix-cad/src/profile.rs",
         "crates/eh3d-phoenix-cad/src/sketch.rs",
         "crates/eh3d-phoenix-cad/src/scad.rs",
