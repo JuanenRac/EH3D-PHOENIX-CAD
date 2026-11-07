@@ -427,8 +427,14 @@ pub fn to_step(enclosure: &Enclosure) -> String {
 
 /// The enclosure as STEP text, or the error `PHOENIX-CAD-022` when the model has a shape that the
 /// file does not draw: a rounded or chamfered edge, a hole that is not a straight round one (the
-/// holes of the lid fixing included), the reinforced foot of a post or the centring lip of a lid.
+/// holes of the lid fixing included), the reinforced foot of a post, the centring lip of a lid or an
+/// extrusion or a pocket of a sketch.
 pub fn export_step(enclosure: &Enclosure) -> Result<String, CadError> {
+    if !enclosure.features().is_empty() {
+        return Err(CadError::NotExported(
+            "the extrusions and pockets of sketches".into(),
+        ));
+    }
     if !enclosure.edging().is_sharp() {
         return Err(CadError::NotExported("rounded or chamfered edges".into()));
     }

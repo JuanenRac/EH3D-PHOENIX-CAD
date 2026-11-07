@@ -33,8 +33,14 @@ impl PrinterProfile {
 
     /// The enclosure for fabrication: the same parameters and the same holes, under the same ids,
     /// with the compensated diameters. A compensation that makes a hole leave its face or come
-    /// too close to another is refused with the error of that hole; the design is not changed.
+    /// too close to another is refused with the error of that hole; the design is not changed. A
+    /// design with an extrusion or a pocket of a sketch is refused with `PHOENIX-CAD-022`.
     pub fn for_fabrication(&self, design: &Enclosure) -> Result<Enclosure, CadError> {
+        if !design.features().is_empty() {
+            return Err(CadError::NotExported(
+                "the extrusions and pockets of sketches".into(),
+            ));
+        }
         let mut out = Enclosure::new(*design.params())?;
         out.apply(Operation::SetEdging(*design.edging()))?;
         for (id, hole) in design.holes() {

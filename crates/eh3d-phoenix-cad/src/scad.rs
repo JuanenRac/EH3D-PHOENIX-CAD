@@ -405,6 +405,9 @@ pub fn to_scad(enclosure: &Enclosure) -> String {
     out.push_str(
         "// Enclosure: the same model always gives this same text. Lengths are in millimetres.\n",
     );
+    if !enclosure.features().is_empty() {
+        out.push_str("// The extrusions and pockets of sketches are not drawn in this script.\n");
+    }
     for (name, v) in [
         ("inner_length", p.inner_length),
         ("inner_width", p.inner_width),

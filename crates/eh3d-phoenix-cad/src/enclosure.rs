@@ -1970,4 +1970,17 @@ mod feature_tests {
             first - second
         );
     }
+
+    #[test]
+    fn the_exports_say_that_they_do_not_draw_the_extrusions_and_pockets() {
+        let mut e = with_plate();
+        assert!(crate::step::export_step(&e).is_ok());
+        let printer = crate::config::Settings::defaults().printer;
+        assert!(printer.for_fabrication(&e).is_ok());
+        assert!(!crate::scad::to_scad(&e).contains("sketches"));
+        e.apply(extrude(1, 10)).unwrap();
+        assert_eq!(code(crate::step::export_step(&e)), "PHOENIX-CAD-022");
+        assert_eq!(code(printer.for_fabrication(&e)), "PHOENIX-CAD-022");
+        assert!(crate::scad::to_scad(&e).contains("not drawn in this script"));
+    }
 }
