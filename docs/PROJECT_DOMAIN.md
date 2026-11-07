@@ -7,7 +7,7 @@ This page is the contract between the mechanical tool (this repository) and the 
 The domain `mechanical` keeps the **recipe** of the enclosure, never the enclosure:
 
 * the parameters, with their variables and expressions;
-* the ordered steps (holes, edge treatments, posts, the fixing of the lid), each with its name and its suppressed flag;
+* the ordered steps (holes, edge treatments, posts, the fixing of the lid, and the extrusions and pockets of a sketch), each with its name and its suppressed flag;
 * the tip (how many steps are active);
 * the **interface of the board**: its outline, its mounting holes, its thickness and the height of its tallest part, which the board tool writes and the mechanical tool reads.
 
@@ -19,15 +19,17 @@ The file is the envelope of `project.rs` (a header and named domains, each criti
 
 The older domain `mechanical-parameters` (only the parameters) is still read. A project that has only that one is read as a recipe without steps and without a board; the first time the new domain is written the older one is taken away. When both are in a file the new one counts.
 
-A domain this program does not know (another name, or this name in a newer version) is read, kept and written back **byte for byte**; the program never edits or rewrites it.
+A domain this program does not know (another name, or this name in a newer version) is read, kept and written back **byte for byte**; the program never edits or rewrites it. The sketches of the project are in one of those domains, `sketch`, which this program does know: see *The domain `sketch`* below.
 
 ## The version of the domain
 
-The first line of the domain is `mechanical <version>`, a whole number without a sign or leading zeros, not zero. This program writes and reads version 1.
+The first line of the domain is `mechanical <version>`, a whole number without a sign or leading zeros, not zero. This program reads versions 1 and 2.
 
-* A program that finds a **higher** version does not read the domain and does not write over it. `Document::mechanical_version` tells the number without reading the rest, so the project can be opened read-only; `Document::set_mechanical` refuses and leaves the bytes as they are.
-* A domain of a lower version is migrated when it is read and written in the current one. There is no lower version of this domain yet: the migration that exists is from `mechanical-parameters`.
-* A change that older programs cannot ignore raises the version. Nothing in version 1 is an "extension line": any line that is not in the grammar below makes the domain not valid.
+* **Version 1** is the grammar below without `extrude`, `pocket` and `remove-feature`. **Version 2** adds those three steps, which refer to a sketch of the project by its name.
+* This program **writes version 2 only when the recipe has one of those steps** and version 1 in every other case, so a project without extrusions and pockets is, byte for byte, the file it was before and is read by programs that only know version 1. The two spellings are not interchangeable: a text that says version 2 and has no such step, or says version 1 and has one, is not valid (`PHOENIX-CAD-018`).
+* A program that finds a **higher** version does not read the domain and does not write over it. `Document::mechanical_version` tells the number without reading the rest, so the project can be opened read-only; `Document::set_mechanical` refuses and leaves the bytes as they are. A program that only knows version 1 meets a project with extrusions as a domain of a newer version.
+* A domain of a lower version is migrated when it is read and written in the current one (and, as above, a recipe is written in the lowest version that can hold it). The migration that exists besides is from `mechanical-parameters`.
+* A change that older programs cannot ignore raises the version. Nothing in a version is an "extension line": any line that is not in the grammar below makes the domain not valid.
 
 ## The text
 
@@ -74,8 +76,13 @@ The text of `mechanical-parameters` version 1, line for line: the header `parame
 | `remove-post <id>` | |
 | `set-lid none` | takes the fixing away |
 | `set-lid` | `<fixing> <screw> <hole diameter> <shape> <clearance> <nolip or lip:<thickness>:<depth>>` with the fixing `posts`, `corners:<inset>` or `auto:<inset>` |
+| `extrude <id>` (version 2) | `<sketch> <height>`: the outline of the sketch raised outwards from its face |
+| `pocket <id>` (version 2) | `<sketch> <depth or through>`: the outline of the sketch cut into its face to the depth (a whole number of nanometres) or through the whole thickness |
+| `remove-feature <id>` (version 2) | takes away the extrusion or the pocket of that id |
 
 A **shape** is `plain`, `countersunk:<head>`, `counterbored:<head>:<depth>`, `rectangular:<height>` or `oval:<length>:<u or v>`. A **treatment** is `sharp`, `round:<size>` or `chamfer:<size>`. A **face** is `front`, `back`, `left`, `right`, `top` or `bottom`. Positions of holes are measured on the face as seen from outside (`u` to the right, `v` up); the position of a post is its centre in the inner space, measured from the inner face of the left wall (`x`) and of the front wall (`y`).
+
+A **sketch** word is the name of a sketch of the project (letters, digits, `_` and `-`, up to 64 bytes), so nothing in it is escaped. The outline is **not** in the step: it is taken from the sketch, in the domain `sketch`, every time the recipe is built (`SKETCH.md`, *Extrusions and pockets*). The face, the origin of the plane and the position of the outline come from the sketch too; a step that names a sketch the project does not have, or whose outline does not close or does not fit the face, is failed with `PHOENIX-CAD-036` or `PHOENIX-CAD-037` like any other step the box refuses.
 
 A step is data, not a promise: a step that the box would refuse is kept in the recipe and reported as failed (with its code) when the recipe is built, and the steps after it still run. Nothing about the validity of a step is stored.
 
@@ -97,8 +104,38 @@ The order of the lines is fixed: `thickness`, `tallest`, `place`, the points, th
 |---|---|---|
 | `[parameters]`, `[steps]` | the mechanical tool; the board tool when it writes the box (see below) | both |
 | `[board]` | the board tool | the mechanical tool |
+| the domain `sketch` | the mechanical tool | the mechanical tool (the board tool keeps it as it is) |
 
 The board tool writes the box by writing steps with the grammar above (for example one `add-post` for each mounting hole, or all of them through `mount::posts_for_board`, and a `set-lid`), and saves the whole domain in the canonical form. It must keep `[parameters]`, the steps it does not understand and the tip as it found them. The easiest way is to use `eh3d_phoenix_cad::mechanical` and not to write the text by hand.
+
+## The domain `sketch`
+
+The sketches of the project are in a domain of their own, **optional** (a program that does not know it opens the project and keeps it byte for byte), with its own version in its first line:
+
+```text
+sketch 1
+[sketch]
+<the text of one sketch, as in the sketch file: phoenix-sketch 1, name, plane, next, e1.., c1..>
+[sketch]
+<the next one>
+```
+
+* The sketches come in the order of their names, which are unique; the text is in one canonical form (the same sketches always give the same bytes) and a text that is not in it is refused with `PHOENIX-CAD-035`, which names the sketch and the line. The grammar of one sketch is in the header of `sketch::file`.
+* A project **without** the domain has no sketch. Writing a project without sketches writes no domain, and takes away one that is there.
+* A domain of a version higher than 1, or one that cannot be read, is **not** read or written: the project opens read-only with the error, the steps that need a sketch are failed, and the bytes stay as they were. The version is read by `Document::sketch_version`, the sketches by `Document::sketches` and written by `Document::set_sketches`.
+* The sketch file `.phoenixsketch` next to a project is a way in and a way out, not a part of the format: see `SKETCH.md`.
+* The limits are keys of the sketch settings (`phoenix-cad-sketch.default.cfg`, section `[sketch]`): `max_sketches` (64), `max_file_bytes` (1 MiB for each sketch written, and that times `max_sketches` for the whole domain read), `max_elements` and `max_constraints`.
+
+### Compatibility and migration
+
+| The file | A program of this version | A program that only knows version 1 of `mechanical` |
+|---|---|---|
+| written before the sketches existed (no `sketch`, `mechanical 1` or `mechanical-parameters`) | opens it as it always did; writing it again gives `mechanical 1` | the same |
+| with sketches but no extrusion or pocket (`mechanical 1`, `sketch 1`) | opens it, edits it | opens it, edits it and keeps `sketch` as it found it |
+| with extrusions or pockets (`mechanical 2`, `sketch 1`) | opens it, edits it | meets a domain of a newer version: does not read it and does not write over it |
+| with a `sketch` domain of a version it does not know, or damaged | opens it read-only | (not applicable) |
+
+A sketch that was kept in a `.phoenixsketch` file next to the project is migrated by opening it and keeping it in the project; nothing is converted behind the person's back.
 
 ## Limits
 
@@ -114,11 +151,12 @@ The geometry of the posts and the lid is written in `mount.rs` and is described 
 
 * A post is a cylinder on the floor with a bore for a threaded insert or a self-tapping screw (the sizes come from the `[fixing.<screw>]` tables of the settings), and an optional conical foot.
 * The lid is fixed with screws into the posts: the lid has a through hole with a recess for the head over each post, or over the four corners when the box has no posts (`auto`), and optionally a lip on its underside that centres it with the clearance of the printer profile. The holes of the lid are derived from the posts, so they follow a post that moves.
+* An extrusion or a pocket is the outline of a sketch of the project raised from a face or cut into it; it is checked when a step is applied (the sketch, its plane, the outline, the face, the margin of a pocket and the thickness) and gives `PHOENIX-CAD-036` or `PHOENIX-CAD-037`. Its volume goes to the material of the status bar. The STEP export and the model for fabrication refuse such a box.
 * Posts and lid are checked when a step is applied (collision with a wall, another post or a hole of the floor, the height against the board and its tallest part, the lip against the posts); the codes are `PHOENIX-CAD-027` to `PHOENIX-CAD-030`.
 
 ## Conformance
 
-The tests of `mechanical.rs` hold the golden texts of this page: the smallest recipe, every kind of step, and the board section; the round trip of a whole recipe and of random recipes through the text and through the project file; every cut of a good domain refused; the non-canonical spellings refused; the limits on both sides; the migration from `mechanical-parameters`; and a domain of a newer version kept byte for byte.
+The tests of `mechanical.rs` hold the golden texts of this page: the smallest recipe, every kind of step, and the board section; the round trip of a whole recipe and of random recipes through the text and through the project file; every cut of a good domain refused; the non-canonical spellings refused; the limits on both sides; the migration from `mechanical-parameters`; a domain of a newer version kept byte for byte, the steps of version 2 (their golden text, the version that goes with them and the two ways a version and the steps can disagree), and, for the domain `sketch`, the round trip with other domains around it, the order of the names, the non-canonical spellings, a domain of a newer version and a damaged one kept as they are, and a project written before the sketches existed.
 
 ## Not decided yet
 
