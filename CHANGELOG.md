@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.0.4] - Sketches with a constraint solver and window, extrusion and pocket, sketches stored in the project, and synchronised documents
+
 - Add the window of the program (`eh3d-phoenix-cad`, built with `--features gui`, with the icon of the program, the Forge theme and the same exit codes as the other programs of the suite): a tree of the model (the box, its holes, posts, edges, the lid and its screws, and the envelope that is checked), a panel of properties, a 3D view, a plan and a status bar, with the language chosen in the window and dropped files opened.
 - Edit the box from the properties: a length, a variable name or a formula for each dimension (with the value it calculates to shown beside it), and the name, face, position, diameter, height and bore of each hole and post, the treatment of the edges and the screw hole, clearance and lip of the lid. The model is built again with the new value and the change is kept only when the model accepts it; a refused value is told with its code in the language of the window and leaves the project as it was.
 - Check the fit again after every change: the board of the project (or, without one, an envelope typed in the properties) is compared with the inner space with the clearance of the printer profile, and the status bar says whether it fits, with the room left on each axis, or whether it fits turned a quarter of a turn; it also shows the outer and inner sizes, the volume of the material and how many steps the model refused.
