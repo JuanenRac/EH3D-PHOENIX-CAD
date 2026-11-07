@@ -5392,7 +5392,10 @@ mod tests {
         assert_eq!(bytes.len(), 84 + 50 * triangles.len());
         assert_eq!(
             w.status,
-            Status::Done(Msg::Exported, vec!["mybox.stl".into(), bytes.len().to_string()])
+            Status::Done(
+                Msg::Exported,
+                vec!["mybox.stl".into(), bytes.len().to_string()]
+            )
         );
         // the same file is not written twice without the order
         assert!(!w.export_to(Format::Stl, &stl, false));
@@ -5418,7 +5421,10 @@ mod tests {
         let dir = Scratch::new("refused");
         let mut w = fresh();
         // the plate of the example covers the holes of the screws of its lid
-        let plate = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/plate.phoenixproj"));
+        let plate = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/examples/plate.phoenixproj"
+        ));
         assert!(w.open(&plate), "{:?}", w.status);
         let target = dir.0.join("box.stl");
         assert!(!w.export_to(Format::Stl, &target, false));
