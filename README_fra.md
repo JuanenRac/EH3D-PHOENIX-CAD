@@ -11,14 +11,14 @@
   <img src="https://img.shields.io/badge/License-GPL%203.0--or--later-blue.svg" alt="GPL 3.0 or later">
   <img src="https://img.shields.io/badge/Stack-Rust%20%2B%20Markdown%20%2B%20Python-blue.svg" alt="Rust, Markdown and Python">
   <img src="https://img.shields.io/badge/Languages-8-00E5FF.svg" alt="Languages">
-  <img src="https://img.shields.io/badge/Tests-564-2EA043.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-613-2EA043.svg" alt="Tests">
   <img src="https://img.shields.io/badge/Version-0.0.4-0f6cbd.svg" alt="Version">
   <img src="https://img.shields.io/badge/Maturity-scaffolding-FFB020.svg" alt="Maturity">
 </p>
 
 ---
 
-**Vérification d'honnêteté - ce qui tourne aujourd'hui :** une bibliothèque Rust avec un boîtier paramétrique : longueurs en nanomètres entiers avec leur propre plage, trous dans les faces (ronds, fraisés, lamés, rectangulaires et ovales), arêtes arrondies et chanfreinées, paramètres écrits comme formules avec unités sur des variables, des constantes et d'autres paramètres (fractions exactes, dépassement contrôlé), opérations de changement structurées qui signalent les conflits et laissent le modèle intact, des colonnettes sous les trous de fixation d'une carte avec un couvercle vissé dessus, la recette du boîtier gardée dans le domaine mécanique du fichier de projet, un script de style OpenSCAD et un contrôle d'ajustement contre l'enveloppe d'une carte. Une fenêtre (egui, avec `--features gui`) montre l'arbre du modèle, les propriétés de chaque élément, une vue 3D et une vue de dessus (où l'on fait glisser des trous et des plots à la souris et où l'on mesure des distances et des angles ; le script, le fichier STEP et le rapport d'ajustement s'écrivent dans un fichier depuis un menu, jamais sur un fichier existant sauf si la case prévue est cochée), et une commande `check` lit un projet et affiche ses mesures, son ajustement et l'état de chaque étape ; la logique de la fenêtre est testée sans écran. Elle a 561 tests à elle et ils passent sur un ordinateur. Elle n'a été essayée que sur des modèles faits par ses propres tests ; la fenêtre n'a jamais été ouverte sur un écran et rien n'a été exécuté sur une machine, et le fichier STEP qu'elle écrit n'a été vérifié que dans sa structure, et l'esquisse 2D (géométrie, contraintes, un solveur et une fenêtre pour la dessiner et la coter), qui est conservée dans le fichier de projet et dont les contours fermés peuvent être extrudés depuis une face ou découpés dans celle-ci comme étapes de la recette, n'a été essayée que sur des esquisses faites par ses propres tests et sa fenêtre n'a pas encore été ouverte sur un écran, tandis que les motifs de trous et de plots et les ailettes de refroidissement (avec une estimation simple de la chaleur qu'elles cèdent à l'air calme, comparée à aucune mesure) existent mais n'ont été essayés que sur des modèles faits par ses propres tests, et que les assemblages sont seulement prévus.
+**Vérification d'honnêteté - ce qui tourne aujourd'hui :** une bibliothèque Rust avec un boîtier paramétrique : longueurs en nanomètres entiers avec leur propre plage, trous dans les faces (ronds, fraisés, lamés, rectangulaires et ovales), arêtes arrondies et chanfreinées, paramètres écrits comme formules avec unités sur des variables, des constantes et d'autres paramètres (fractions exactes, dépassement contrôlé), opérations de changement structurées qui signalent les conflits et laissent le modèle intact, des colonnettes sous les trous de fixation d'une carte avec un couvercle vissé dessus, la recette du boîtier gardée dans le domaine mécanique du fichier de projet, un script de style OpenSCAD et un contrôle d'ajustement contre l'enveloppe d'une carte. Une fenêtre (egui, avec `--features gui`) montre l'arbre du modèle, les propriétés de chaque élément, une vue 3D et une vue de dessus (où l'on fait glisser des trous et des plots à la souris et où l'on mesure des distances et des angles ; le script, le fichier STEP et le rapport d'ajustement s'écrivent dans un fichier depuis un menu, jamais sur un fichier existant sauf si la case prévue est cochée), et une commande `check` lit un projet et affiche ses mesures, son ajustement et l'état de chaque étape ; la logique de la fenêtre est testée sans écran. Elle a 610 tests à elle et ils passent sur un ordinateur. Elle n'a été essayée que sur des modèles faits par ses propres tests ; la fenêtre n'a jamais été ouverte sur un écran et rien n'a été exécuté sur une machine, et le fichier STEP qu'elle écrit n'a été vérifié que dans sa structure, et l'esquisse 2D (géométrie, contraintes, un solveur et une fenêtre pour la dessiner et la coter), qui est conservée dans le fichier de projet et dont les contours fermés peuvent être extrudés depuis une face ou découpés dans celle-ci comme étapes de la recette, n'a été essayée que sur des esquisses faites par ses propres tests et sa fenêtre n'a pas encore été ouverte sur un écran, tandis que les motifs de trous et de plots et les ailettes de refroidissement (avec une estimation simple de la chaleur qu'elles cèdent à l'air calme, comparée à aucune mesure) existent mais n'ont été essayés que sur des modèles faits par ses propres tests, et qu'il en va de même des pièces d'un catalogue (profilés coupés à une longueur, vis et équerres lus dans des fichiers de bibliothèque et placés dans le modèle, avec une nomenclature, une liste de coupe, le volume et la masse selon la densité de chaque matériau ; la bibliothèque des exemples est inventée), et que les assemblages sont seulement prévus.
 
 ---
 
@@ -30,7 +30,7 @@
 |---|---|
 | Version | `0.0.4` |
 | Maturité | Échafaudage |
-| Tests | 564 |
+| Tests | 613 |
 | Pile technique | Rust, Markdown, Python 3.10+ |
 | Sur du matériel réel | Pas encore exécuté sur du matériel |
 
@@ -45,10 +45,10 @@ Chaque ligne est une partie de ce dépôt et le feu dit où elle en est aujourd'
 | Domaine | État | Ce que cela veut dire ici |
 |---|---|---|
 | Contrôles du dépôt | 🟡 | Le contrôle du dépôt, celui des images et les 3 tests de la base tournent dans la CI et réussissent. |
-| Tests | 🟡 | Les 561 tests de la bibliothèque Rust et les 3 de la base passent sur un ordinateur. Ils n'utilisent que des modèles faits par les tests eux-mêmes. |
+| Tests | 🟡 | Les 610 tests de la bibliothèque Rust et les 3 de la base passent sur un ordinateur. Ils n'utilisent que des modèles faits par les tests eux-mêmes. |
 | Matériel réel | 🟠 | Non exécuté sur une machine ni une carte : rien ici n'a été essayé sur du matériel. |
-| Fonction prévue | 🟠 | En partie faite : un boîtier paramétrique avec trous, colonnettes et couvercle vissé, un script de style OpenSCAD, un contrôle d'ajustement et la recette du boîtier dans le fichier de projet existent, ainsi qu'un premier écrivain STEP vérifié seulement dans sa structure ; une esquisse 2D avec contraintes, un solveur et une fenêtre pour la dessiner existe, est conservée dans le fichier de projet et peut être extrudée depuis une face ou découpée dans celle-ci, mais sa fenêtre n'a pas encore été ouverte sur un écran ; des motifs de trous et de plots et des ailettes de refroidissement avec une estimation de leur chaleur existent, essayés seulement sur des modèles faits par les tests ; les assemblages ne sont pas commencés. |
-| Exigences | 🟠 | 5 exigences sur 6 sont au stade de prototype (le boîtier, le script, les opérations de changement, le modèle de dissipateur et la plage mécanique), 1 est seulement prévue et aucune n'est validée. |
+| Fonction prévue | 🟠 | En partie faite : un boîtier paramétrique avec trous, colonnettes et couvercle vissé, un script de style OpenSCAD, un contrôle d'ajustement et la recette du boîtier dans le fichier de projet existent, ainsi qu'un premier écrivain STEP vérifié seulement dans sa structure ; une esquisse 2D avec contraintes, un solveur et une fenêtre pour la dessiner existe, est conservée dans le fichier de projet et peut être extrudée depuis une face ou découpée dans celle-ci, mais sa fenêtre n'a pas encore été ouverte sur un écran ; des motifs de trous et de plots et des ailettes de refroidissement avec une estimation de leur chaleur existent, essayés seulement sur des modèles faits par les tests ; les pièces d'un catalogue (profilés, vis et équerres de fichiers de bibliothèque) placées dans le modèle avec une nomenclature et la masse de chaque matériau existent, essayées seulement sur des pièces inventées ; les assemblages ne sont pas commencés. |
+| Exigences | 🟠 | 6 exigences sur 7 sont au stade de prototype (le boîtier, le script, les opérations de changement, le modèle de dissipateur, le catalogue de pièces et la plage mécanique), 1 est seulement prévue et aucune n'est validée. |
 
 ## 🎯 Présentation
 
@@ -82,6 +82,9 @@ Pour essayer le programme (il faut Rust ; la fenêtre demande `--features gui`) 
 ```bash
 cargo run -p eh3d-phoenix-cad -- check crates/eh3d-phoenix-cad/examples/box.phoenixproj
 cargo run -p eh3d-phoenix-cad -- check crates/eh3d-phoenix-cad/examples/plate.phoenixproj
+cargo run -p eh3d-phoenix-cad -- check crates/eh3d-phoenix-cad/examples/frame.phoenixproj
+cargo run -p eh3d-phoenix-cad -- bill crates/eh3d-phoenix-cad/examples/frame.phoenixproj
+cargo run -p eh3d-phoenix-cad -- library crates/eh3d-phoenix-cad/examples/chassis.phoenixlib
 cargo run --release -p eh3d-phoenix-cad --features gui -- crates/eh3d-phoenix-cad/examples/box.phoenixproj
 cargo run --release -p eh3d-phoenix-cad --features gui -- gui crates/eh3d-phoenix-cad/examples/box.phoenixproj --shot box.png
 cargo run --release -p eh3d-phoenix-cad --features gui -- gui crates/eh3d-phoenix-cad/examples/box.phoenixsketch --view sketch --shot sketch.png
@@ -89,7 +92,7 @@ cargo run --release -p eh3d-phoenix-cad --features gui -- gui crates/eh3d-phoeni
 
 ## 🧪 Tests
 
-La bibliothèque Rust a 561 tests (`cargo test`) et la base en a 3 (`python -I -m unittest discover -s tools -p "test_*.py"`) ; tous réussissent sur un ordinateur. La CI exécute le contrôle du dépôt, celui des images, les tests de la base et, pour le code Rust, la vérification du format, clippy avec les avertissements comme erreurs et les tests sous Linux et Windows, et contrôle aussi la fenêtre avec clippy (`--features gui`).
+La bibliothèque Rust a 610 tests (`cargo test`) et la base en a 3 (`python -I -m unittest discover -s tools -p "test_*.py"`) ; tous réussissent sur un ordinateur. La CI exécute le contrôle du dépôt, celui des images, les tests de la base et, pour le code Rust, la vérification du format, clippy avec les avertissements comme erreurs et les tests sous Linux et Windows, et contrôle aussi la fenêtre avec clippy (`--features gui`).
 
 ## 🏗️ Compilation et publication
 
@@ -116,9 +119,10 @@ EH3D-PHOENIX-CAD/
 │   ├── EXPRESSIONS.md                           le langage des formules des paramètres
 │   ├── PROJECT_DOMAIN.md                        la recette du boîtier dans le fichier de projet
 │   ├── SKETCH.md                                l'esquisse 2D : contraintes, solveur, fichier de projet et extrusions
+│   ├── CATALOG.md                               le catalogue de pièces : bibliothèques, nomenclature, liste de coupe
 │   └── adr/                                     les décisions acceptées
 ├── Cargo.toml Cargo.lock                        l'espace de travail Rust et ses dépendances verrouillées
-├── crates/                                      modèle mécanique : boîtier, motifs, ailettes, esquisses, script, contrôle d'ajustement, fenêtre
+├── crates/                                      modèle mécanique : boîtier, motifs, ailettes, pièces, esquisses, script, contrôle d'ajustement, fenêtre
 ├── AGENTS.md                                    règles pour quiconque modifie le dépôt
 ├── tools/                                       le contrôle du dépôt, ses tests et les outils des images
 ├── images/                                      bannière et images d'Architecture et de Structure du dépôt

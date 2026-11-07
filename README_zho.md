@@ -11,14 +11,14 @@
   <img src="https://img.shields.io/badge/License-GPL%203.0--or--later-blue.svg" alt="GPL 3.0 or later">
   <img src="https://img.shields.io/badge/Stack-Rust%20%2B%20Markdown%20%2B%20Python-blue.svg" alt="Rust, Markdown and Python">
   <img src="https://img.shields.io/badge/Languages-8-00E5FF.svg" alt="Languages">
-  <img src="https://img.shields.io/badge/Tests-564-2EA043.svg" alt="Tests">
+  <img src="https://img.shields.io/badge/Tests-613-2EA043.svg" alt="Tests">
   <img src="https://img.shields.io/badge/Version-0.0.4-0f6cbd.svg" alt="Version">
   <img src="https://img.shields.io/badge/Maturity-scaffolding-FFB020.svg" alt="Maturity">
 </p>
 
 ---
 
-**诚实性核对 - 今天真正能运行的内容：** 一个 Rust 库，带参数化外壳：整数纳米长度（有自己的范围）、面上的孔（圆孔、锥形沉孔、柱形沉孔、矩形孔和长圆孔）、圆角和倒角的边、可写成含单位的公式的参数（基于变量、常量和其他参数，精确分数，溢出受检）、会报告冲突并保持模型不变的结构化修改操作、电路板安装孔下方的立柱及用螺钉固定其上的盖子、保存在项目文件机械域中的外壳配方、OpenSCAD 风格的脚本，以及对电路板外形的装配检查。一个窗口（egui，用 `--features gui` 构建）显示模型树、每一项的属性、3D 视图和俯视图（可用鼠标拖动孔和立柱，并测量距离和角度；脚本、STEP 文件和适配报告可通过菜单写入文件，除非勾选相应复选框，否则绝不覆盖已有文件），`check` 命令读取项目并打印其尺寸、装配情况和每一步的状态；窗口的逻辑无需屏幕即可测试。它有 561 个自己的测试，在计算机上通过。它只在自己的测试生成的模型上试过；窗口从未在屏幕上打开过，也没有在机器上运行，写出的 STEP 文件只检查过结构，2D 草图（几何、约束、求解器和用于绘制与标注的窗口）保存在项目文件中，其封闭轮廓可作为配方的步骤从一个面拉伸或切入该面，但只在自己的测试生成的草图上试过，其窗口也尚未在屏幕上打开过，孔和立柱的阵列以及散热片（附带对静止空气放热量的简易估算，未与任何测量比较）已存在，但只在自己的测试生成的模型上试过，装配仍只是计划。
+**诚实性核对 - 今天真正能运行的内容：** 一个 Rust 库，带参数化外壳：整数纳米长度（有自己的范围）、面上的孔（圆孔、锥形沉孔、柱形沉孔、矩形孔和长圆孔）、圆角和倒角的边、可写成含单位的公式的参数（基于变量、常量和其他参数，精确分数，溢出受检）、会报告冲突并保持模型不变的结构化修改操作、电路板安装孔下方的立柱及用螺钉固定其上的盖子、保存在项目文件机械域中的外壳配方、OpenSCAD 风格的脚本，以及对电路板外形的装配检查。一个窗口（egui，用 `--features gui` 构建）显示模型树、每一项的属性、3D 视图和俯视图（可用鼠标拖动孔和立柱，并测量距离和角度；脚本、STEP 文件和适配报告可通过菜单写入文件，除非勾选相应复选框，否则绝不覆盖已有文件），`check` 命令读取项目并打印其尺寸、装配情况和每一步的状态；窗口的逻辑无需屏幕即可测试。它有 610 个自己的测试，在计算机上通过。它只在自己的测试生成的模型上试过；窗口从未在屏幕上打开过，也没有在机器上运行，写出的 STEP 文件只检查过结构，2D 草图（几何、约束、求解器和用于绘制与标注的窗口）保存在项目文件中，其封闭轮廓可作为配方的步骤从一个面拉伸或切入该面，但只在自己的测试生成的草图上试过，其窗口也尚未在屏幕上打开过，孔和立柱的阵列以及散热片（附带对静止空气放热量的简易估算，未与任何测量比较）已存在，但只在自己的测试生成的模型上试过，目录零件（按长度切割的型材、从库文件读取并放入模型的螺钉和角码，附带物料清单、切割清单以及按各材料密度计算的体积和质量；示例中的零件库是虚构的）也是如此，装配仍只是计划。
 
 ---
 
@@ -30,7 +30,7 @@
 |---|---|
 | 版本 | `0.0.4` |
 | 成熟度 | 脚手架 |
-| 测试 | 564 |
+| 测试 | 613 |
 | 技术栈 | Rust, Markdown, Python 3.10+ |
 | 真实硬件 | 尚未在硬件上运行 |
 
@@ -45,10 +45,10 @@
 | 领域 | 状态 | 在这里的含义 |
 |---|---|---|
 | 仓库检查 | 🟡 | 仓库检查、图片检查以及基础部分的 3 个测试都在 CI 中运行并通过。 |
-| 测试 | 🟡 | Rust 库的 561 个测试和基础部分的 3 个测试在计算机上通过。它们只使用测试自己生成的模型。 |
+| 测试 | 🟡 | Rust 库的 610 个测试和基础部分的 3 个测试在计算机上通过。它们只使用测试自己生成的模型。 |
 | 真实硬件 | 🟠 | 没有在任何机床或电路板上运行过：这里没有任何内容在硬件上试过。 |
-| 计划的功能 | 🟠 | 部分完成：已有带孔、立柱和螺钉固定盖子的参数化外壳、OpenSCAD 风格的脚本、装配检查、项目文件中的外壳配方，以及只检查过结构的首个 STEP 写出器；已有带约束、求解器和绘制窗口的 2D 草图，它保存在项目文件中，可从一个面拉伸或切入该面，但其窗口尚未在屏幕上打开过；已有孔和立柱的阵列，以及附带放热量估算的散热片，只在测试生成的模型上试过；装配尚未开始。 |
-| 需求 | 🟠 | 6 项需求中有 5 项处于原型阶段（外壳、脚本、修改操作、散热器模型和机械范围），1 项仍是计划，没有任何一项通过验证。 |
+| 计划的功能 | 🟠 | 部分完成：已有带孔、立柱和螺钉固定盖子的参数化外壳、OpenSCAD 风格的脚本、装配检查、项目文件中的外壳配方，以及只检查过结构的首个 STEP 写出器；已有带约束、求解器和绘制窗口的 2D 草图，它保存在项目文件中，可从一个面拉伸或切入该面，但其窗口尚未在屏幕上打开过；已有孔和立柱的阵列，以及附带放热量估算的散热片，只在测试生成的模型上试过；已有目录零件（来自库文件的型材、螺钉和角码）放入模型并给出物料清单和各材料质量的功能，只在虚构的零件上试过；装配尚未开始。 |
+| 需求 | 🟠 | 7 项需求中有 6 项处于原型阶段（外壳、脚本、修改操作、散热器模型、零件目录和机械范围），1 项仍是计划，没有任何一项通过验证。 |
 
 ## 🎯 概述
 
@@ -82,6 +82,9 @@ python -I -m unittest discover -s tools -p "test_*.py"
 ```bash
 cargo run -p eh3d-phoenix-cad -- check crates/eh3d-phoenix-cad/examples/box.phoenixproj
 cargo run -p eh3d-phoenix-cad -- check crates/eh3d-phoenix-cad/examples/plate.phoenixproj
+cargo run -p eh3d-phoenix-cad -- check crates/eh3d-phoenix-cad/examples/frame.phoenixproj
+cargo run -p eh3d-phoenix-cad -- bill crates/eh3d-phoenix-cad/examples/frame.phoenixproj
+cargo run -p eh3d-phoenix-cad -- library crates/eh3d-phoenix-cad/examples/chassis.phoenixlib
 cargo run --release -p eh3d-phoenix-cad --features gui -- crates/eh3d-phoenix-cad/examples/box.phoenixproj
 cargo run --release -p eh3d-phoenix-cad --features gui -- gui crates/eh3d-phoenix-cad/examples/box.phoenixproj --shot box.png
 cargo run --release -p eh3d-phoenix-cad --features gui -- gui crates/eh3d-phoenix-cad/examples/box.phoenixsketch --view sketch --shot sketch.png
@@ -89,7 +92,7 @@ cargo run --release -p eh3d-phoenix-cad --features gui -- gui crates/eh3d-phoeni
 
 ## 🧪 测试
 
-Rust 库有 561 个测试（`cargo test`），基础部分有 3 个（`python -I -m unittest discover -s tools -p "test_*.py"`）；全部在计算机上通过。CI 运行仓库检查、图片检查、基础部分的测试，对 Rust 代码还运行格式检查、把警告当作错误的 clippy，以及 Linux 和 Windows 上的测试，并用 clippy（`--features gui`）检查窗口。
+Rust 库有 610 个测试（`cargo test`），基础部分有 3 个（`python -I -m unittest discover -s tools -p "test_*.py"`）；全部在计算机上通过。CI 运行仓库检查、图片检查、基础部分的测试，对 Rust 代码还运行格式检查、把警告当作错误的 clippy，以及 Linux 和 Windows 上的测试，并用 clippy（`--features gui`）检查窗口。
 
 ## 🏗️ 构建与发布
 
@@ -116,9 +119,10 @@ EH3D-PHOENIX-CAD/
 │   ├── EXPRESSIONS.md                           参数公式所用的语言
 │   ├── PROJECT_DOMAIN.md                        项目文件中的外壳配方
 │   ├── SKETCH.md                                2D 草图：约束、求解器、项目文件和拉伸
+│   ├── CATALOG.md                               零件目录：库、物料清单、切割清单
 │   └── adr/                                     已接受的决策记录
 ├── Cargo.toml Cargo.lock                        Rust 工作区及其锁定的依赖
-├── crates/                                      机械模型：外壳、阵列、散热片、草图、脚本、装配检查、窗口
+├── crates/                                      机械模型：外壳、阵列、散热片、零件、草图、脚本、装配检查、窗口
 ├── AGENTS.md                                    修改仓库的人需遵守的规则
 ├── tools/                                       仓库检查、其测试以及图片工具
 ├── images/                                      横幅图以及架构和仓库结构图片
