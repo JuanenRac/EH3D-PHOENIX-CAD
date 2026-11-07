@@ -373,9 +373,91 @@ pub fn format_length(length: Length, unit: Unit, decimals: u32) -> String {
     }
 }
 
+/// Reads an angle written in degrees: `90`, `22.5`, `-45 deg`, `0,5°`. The decimal separator is a
+/// point or a comma, a fraction such as `1/3` is allowed, and the result is rounded half away from
+/// zero to the nano-degree. A text that is not a number of degrees is refused.
+///
+/// ```
+/// use eh3d_phoenix_cad::units::parse_angle;
+/// assert_eq!(parse_angle("22.5").unwrap().get(), 22_500_000_000);
+/// assert_eq!(parse_angle("-45 deg").unwrap().get(), -45_000_000_000);
+/// assert_eq!(parse_angle("one turn").unwrap_err().code(), "PHOENIX-CAD-008");
+/// ```
+pub fn parse_angle(text: &str) -> Result<Angle, CadError> {
+    let bad = || CadError::UnitText(text.to_string());
+    let t = text.trim();
+    let number = t
+        .strip_suffix('\u{b0}')
+        .or_else(|| t.strip_suffix("deg"))
+        .unwrap_or(t)
+        .trim();
+    let (num, den) = parse_rational(number).ok_or_else(bad)?;
+    let scaled = num.checked_mul(1_000_000_000).ok_or_else(bad)?;
+    let ndeg = div_round_half_away(scaled, den)?;
+    Angle::new(i64::try_from(ndeg).map_err(|_| bad())?)
+}
+
+/// Writes an angle in degrees with the decimals it needs and no more: `90`, `22.5`, `-0.000000001`.
+/// [`parse_angle`] reads the text back to the same angle.
+pub fn format_angle(angle: Angle) -> String {
+    let n = angle.get();
+    let sign = if n < 0 { "-" } else { "" };
+    let magnitude = n.unsigned_abs();
+    let (int, frac) = (magnitude / 1_000_000_000, magnitude % 1_000_000_000);
+    if frac == 0 {
+        format!("{sign}{int}")
+    } else {
+        let digits = format!("{frac:09}");
+        format!("{sign}{int}.{}", digits.trim_end_matches('0'))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn angles_are_read_and_written_in_degrees_and_read_back_to_the_same_angle() {
+        for (text, ndeg) in [
+            ("90", 90_000_000_000i64),
+            ("22.5", 22_500_000_000),
+            ("22,5 deg", 22_500_000_000),
+            ("-45 deg", -45_000_000_000),
+            ("0.5\u{b0}", 500_000_000),
+            ("1/3", 333_333_333),
+            ("2/3", 666_666_667),
+            ("-1/3", -333_333_333),
+            ("0.0000000004", 0),
+            ("0.0000000005", 1),
+            ("360", 360_000_000_000),
+        ] {
+            assert_eq!(parse_angle(text).unwrap().get(), ndeg, "{text}");
+        }
+        for (ndeg, text) in [
+            (0i64, "0"),
+            (90_000_000_000, "90"),
+            (22_500_000_000, "22.5"),
+            (-45_000_000_000, "-45"),
+            (1, "0.000000001"),
+            (-1, "-0.000000001"),
+            (333_333_333, "0.333333333"),
+            (1_000_000_000_000_000 - 1, "999999.999999999"),
+        ] {
+            let a = Angle::new(ndeg).unwrap();
+            assert_eq!(format_angle(a), text);
+            assert_eq!(parse_angle(text).unwrap(), a);
+        }
+        for text in [
+            "", "deg", "ninety", "1e2", "5 turns", "1/0", "1000000", "--3",
+        ] {
+            assert!(parse_angle(text).is_err(), "{text}");
+        }
+        assert_eq!(
+            parse_angle("1000000").unwrap_err().code(),
+            "PHOENIX-CAD-006"
+        );
+        assert_eq!(parse_angle("ninety").unwrap_err().code(), "PHOENIX-CAD-008");
+    }
 
     #[test]
     fn angles_have_their_own_range_and_normalise_into_one_turn() {

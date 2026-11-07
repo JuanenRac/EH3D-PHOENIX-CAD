@@ -9,7 +9,7 @@ use crate::config::Config;
 use crate::enclosure::{Enclosure, EnclosureParams, Face};
 use crate::export::Format;
 use crate::mount::BoreKind;
-use crate::units::Unit;
+use crate::units::{parse_angle, Angle, Unit};
 use crate::{CadError, Length};
 
 /// The shipped settings of the window, as text.
@@ -50,6 +50,15 @@ pub struct NewStepDefaults {
     pub extrude_height: Length,
     /// The depth of a new pocket; zero cuts through the face.
     pub pocket_depth: Length,
+    /// How many positions a new pattern has.
+    pub pattern_count: u32,
+    /// The step between two positions of a new line of holes or posts, along `u` or `x`.
+    pub pattern_step: Length,
+    /// The distance from the seed to the centre of a pattern that is changed to a circle, along
+    /// both axes (so that the positions of a circle of four make a square the seed is a corner of).
+    pub pattern_radius: Length,
+    /// The angle between two positions of a circle.
+    pub pattern_angle: Angle,
 }
 
 /// How a hole or a post is dragged with the mouse in the views.
@@ -164,6 +173,15 @@ fn word<'a>(c: &'a Config, key: &str) -> Result<&'a str, CadError> {
     c.get(key).ok_or_else(|| missing(key))
 }
 
+fn positive(c: &Config, key: &str) -> Result<Length, CadError> {
+    let value = c.length(key)?;
+    if value.get() > 0 {
+        Ok(value)
+    } else {
+        Err(CadError::Config(format!("{key} must be positive")))
+    }
+}
+
 impl NewStepDefaults {
     fn from_config(c: &Config) -> Result<NewStepDefaults, CadError> {
         let face = word(c, "new_step.hole_face")?;
@@ -190,6 +208,18 @@ impl NewStepDefaults {
             post_bore_depth: c.length("new_step.post_bore_depth")?,
             extrude_height: c.length("new_step.extrude_height")?,
             pocket_depth: c.length("new_step.pocket_depth")?,
+            pattern_count: count(c, "new_step.pattern_count", 2, 1000)?,
+            pattern_step: positive(c, "new_step.pattern_step")?,
+            pattern_radius: positive(c, "new_step.pattern_radius")?,
+            pattern_angle: {
+                let key = "new_step.pattern_angle";
+                let angle = parse_angle(word(c, key)?)
+                    .map_err(|e| CadError::Config(format!("{key}: {e}")))?;
+                if angle == Angle::ZERO {
+                    return Err(CadError::Config(format!("{key} must not be zero")));
+                }
+                angle
+            },
         })
     }
 }
@@ -352,6 +382,9 @@ mod tests {
         assert_eq!(s.export.format, Format::Script);
         assert!(!s.export.overwrite);
         assert_eq!(s.export.max_kib, 65_536);
+        assert_eq!((n.pattern_count, n.pattern_step), (4, mm(10)));
+        assert_eq!(n.pattern_radius, mm(5));
+        assert_eq!(n.pattern_angle, Angle::from_deg(90).unwrap());
     }
 
     #[test]
@@ -484,11 +517,25 @@ marker = big
                 .unwrap();
         assert_eq!(s.new_step.hole_face, Face::Top);
         assert_eq!(s.new_step.post_kind, BoreKind::SelfTapping);
+        let s = UiSettings::with_user_config(
+            "[new_step]\npattern_count = 1000\npattern_step = 2.5 mm\npattern_radius = 1/2 in\npattern_angle = 22.5 deg\n",
+        )
+        .unwrap();
+        assert_eq!(s.new_step.pattern_count, 1000);
+        assert_eq!(s.new_step.pattern_step, Length::new(2_500_000).unwrap());
+        assert_eq!(s.new_step.pattern_radius, Length::new(12_700_000).unwrap());
+        assert_eq!(s.new_step.pattern_angle.get(), 22_500_000_000);
         for text in [
             "[new_step]\nhole_face = side\n",
             "[new_step]\npost_kind = glue\n",
             "[new_step]\ntries = 0\n",
             "[new_step]\npitch = wide\n",
+            "[new_step]\npattern_count = 1\n",
+            "[new_step]\npattern_count = 1001\n",
+            "[new_step]\npattern_step = 0 mm\n",
+            "[new_step]\npattern_radius = -1 mm\n",
+            "[new_step]\npattern_angle = 0\n",
+            "[new_step]\npattern_angle = round\n",
         ] {
             let error = UiSettings::with_user_config(text).unwrap_err();
             assert_eq!(error.code(), "PHOENIX-CAD-011", "{text:?}: {error}");

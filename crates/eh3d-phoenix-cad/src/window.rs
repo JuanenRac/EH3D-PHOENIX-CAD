@@ -23,6 +23,7 @@ use crate::mechanical::{Mechanical, MECHANICAL_DOMAIN};
 use crate::messages;
 use crate::mount::{Lid, Post};
 use crate::parametric::{ParamModel, Parameter};
+use crate::pattern::{Layout, PatternOp, Seed};
 use crate::profile::ProfileLimits;
 use crate::project::{Document, PARAMETERS_DOMAIN};
 use crate::scad::mm_text;
@@ -35,7 +36,7 @@ use crate::sketch::settings::SketchSettings;
 use crate::sketch::{check_sketch_name, Sketch};
 use crate::store;
 use crate::uiconfig::UiSettings;
-use crate::units::{format_length, parse_length};
+use crate::units::{format_angle, format_length, parse_angle, parse_length, Count};
 use crate::vars::{Param, Variables};
 use crate::{CadError, Length};
 use std::path::{Path, PathBuf};
@@ -60,6 +61,8 @@ pub enum Selection {
     Lid(usize),
     /// An extrusion or a pocket: the index of its step.
     Feature(usize),
+    /// A pattern of holes or posts: the index of its step.
+    Pattern(usize),
     /// A step that has no editor of its own: its index.
     Other(usize),
     /// A screw hole of the lid, by its position in the list the lid derives.
@@ -83,6 +86,10 @@ pub enum NewStep {
     Extrude,
     /// A pocket of a sketch of the project.
     Pocket,
+    /// A pattern of holes in a face.
+    HolePattern,
+    /// A pattern of posts on the floor.
+    PostPattern,
 }
 
 /// A row of the sheet of variables.
@@ -123,6 +130,7 @@ impl Selection {
             | Selection::Edging(i)
             | Selection::Lid(i)
             | Selection::Feature(i)
+            | Selection::Pattern(i)
             | Selection::Other(i) => Some(i),
             Selection::Nothing
             | Selection::Body
@@ -180,6 +188,20 @@ pub enum Key {
     Height,
     /// The depth of a pocket, or that it goes through.
     PocketDepth,
+    /// How a pattern is laid out: along a line or round a centre.
+    PatternLayout,
+    /// How many positions a pattern has.
+    PatternCount,
+    /// The step of a line of positions along `u` (or `x`).
+    StepU,
+    /// The step of a line of positions along `v` (or `y`).
+    StepV,
+    /// The centre of a circle of positions, along `u` (or `x`).
+    CenterU,
+    /// The centre of a circle of positions, along `v` (or `y`).
+    CenterV,
+    /// The angle between two positions of a circle.
+    StepAngle,
 }
 
 /// How a field is edited.
@@ -553,6 +575,7 @@ pub fn step_label(step: &Step) -> String {
     match &step.op {
         Operation::AddHole { hole, .. } | Operation::ReplaceHole { hole, .. } => hole.name.clone(),
         Operation::AddPost { post, .. } | Operation::ReplacePost { post, .. } => post.name.clone(),
+        Operation::AddPattern { pattern, .. } => pattern.name().to_string(),
         _ => "-".to_string(),
     }
 }
@@ -564,6 +587,7 @@ fn the_selection_of(index: usize, step: &Step) -> Selection {
         Operation::SetEdging(_) => Selection::Edging(index),
         Operation::SetLid(Some(_)) => Selection::Lid(index),
         Operation::Extrude { .. } | Operation::Pocket { .. } => Selection::Feature(index),
+        Operation::AddPattern { .. } => Selection::Pattern(index),
         _ => Selection::Other(index),
     }
 }
@@ -725,10 +749,11 @@ impl Window {
     /// Builds a recipe with the settings of the window, the limits of the profiles of the sketches
     /// among them.
     fn rebuild(&self, mech: &Mechanical) -> Result<Built, CadError> {
-        mech.build_with(
+        mech.build_with_limits(
             &self.settings.constants,
             &self.settings.expr,
             Some(ProfileLimits::from_settings(&self.sketch_settings)),
+            Some(self.settings.design),
         )
     }
 
@@ -750,6 +775,7 @@ impl Window {
         let lang = self.lang;
         let mut holes = Vec::new();
         let mut posts = Vec::new();
+        let mut patterns = Vec::new();
         let mut edges = Vec::new();
         let mut lids = Vec::new();
         let mut features = Vec::new();
@@ -764,6 +790,7 @@ impl Window {
             match selection {
                 Selection::Hole(_) => holes.push(item),
                 Selection::Post(_) => posts.push(item),
+                Selection::Pattern(_) => patterns.push(item),
                 Selection::Edging(_) => edges.push(item),
                 Selection::Lid(_) => lids.push(item),
                 Selection::Feature(_) => features.push(item),
@@ -801,6 +828,7 @@ impl Window {
         for (title, items) in [
             (Msg::GroupHoles, holes),
             (Msg::GroupPosts, posts),
+            (Msg::GroupPatterns, patterns),
             (Msg::GroupEdges, edges),
             (Msg::GroupLid, lids),
             (Msg::GroupScrews, screws),
@@ -830,6 +858,7 @@ impl Window {
             | Selection::Edging(i)
             | Selection::Lid(i)
             | Selection::Feature(i)
+            | Selection::Pattern(i)
             | Selection::Other(i) => i < self.mech.steps.len(),
             Selection::Screw(k) => k < self.built.enclosure.lid_holes().len(),
             Selection::Nothing | Selection::Body | Selection::Fit | Selection::Sheet => true,
@@ -846,11 +875,15 @@ impl Window {
                 | Some(Operation::AddPost { id, .. })
                 | Some(Operation::Extrude { id, .. })
                 | Some(Operation::Pocket { id, .. }) => Highlight::Object(*id),
+                Some(Operation::AddPattern { id, .. }) => Highlight::Pattern(*id),
                 _ => Highlight::Nothing,
             }
         };
         match self.selection {
-            Selection::Hole(i) | Selection::Post(i) | Selection::Feature(i) => id_of(i),
+            Selection::Hole(i)
+            | Selection::Post(i)
+            | Selection::Feature(i)
+            | Selection::Pattern(i) => id_of(i),
             Selection::Screw(k) => Highlight::Screw(k),
             _ => Highlight::Nothing,
         }
@@ -1007,6 +1040,9 @@ impl Window {
                     },
                 },
             ],
+            (Selection::Pattern(_), Some(Operation::AddPattern { pattern, .. })) => {
+                self.pattern_fields(pattern, writable)
+            }
             (Selection::Edging(_), Some(Operation::SetEdging(edging))) => {
                 let mut out = Vec::new();
                 for index in 0..3 {
@@ -1081,6 +1117,96 @@ impl Window {
             }
             _ => Vec::new(),
         }
+    }
+
+    /// The fields of a pattern: the seed (the first hole or post), how the positions follow from
+    /// it and how many there are.
+    fn pattern_fields(&self, pattern: &PatternOp, writable: bool) -> Vec<Field> {
+        let text_field = |key: Key, label: Msg, text: String| Field {
+            key,
+            label,
+            text,
+            note: String::new(),
+            input: Input::Text,
+            editable: writable,
+        };
+        let mut out = vec![text_field(
+            Key::Name,
+            Msg::FieldName,
+            pattern.name().to_string(),
+        )];
+        match &pattern.seed {
+            Seed::Hole(hole) => {
+                out.push(Field {
+                    key: Key::Face,
+                    label: Msg::FieldFace,
+                    text: hole.face.name().to_string(),
+                    note: String::new(),
+                    input: Input::Choice(face_choices()),
+                    editable: writable,
+                });
+                out.push(self.length_field(Key::U, Msg::FieldU, hole.u, writable));
+                out.push(self.length_field(Key::V, Msg::FieldV, hole.v, writable));
+                out.push(self.length_field(
+                    Key::Diameter,
+                    Msg::FieldDiameter,
+                    hole.diameter,
+                    writable,
+                ));
+            }
+            Seed::Post(post) => {
+                for (key, label, value) in [
+                    (Key::PostX, Msg::FieldPostX, post.x),
+                    (Key::PostY, Msg::FieldPostY, post.y),
+                    (Key::PostOuter, Msg::FieldPostOuter, post.outer_diameter),
+                    (Key::PostHeight, Msg::FieldPostHeight, post.height),
+                    (
+                        Key::BoreDiameter,
+                        Msg::FieldBoreDiameter,
+                        post.bore_diameter,
+                    ),
+                    (Key::BoreDepth, Msg::FieldBoreDepth, post.bore_depth),
+                ] {
+                    out.push(self.length_field(key, label, value, writable));
+                }
+            }
+        }
+        let word = match pattern.layout {
+            Layout::Linear { .. } => "linear",
+            Layout::Circular { .. } => "circular",
+        };
+        out.push(Field {
+            key: Key::PatternLayout,
+            label: Msg::FieldLayout,
+            text: word.to_string(),
+            note: String::new(),
+            input: Input::Choice(vec![
+                ("linear", Msg::LayoutLinear),
+                ("circular", Msg::LayoutCircular),
+            ]),
+            editable: writable,
+        });
+        out.push(text_field(
+            Key::PatternCount,
+            Msg::FieldCount,
+            pattern.layout.count().get().to_string(),
+        ));
+        match pattern.layout {
+            Layout::Linear { step, .. } => {
+                out.push(self.length_field(Key::StepU, Msg::FieldStepU, step.0, writable));
+                out.push(self.length_field(Key::StepV, Msg::FieldStepV, step.1, writable));
+            }
+            Layout::Circular { center, step, .. } => {
+                out.push(self.length_field(Key::CenterU, Msg::FieldCenterU, center.0, writable));
+                out.push(self.length_field(Key::CenterV, Msg::FieldCenterV, center.1, writable));
+                out.push(text_field(
+                    Key::StepAngle,
+                    Msg::FieldStepAngle,
+                    format_angle(step),
+                ));
+            }
+        }
+        out
     }
 
     fn refresh_fields(&mut self) {
@@ -1180,6 +1306,10 @@ impl Window {
                 id: *id,
                 post: self.edited_post(post, key, text)?,
             }),
+            Operation::AddPattern { id, pattern } => Ok(Operation::AddPattern {
+                id: *id,
+                pattern: self.edited_pattern(pattern, key, text)?,
+            }),
             Operation::SetEdging(edging) => {
                 Ok(Operation::SetEdging(self.edited_edging(edging, key, text)?))
             }
@@ -1205,6 +1335,93 @@ impl Window {
                 },
             }),
             _ => Err(refusal()),
+        }
+    }
+
+    /// A pattern after an edit of the field `key`: a field of the seed, or of the layout.
+    fn edited_pattern(
+        &self,
+        pattern: &PatternOp,
+        key: Key,
+        text: &str,
+    ) -> Result<PatternOp, CadError> {
+        let mut p = pattern.clone();
+        match key {
+            Key::PatternLayout => p.layout = self.switched_layout(pattern, text.trim())?,
+            Key::PatternCount => {
+                let n = text
+                    .trim()
+                    .parse::<i64>()
+                    .map_err(|_| CadError::ValueOutOfRange("count"))?;
+                let count = Count::new(n)?;
+                match &mut p.layout {
+                    Layout::Linear { count: c, .. } | Layout::Circular { count: c, .. } => {
+                        *c = count;
+                    }
+                }
+            }
+            Key::StepU | Key::StepV => match &mut p.layout {
+                Layout::Linear { step, .. } => {
+                    let length = self.parse_text(text)?;
+                    if key == Key::StepU {
+                        step.0 = length;
+                    } else {
+                        step.1 = length;
+                    }
+                }
+                Layout::Circular { .. } => return Err(refusal()),
+            },
+            Key::CenterU | Key::CenterV => match &mut p.layout {
+                Layout::Circular { center, .. } => {
+                    let length = self.parse_text(text)?;
+                    if key == Key::CenterU {
+                        center.0 = length;
+                    } else {
+                        center.1 = length;
+                    }
+                }
+                Layout::Linear { .. } => return Err(refusal()),
+            },
+            Key::StepAngle => match &mut p.layout {
+                Layout::Circular { step, .. } => *step = parse_angle(text)?,
+                Layout::Linear { .. } => return Err(refusal()),
+            },
+            _ => {
+                p.seed = match &pattern.seed {
+                    Seed::Hole(hole) => Seed::Hole(self.edited_hole(hole, key, text)?),
+                    Seed::Post(post) => Seed::Post(self.edited_post(post, key, text)?),
+                }
+            }
+        }
+        Ok(p)
+    }
+
+    /// The layout a pattern gets when it is changed to `kind` (`linear` or `circular`): a line
+    /// starts with the step of the settings, a circle with its centre the radius of the settings
+    /// away from the seed along both axes and the angle of the settings. The count stays.
+    fn switched_layout(&self, pattern: &PatternOp, kind: &str) -> Result<Layout, CadError> {
+        let count = pattern.layout.count();
+        let d = &self.ui.new_step;
+        match (kind, pattern.layout) {
+            ("linear", Layout::Linear { .. }) | ("circular", Layout::Circular { .. }) => {
+                Ok(pattern.layout)
+            }
+            ("linear", Layout::Circular { .. }) => Ok(Layout::Linear {
+                step: (d.pattern_step, Length::ZERO),
+                count,
+            }),
+            ("circular", Layout::Linear { .. }) => {
+                let (a, b) = pattern.seed_position();
+                Ok(Layout::Circular {
+                    center: (
+                        a.checked_add(d.pattern_radius)?,
+                        b.checked_add(d.pattern_radius)?,
+                    ),
+                    step: d.pattern_angle,
+                    count,
+                })
+            }
+            _ => Err(CadError::Reference(kind.to_string())),
         }
     }
 
@@ -1530,7 +1747,9 @@ impl Window {
                 | Operation::RemovePost { id }
                 | Operation::Extrude { id, .. }
                 | Operation::Pocket { id, .. }
-                | Operation::RemoveFeature { id } => ids.push(*id),
+                | Operation::RemoveFeature { id }
+                | Operation::RemovePattern { id } => ids.push(*id),
+                Operation::AddPattern { id, pattern } => ids.extend(pattern.instance_ids(*id)),
                 Operation::AddPost { id, post } | Operation::ReplacePost { id, post } => {
                     ids.push(*id);
                     ids.extend(post.board_hole);
@@ -1620,6 +1839,66 @@ impl Window {
                     name,
                 ))
             }
+            NewStep::HolePattern | NewStep::PostPattern => {
+                let is_hole = kind == NewStep::HolePattern;
+                let count = self
+                    .mech
+                    .steps
+                    .iter()
+                    .filter(|s| match &s.op {
+                        Operation::AddPattern { pattern, .. } => {
+                            matches!(pattern.seed, Seed::Hole(_)) == is_hole
+                        }
+                        _ => false,
+                    })
+                    .count();
+                let n = (count + 1).to_string();
+                let (msg, seed) = if is_hole {
+                    let name = fill(Msg::NameHolePattern.tr(self.lang), &[&n]);
+                    (
+                        name.clone(),
+                        Seed::Hole(Hole {
+                            name,
+                            face: d.hole_face,
+                            u: d.hole_u.checked_add(shift)?,
+                            v: d.hole_v,
+                            diameter: d.hole_diameter,
+                            style: HoleStyle::Plain,
+                        }),
+                    )
+                } else {
+                    let name = fill(Msg::NamePostPattern.tr(self.lang), &[&n]);
+                    (
+                        name.clone(),
+                        Seed::Post(Post {
+                            name,
+                            board_hole: None,
+                            x: d.post_x.checked_add(shift)?,
+                            y: d.post_y,
+                            outer_diameter: d.post_outer,
+                            height: d.post_height,
+                            kind: d.post_kind,
+                            bore_diameter: d.post_bore_diameter,
+                            bore_depth: d.post_bore_depth,
+                            base: None,
+                        }),
+                    )
+                };
+                let pattern = PatternOp {
+                    seed,
+                    layout: Layout::Linear {
+                        step: (d.pattern_step, Length::ZERO),
+                        count: Count::new(i64::from(d.pattern_count))?,
+                    },
+                };
+                Ok((
+                    Operation::AddPattern {
+                        id: self.fresh_id()?,
+                        pattern,
+                    },
+                    msg,
+                ))
+            }
             NewStep::Extrude | NewStep::Pocket => {
                 let sketch = self
                     .active_sketch
@@ -1691,7 +1970,9 @@ impl Window {
     fn step_addition(&mut self, kind: NewStep) -> Result<(), CadError> {
         let tries = match kind {
             NewStep::Edging | NewStep::Extrude | NewStep::Pocket => 1,
-            NewStep::Hole | NewStep::Post => self.ui.new_step.tries,
+            NewStep::Hole | NewStep::Post | NewStep::HolePattern | NewStep::PostPattern => {
+                self.ui.new_step.tries
+            }
         };
         let mut last = refusal();
         for attempt in 0..tries {
@@ -4291,5 +4572,273 @@ mod tests {
         w.report_copied();
         assert_eq!(w.status.text(Lang::En), "Report copied to the clipboard");
         assert!(!w.status.is_problem());
+    }
+
+    fn pattern_of(w: &Window, index: usize) -> PatternOp {
+        match &w.mech.steps[index].op {
+            Operation::AddPattern { pattern, .. } => pattern.clone(),
+            other => panic!("not a pattern: {other:?}"),
+        }
+    }
+
+    /// The positions of the holes of the enclosure, in millimetres, in the order of their names.
+    fn hole_places(w: &Window) -> Vec<(String, f64, f64)> {
+        let mut out: Vec<(String, f64, f64)> = w
+            .enclosure()
+            .holes()
+            .values()
+            .map(|h| {
+                (
+                    h.name.clone(),
+                    h.u.get() as f64 / 1e6,
+                    h.v.get() as f64 / 1e6,
+                )
+            })
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    #[test]
+    fn a_pattern_of_holes_is_added_from_the_settings_and_shows_in_its_own_group_of_the_tree() {
+        let mut w = fresh();
+        w.add_step(NewStep::HolePattern);
+        assert!(!problem(&w), "{:?}", w.status);
+        assert_eq!(w.mech.steps.len(), 1);
+        assert_eq!(w.selection, Selection::Pattern(0));
+        assert_eq!(w.mech.steps[0].name, "Hole pattern 1");
+        // four holes on the front face from (14, 15) mm, 10 mm apart
+        assert_eq!(
+            hole_places(&w),
+            vec![
+                ("Hole pattern 1 1".to_string(), 14.0, 15.0),
+                ("Hole pattern 1 2".to_string(), 24.0, 15.0),
+                ("Hole pattern 1 3".to_string(), 34.0, 15.0),
+                ("Hole pattern 1 4".to_string(), 44.0, 15.0),
+            ]
+        );
+        let groups = w.tree();
+        let group = groups
+            .iter()
+            .find(|g| g.title == Msg::GroupPatterns)
+            .unwrap();
+        assert_eq!(group.items.len(), 1);
+        assert_eq!(group.items[0].label, "Hole pattern 1");
+        assert_eq!(group.items[0].selection, Selection::Pattern(0));
+        // no group of single holes: the positions are not steps
+        assert!(groups.iter().all(|g| g.title != Msg::GroupHoles));
+        // the fields: name, face, u, v, diameter, layout, count and the two steps of a line
+        let keys: Vec<Key> = w.fields.iter().map(|f| f.key).collect();
+        assert_eq!(
+            keys,
+            vec![
+                Key::Name,
+                Key::Face,
+                Key::U,
+                Key::V,
+                Key::Diameter,
+                Key::PatternLayout,
+                Key::PatternCount,
+                Key::StepU,
+                Key::StepV
+            ]
+        );
+        assert_eq!(w.fields[field(&w, Key::PatternCount)].text, "4");
+        assert_eq!(w.fields[field(&w, Key::StepU)].text, "10.000 mm");
+        // the whole pattern is the selection that is drawn in its colour
+        let id = match &w.mech.steps[0].op {
+            Operation::AddPattern { id, .. } => *id,
+            _ => unreachable!(),
+        };
+        assert_eq!(w.highlight(), Highlight::Pattern(id));
+    }
+
+    #[test]
+    fn editing_a_pattern_builds_all_its_positions_again_and_a_refusal_changes_nothing() {
+        let mut w = fresh();
+        w.add_step(NewStep::HolePattern);
+        set(&mut w, Key::PatternCount, "6");
+        assert!(!problem(&w), "{:?}", w.status);
+        assert_eq!(w.enclosure().holes().len(), 6);
+        // the seed moves and the whole row follows: from 20 to 70 mm
+        set(&mut w, Key::U, "20 mm");
+        let places = hole_places(&w);
+        assert_eq!((places[0].1, places[5].1), (20.0, 70.0));
+        // 5 mm apart leaves 6 - 5 = -1 mm of web between holes of 6 mm: refused, and nothing moved
+        let before = w.mech.clone();
+        set(&mut w, Key::StepU, "5 mm");
+        assert!(problem(&w));
+        assert!(w.status.text(Lang::En).contains("PHOENIX-CAD-004"));
+        assert_eq!(w.mech, before);
+        // 8 mm apart leaves exactly the least web of 2 mm
+        set(&mut w, Key::StepU, "8 mm");
+        assert!(!problem(&w), "{:?}", w.status);
+        assert_eq!(hole_places(&w)[5].1, 60.0);
+        // one position is not a pattern, and a count that is not a number is refused
+        for text in ["1", "0", "-3", "many", "99999999999"] {
+            let before = w.mech.clone();
+            set(&mut w, Key::PatternCount, text);
+            assert!(problem(&w), "{text}");
+            assert_eq!(w.mech, before, "{text}");
+        }
+        assert!(w.status.text(Lang::En).contains("PHOENIX-CAD-007"));
+        set(&mut w, Key::PatternCount, "1");
+        assert!(w.status.text(Lang::En).contains("PHOENIX-CAD-042"));
+        // the face changes for every position
+        set(&mut w, Key::Face, "top");
+        assert!(w.enclosure().holes().values().all(|h| h.face == Face::Top));
+        // more than the settings allow is refused with the same code
+        let mut small = Settings::defaults();
+        small.design.pattern_max = 6;
+        let mut limited = Window::new(Lang::En, small, UiSettings::defaults()).unwrap();
+        limited.add_step(NewStep::HolePattern);
+        set(&mut limited, Key::PatternCount, "6");
+        assert!(!problem(&limited), "{:?}", limited.status);
+        set(&mut limited, Key::PatternCount, "7");
+        assert!(problem(&limited));
+        assert!(limited.status.text(Lang::En).contains("PHOENIX-CAD-042"));
+        assert_eq!(limited.enclosure().holes().len(), 6);
+    }
+
+    #[test]
+    fn a_line_becomes_a_circle_of_exact_positions_and_back() {
+        let mut w = fresh();
+        w.add_step(NewStep::HolePattern);
+        set(&mut w, Key::U, "20 mm");
+        // the circle of the settings: centre 5 mm from the seed along both axes, 90 degrees
+        set(&mut w, Key::PatternLayout, "circular");
+        assert!(!problem(&w), "{:?}", w.status);
+        let keys: Vec<Key> = w.fields.iter().map(|f| f.key).collect();
+        assert_eq!(
+            &keys[5..],
+            &[
+                Key::PatternLayout,
+                Key::PatternCount,
+                Key::CenterU,
+                Key::CenterV,
+                Key::StepAngle
+            ]
+        );
+        assert_eq!(w.fields[field(&w, Key::CenterU)].text, "25.000 mm");
+        assert_eq!(w.fields[field(&w, Key::StepAngle)].text, "90");
+        let places: Vec<(f64, f64)> = hole_places(&w).iter().map(|p| (p.1, p.2)).collect();
+        assert_eq!(
+            places,
+            vec![(20.0, 15.0), (30.0, 15.0), (30.0, 25.0), (20.0, 25.0)]
+        );
+        // 45 degrees puts the holes 5.4 mm apart: refused
+        let before = w.mech.clone();
+        set(&mut w, Key::StepAngle, "45");
+        assert!(problem(&w));
+        assert_eq!(w.mech, before);
+        // an angle that is not an angle is refused, and so is a field of the other layout
+        set(&mut w, Key::StepAngle, "round");
+        assert!(problem(&w));
+        assert_eq!(w.mech, before);
+        // the angle can be a fraction of a degree: 360 / 4 = 90 written as 360/4
+        set(&mut w, Key::StepAngle, "360/4");
+        assert_eq!(w.mech, before);
+        set(&mut w, Key::PatternLayout, "linear");
+        assert!(!problem(&w), "{:?}", w.status);
+        assert_eq!(w.fields[field(&w, Key::StepU)].text, "10.000 mm");
+        assert_eq!(w.fields[field(&w, Key::StepV)].text, "0.000 mm");
+        let one = pattern_of(&w, 0);
+        assert!(matches!(one.layout, Layout::Linear { .. }));
+        // and a layout that is neither is not one
+        set(&mut w, Key::PatternLayout, "spiral");
+        assert!(problem(&w));
+    }
+
+    #[test]
+    fn a_pattern_goes_back_with_undo_and_a_removal_takes_every_position() {
+        let mut w = fresh();
+        w.add_step(NewStep::HolePattern);
+        w.add_step(NewStep::PostPattern);
+        assert_eq!(w.selection, Selection::Pattern(1));
+        assert_eq!(w.enclosure().holes().len(), 4);
+        assert_eq!(w.enclosure().posts().len(), 4);
+        let names: Vec<String> = w
+            .enclosure()
+            .posts()
+            .values()
+            .map(|p| p.name.clone())
+            .collect();
+        assert!(names.contains(&"Post pattern 1 4".to_string()), "{names:?}");
+        // editing a post pattern: a different pillar and a longer row
+        set(&mut w, Key::PostOuter, "9 mm");
+        assert!(!problem(&w), "{:?}", w.status);
+        set(&mut w, Key::PatternCount, "5");
+        assert_eq!(w.enclosure().posts().len(), 5);
+        w.undo();
+        assert_eq!(w.enclosure().posts().len(), 4);
+        w.redo();
+        assert_eq!(w.enclosure().posts().len(), 5);
+        // removing the selected pattern takes its five posts and leaves the holes
+        w.remove_step();
+        assert!(!problem(&w), "{:?}", w.status);
+        assert!(w.enclosure().posts().is_empty());
+        assert_eq!(w.enclosure().holes().len(), 4);
+        assert_eq!(w.mech.steps.len(), 1);
+        w.undo();
+        assert_eq!(w.enclosure().posts().len(), 5);
+        // a second pattern of holes is named after the first
+        w.add_step(NewStep::HolePattern);
+        assert!(!problem(&w), "{:?}", w.status);
+        assert_eq!(w.mech.steps[2].name, "Hole pattern 2");
+        // the new pattern moved along by the pitch until nothing was in the way: 14, 26, 38 and 50
+        // are within the web of a hole of the first one (14, 24, 34 and 44), 62 is not
+        assert_eq!(pattern_of(&w, 2).seed_position().0, mm_len(62));
+        assert_eq!(w.enclosure().holes().len(), 8);
+    }
+
+    #[test]
+    fn a_single_hole_added_after_a_pattern_does_not_take_an_id_of_a_position() {
+        let mut w = fresh();
+        w.add_step(NewStep::PostPattern);
+        let before: Vec<Id> = w.enclosure().posts().keys().copied().collect();
+        // the row of the first four posts is at 10, 20, 30 and 40 mm: the next places that fit are
+        // 58, 70 and 82 mm
+        for _ in 0..3 {
+            w.add_step(NewStep::Post);
+        }
+        assert!(!problem(&w), "{:?}", w.status);
+        assert_eq!(w.enclosure().posts().len(), before.len() + 3);
+        for id in &before {
+            assert!(w.enclosure().posts().contains_key(id));
+        }
+        // and one position of a pattern cannot be removed on its own through the model
+        let any = *before.last().unwrap();
+        let mut e = w.enclosure().clone();
+        assert_eq!(
+            e.apply(Operation::RemovePost { id: any })
+                .unwrap_err()
+                .code(),
+            "PHOENIX-CAD-042"
+        );
+    }
+
+    #[test]
+    fn a_project_with_patterns_is_written_as_version_three_and_opens_the_same() {
+        let dir = Scratch::new("patterns");
+        let path = dir.0.join("vents.phoenixproj");
+        let mut w = fresh();
+        w.add_step(NewStep::HolePattern);
+        w.add_step(NewStep::PostPattern);
+        set(&mut w, Key::PatternLayout, "circular");
+        assert!(!problem(&w), "{:?}", w.status);
+        assert!(w.save_to(&path), "{:?}", w.status);
+        let bytes = std::fs::read(&path).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("mechanical 3\n"), "{text}");
+        assert!(text.contains(" add-pattern "));
+        let mut again = fresh();
+        assert!(again.open(&path), "{:?}", again.status);
+        assert_eq!(again.mech, w.mech);
+        assert_eq!(hole_places(&again), hole_places(&w));
+        assert_eq!(again.enclosure().posts().len(), 4);
+        // the same bytes when it is written again
+        let second = dir.0.join("again.phoenixproj");
+        assert!(again.save_to(&second));
+        assert_eq!(std::fs::read(&second).unwrap(), bytes);
     }
 }

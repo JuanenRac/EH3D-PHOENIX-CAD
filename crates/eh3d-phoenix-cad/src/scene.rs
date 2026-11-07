@@ -23,6 +23,8 @@ pub enum Highlight {
     Nothing,
     /// The hole or the post with this id.
     Object(Id),
+    /// Every hole or post made by the pattern with this id.
+    Pattern(Id),
     /// The screw hole of the lid with this position in the list of the lid holes.
     Screw(usize),
 }
@@ -412,8 +414,13 @@ pub fn scene_of(
         floor + inner[2],
         Kind::LidPlane,
     );
+    let picked = |id: &Id| match highlight {
+        Highlight::Object(h) => h == *id,
+        Highlight::Pattern(p) => enclosure.pattern_of(id) == Some(p),
+        _ => false,
+    };
     for (id, hole) in enclosure.holes() {
-        let kind = if highlight == Highlight::Object(*id) {
+        let kind = if picked(id) {
             Kind::Selected
         } else {
             Kind::Hole
@@ -429,7 +436,7 @@ pub fn scene_of(
         push_hole(&mut out, enclosure, hole, segments, kind);
     }
     for (id, post) in enclosure.posts() {
-        let kind = if highlight == Highlight::Object(*id) {
+        let kind = if picked(id) {
             Kind::Selected
         } else {
             Kind::Post
