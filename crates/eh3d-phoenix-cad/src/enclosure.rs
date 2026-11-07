@@ -19,7 +19,9 @@ use std::collections::BTreeMap;
 
 use eh3d_container::ObjectId;
 
+use crate::config::DesignLimits;
 use crate::mount::{lid_holes_of, Lid, Post};
+use crate::pattern::{PatternOp, Seed};
 use crate::profile::{Profile, ProfileLimits};
 use crate::sketch::Sketch;
 use crate::units::isqrt_u128;
@@ -527,6 +529,20 @@ pub enum Operation {
         /// The id of the feature.
         id: Id,
     },
+    /// Adds a pattern: a hole or a post repeated along a line or round a centre. Every position
+    /// becomes a hole or a post of its own, checked like one added by hand, and either all of them
+    /// are added or none. The id is the one of the first position; the others follow from it.
+    AddPattern {
+        /// The id of the pattern.
+        id: Id,
+        /// The seed and the layout.
+        pattern: PatternOp,
+    },
+    /// Removes a pattern and every hole or post it made.
+    RemovePattern {
+        /// The id of the pattern.
+        id: Id,
+    },
 }
 
 /// What a feature does to the box.
@@ -585,6 +601,9 @@ pub struct Enclosure {
     features: BTreeMap<Id, Feature>,
     sketches: Vec<Sketch>,
     limits: Option<ProfileLimits>,
+    patterns: BTreeMap<Id, PatternOp>,
+    pattern_members: BTreeMap<Id, Id>,
+    design: Option<DesignLimits>,
 }
 
 impl Enclosure {
@@ -600,7 +619,83 @@ impl Enclosure {
             features: BTreeMap::new(),
             sketches: Vec::new(),
             limits: None,
+            patterns: BTreeMap::new(),
+            pattern_members: BTreeMap::new(),
+            design: None,
         })
+    }
+
+    /// Gives the enclosure the limits of the operations that repeat things (the shipped ones when
+    /// there are none). Like the sketches they are the context the operations are applied in, not
+    /// part of them.
+    pub fn set_design_limits(&mut self, design: DesignLimits) {
+        self.design = Some(design);
+    }
+
+    fn design_limits(&self) -> DesignLimits {
+        self.design.unwrap_or_else(DesignLimits::shipped)
+    }
+
+    /// The patterns by id (ordered by id).
+    pub fn patterns(&self) -> &BTreeMap<Id, PatternOp> {
+        &self.patterns
+    }
+
+    /// The pattern a hole or a post belongs to, when it was made by one.
+    pub fn pattern_of(&self, id: &Id) -> Option<Id> {
+        self.pattern_members.get(id).copied()
+    }
+
+    /// Refuses a change to one position of a pattern: the pattern is edited as a whole.
+    fn not_in_a_pattern(&self, id: &Id) -> Result<(), CadError> {
+        if self.pattern_members.contains_key(id) {
+            return Err(CadError::Pattern(
+                "a position of a pattern is changed through the pattern".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Adds every position of a pattern, all or nothing.
+    fn add_pattern(&mut self, id: Id, pattern: PatternOp) -> Result<Operation, CadError> {
+        if self.patterns.contains_key(&id) || self.pattern_members.contains_key(&id) {
+            return Err(CadError::HoleId(id));
+        }
+        let operations = pattern.operations(id, self.design_limits().pattern_max)?;
+        self.apply_all(operations)?;
+        for member in pattern.instance_ids(id) {
+            self.pattern_members.insert(member, id);
+        }
+        self.patterns.insert(id, pattern);
+        Ok(Operation::RemovePattern { id })
+    }
+
+    /// Takes a pattern and every hole or post it made away.
+    fn remove_pattern(&mut self, id: Id) -> Result<Operation, CadError> {
+        let pattern = self.patterns.get(&id).ok_or(CadError::HoleId(id))?.clone();
+        let members = pattern.instance_ids(id);
+        let mut holes = self.holes.clone();
+        let mut posts = self.posts.clone();
+        for member in &members {
+            holes.remove(member);
+            posts.remove(member);
+        }
+        if matches!(pattern.seed, Seed::Post(_)) {
+            Self::check_state(
+                &self.params,
+                &self.edging,
+                &holes,
+                &posts,
+                self.lid.as_ref(),
+            )?;
+        }
+        self.holes = holes;
+        self.posts = posts;
+        for member in &members {
+            self.pattern_members.remove(member);
+        }
+        self.patterns.remove(&id);
+        Ok(Operation::AddPattern { id, pattern })
     }
 
     /// Gives the enclosure the sketches that its extrusions and pockets are made from and the
@@ -1076,11 +1171,15 @@ impl Enclosure {
                 self.holes.insert(id, hole);
                 Ok(Operation::RemoveHole { id })
             }
-            Operation::RemoveHole { id } => match self.holes.remove(&id) {
-                Some(hole) => Ok(Operation::AddHole { id, hole }),
-                None => Err(CadError::HoleId(id)),
-            },
+            Operation::RemoveHole { id } => {
+                self.not_in_a_pattern(&id)?;
+                match self.holes.remove(&id) {
+                    Some(hole) => Ok(Operation::AddHole { id, hole }),
+                    None => Err(CadError::HoleId(id)),
+                }
+            }
             Operation::ReplaceHole { id, hole } => {
+                self.not_in_a_pattern(&id)?;
                 let old = self.holes.get(&id).ok_or(CadError::HoleId(id))?.clone();
                 self.check_hole(&hole, Some(id))?;
                 self.check_floor_hole_against_posts(id, &hole)?;
@@ -1117,6 +1216,7 @@ impl Enclosure {
                 Ok(Operation::RemovePost { id })
             }
             Operation::RemovePost { id } => {
+                self.not_in_a_pattern(&id)?;
                 let mut posts = self.posts.clone();
                 let post = posts.remove(&id).ok_or(CadError::HoleId(id))?;
                 self.check_posts_and_lid(&posts, self.lid.as_ref())?;
@@ -1124,6 +1224,7 @@ impl Enclosure {
                 Ok(Operation::AddPost { id, post })
             }
             Operation::ReplacePost { id, post } => {
+                self.not_in_a_pattern(&id)?;
                 let old = self.posts.get(&id).ok_or(CadError::HoleId(id))?.clone();
                 let mut posts = self.posts.clone();
                 posts.insert(id, post);
@@ -1152,6 +1253,8 @@ impl Enclosure {
                 self.features.insert(id, feature);
                 Ok(Operation::RemoveFeature { id })
             }
+            Operation::AddPattern { id, pattern } => self.add_pattern(id, pattern),
+            Operation::RemovePattern { id } => self.remove_pattern(id),
             Operation::RemoveFeature { id } => {
                 let feature = self.features.remove(&id).ok_or(CadError::HoleId(id))?;
                 Ok(match feature.kind {

@@ -545,6 +545,19 @@ const TEXTS: &[Row] = &[
             "Exportação impossível",
         ],
     ),
+    (
+        "PHOENIX-CAD-042",
+        [
+            "Pattern not valid",
+            "Patrón no válido",
+            "Muster ungültig",
+            "Motif non valide",
+            "Schema non valido",
+            "パターンが無効です",
+            "阵列无效",
+            "Padrão inválido",
+        ],
+    ),
 ];
 
 /// The text of a diagnostic in a language (`en`, `es`, `de`, `fr`, `it`, `ja`, `zh` or `pt`), or

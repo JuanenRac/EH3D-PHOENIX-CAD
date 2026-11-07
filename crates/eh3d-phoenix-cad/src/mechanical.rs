@@ -22,8 +22,11 @@
 //! Version 1 holds the steps above. Version 2 adds the steps `extrude`, `pocket` and
 //! `remove-feature`, which refer to a sketch of the project by its name; a recipe that has none of
 //! them is still written as version 1, so a project without extrusions or pockets opens in the
-//! programs that only know version 1. The sketches are not in this domain: they have their own
-//! domain, `sketch` (see [`crate::sketch::domain`]).
+//! programs that only know version 1. Version 3 adds the steps `add-pattern` and `remove-pattern`
+//! (a hole or a post repeated along a line or round a centre); a recipe with one of them is
+//! written as version 3, one with only the steps of version 2 as version 2 and one with neither
+//! as version 1, so every project that did not use the newer steps keeps its bytes. The sketches
+//! are not in this domain: they have their own domain, `sketch` (see [`crate::sketch::domain`]).
 
 use std::collections::BTreeSet;
 use std::str::FromStr;
@@ -31,14 +34,16 @@ use std::str::FromStr;
 use eh3d_container::ObjectId;
 
 use crate::body::{Body, Built, Step};
-use crate::config::MechanicalLimits;
+use crate::config::{DesignLimits, MechanicalLimits};
 use crate::enclosure::{Edging, EnclosureParams, Face, Hole, HoleStyle, Id, Operation, Treatment};
 use crate::expr::{Constants, ExprLimits};
 use crate::mount::{Base, BoardHole, BoardInterface, BoreKind, Lid, LidFixing, Lip, Post};
 use crate::parametric::ParamModel;
+use crate::pattern::{Layout, PatternOp, Seed};
 use crate::profile::ProfileLimits;
 use crate::project::{parameters_from_bytes, parameters_to_bytes, Document, PARAMETERS_DOMAIN};
 use crate::sketch::{check_sketch_name, Sketch};
+use crate::units::{Angle, Count};
 use crate::vars::{Param, Variables};
 use crate::{CadError, Length};
 
@@ -46,9 +51,9 @@ use crate::{CadError, Length};
 pub const MECHANICAL_DOMAIN: &str = "mechanical";
 
 /// The newest version of the text of the domain that this program writes and reads.
-pub const DOMAIN_VERSION: u32 = 2;
+pub const DOMAIN_VERSION: u32 = 3;
 
-/// The version of a recipe that has no extrusion and no pocket.
+/// The version of a recipe that has no extrusion, no pocket and no pattern.
 pub const FIRST_VERSION: u32 = 1;
 
 /// The recipe of an enclosure as the project file keeps it.
@@ -454,16 +459,103 @@ fn operation_words(op: &Operation, limits: &MechanicalLimits) -> Result<Vec<Stri
             words.push("remove-feature".to_string());
             words.push(id.to_string());
         }
+        Operation::AddPattern { id, pattern } => {
+            words.push("add-pattern".to_string());
+            words.push(id.to_string());
+            match &pattern.seed {
+                Seed::Hole(hole) => {
+                    words.push("hole".to_string());
+                    words.extend(hole_words(hole, limits)?);
+                }
+                Seed::Post(post) => {
+                    words.push("post".to_string());
+                    words.extend(post_words(post, limits)?);
+                }
+            }
+            words.push(layout_word(&pattern.layout));
+        }
+        Operation::RemovePattern { id } => {
+            words.push("remove-pattern".to_string());
+            words.push(id.to_string());
+        }
     }
     Ok(words)
 }
 
-/// Whether a step needs version 2 of the domain.
-fn needs_version_two(op: &Operation) -> bool {
-    matches!(
-        op,
-        Operation::Extrude { .. } | Operation::Pocket { .. } | Operation::RemoveFeature { .. }
-    )
+/// The layout of a pattern as one word: `linear:<du>:<dv>:<count>` or
+/// `circular:<cu>:<cv>:<nano-degrees>:<count>`.
+fn layout_word(layout: &Layout) -> String {
+    match layout {
+        Layout::Linear { step, count } => {
+            format!("linear:{}:{}:{}", step.0.get(), step.1.get(), count.get())
+        }
+        Layout::Circular {
+            center,
+            step,
+            count,
+        } => format!(
+            "circular:{}:{}:{}:{}",
+            center.0.get(),
+            center.1.get(),
+            step.get(),
+            count.get()
+        ),
+    }
+}
+
+fn count_value(word: &str) -> Result<Count, CadError> {
+    let n = count_of(word, "count of a pattern")?;
+    Count::new(i64::try_from(n).map_err(|_| bad("the count of a pattern is too large"))?)
+        .map_err(|_| bad("the count of a pattern is too large"))
+}
+
+fn layout_of(word: &str) -> Result<Layout, CadError> {
+    let parts: Vec<&str> = word.split(':').collect();
+    match parts.as_slice() {
+        ["linear", du, dv, count] => Ok(Layout::Linear {
+            step: (
+                length_of(du, "step of a pattern")?,
+                length_of(dv, "step of a pattern")?,
+            ),
+            count: count_value(count)?,
+        }),
+        ["circular", cu, cv, angle, count] => {
+            let ndeg = angle
+                .parse::<i64>()
+                .ok()
+                .filter(|v| v.to_string() == *angle)
+                .ok_or_else(|| bad("the angle of a pattern is not a whole number"))?;
+            Ok(Layout::Circular {
+                center: (
+                    length_of(cu, "centre of a pattern")?,
+                    length_of(cv, "centre of a pattern")?,
+                ),
+                step: Angle::new(ndeg)
+                    .map_err(|_| bad("the angle of a pattern is out of range"))?,
+                count: count_value(count)?,
+            })
+        }
+        _ => Err(bad("the layout of a pattern is not understood")),
+    }
+}
+
+/// The version of the domain a step needs: 3 for a pattern, 2 for an extrusion or a pocket and
+/// 1 for the rest.
+fn step_version(op: &Operation) -> u32 {
+    match op {
+        Operation::AddPattern { .. } | Operation::RemovePattern { .. } => 3,
+        Operation::Extrude { .. } | Operation::Pocket { .. } | Operation::RemoveFeature { .. } => 2,
+        _ => FIRST_VERSION,
+    }
+}
+
+/// The version a list of steps is written in: the newest of the versions its steps need.
+fn recipe_version(steps: &[Step]) -> u32 {
+    steps
+        .iter()
+        .map(|s| step_version(&s.op))
+        .max()
+        .unwrap_or(FIRST_VERSION)
 }
 
 /// The name of a sketch as a word of a step: the same letters, digits, `_` and `-` as a sketch
@@ -545,6 +637,21 @@ fn operation_of(words: &[&str], limits: &MechanicalLimits) -> Result<Operation, 
             },
         }),
         ["remove-feature", id] => Ok(Operation::RemoveFeature { id: id_of(id)? }),
+        ["add-pattern", id, "hole", rest @ ..] if rest.len() == 7 => Ok(Operation::AddPattern {
+            id: id_of(id)?,
+            pattern: PatternOp {
+                seed: Seed::Hole(hole_of(&rest[..6], limits)?),
+                layout: layout_of(rest[6])?,
+            },
+        }),
+        ["add-pattern", id, "post", rest @ ..] if rest.len() == 11 => Ok(Operation::AddPattern {
+            id: id_of(id)?,
+            pattern: PatternOp {
+                seed: Seed::Post(post_of(&rest[..10], limits)?),
+                layout: layout_of(rest[10])?,
+            },
+        }),
+        ["remove-pattern", id] => Ok(Operation::RemovePattern { id: id_of(id)? }),
         _ => Err(bad("a step is not understood")),
     }
 }
@@ -727,14 +834,10 @@ impl Mechanical {
         }
     }
 
-    /// The version of the text this recipe is written in: 2 when a step is an extrusion, a pocket
-    /// or the removal of one, else 1.
+    /// The version of the text this recipe is written in: 3 when a step is a pattern or the
+    /// removal of one, else 2 when a step is an extrusion, a pocket or the removal of one, else 1.
     pub fn version(&self) -> u32 {
-        if self.steps.iter().any(|s| needs_version_two(&s.op)) {
-            DOMAIN_VERSION
-        } else {
-            FIRST_VERSION
-        }
+        recipe_version(&self.steps)
     }
 
     /// Puts a sketch in the project, replacing the one of the same name.
@@ -769,8 +872,20 @@ impl Mechanical {
         limits: &ExprLimits,
         profiles: Option<ProfileLimits>,
     ) -> Result<Built, CadError> {
+        self.build_with_limits(constants, limits, profiles, None)
+    }
+
+    /// Like [`Mechanical::build_with`], with the limits of the operations that repeat things
+    /// (the shipped ones when there are none).
+    pub fn build_with_limits(
+        &self,
+        constants: &Constants,
+        limits: &ExprLimits,
+        profiles: Option<ProfileLimits>,
+        design: Option<DesignLimits>,
+    ) -> Result<Built, CadError> {
         self.body(constants, limits)?
-            .build_with(&self.sketches, profiles)
+            .build_with_limits(&self.sketches, profiles, design)
     }
 
     /// Takes the steps and the tip of a body that was edited (its base comes from the parameters).
@@ -872,14 +987,16 @@ impl Mechanical {
         } else {
             None
         };
-        let uses_two = recipe.iter().any(|s| needs_version_two(&s.op));
-        if uses_two && version < DOMAIN_VERSION {
-            return Err(bad("a step of version 2 is in a domain of version 1"));
+        let needed = recipe_version(&recipe);
+        if needed > version {
+            return Err(bad(&format!(
+                "a step of version {needed} is in a domain of version {version}"
+            )));
         }
-        if !uses_two && version > FIRST_VERSION {
-            return Err(bad(
-                "the domain says version 2 and has no step that needs it",
-            ));
+        if needed < version {
+            return Err(bad(&format!(
+                "the domain says version {version} and has no step that needs it"
+            )));
         }
         Ok(Mechanical {
             model,
@@ -2058,11 +2175,11 @@ hole 018bcfe5-6800-7004-8000-000000000004 H4 55000000 35000000 3200000\n";
     #[test]
     fn a_domain_of_a_newer_version_is_neither_read_nor_overwritten() {
         let s = settings();
-        let future = b"mechanical 3\nwhatever \xff comes next\n".to_vec();
+        let future = b"mechanical 4\nwhatever \xff comes next\n".to_vec();
         let mut d = Document::new();
         d.set(MECHANICAL_DOMAIN, true, future.clone()).unwrap();
         d.set("notes", false, b"x".to_vec()).unwrap();
-        assert_eq!(d.mechanical_version().unwrap(), Some(3));
+        assert_eq!(d.mechanical_version().unwrap(), Some(4));
         let err = d.mechanical(&s.expr, &s.mechanical).unwrap_err();
         assert_eq!(err.code(), "PHOENIX-CAD-018");
         assert!(err.to_string().contains("newer version"), "{err}");
@@ -2334,9 +2451,9 @@ mod feature_tests {
     fn a_future_version_is_neither_read_nor_overwritten() {
         let s = Settings::defaults();
         let mut d = Document::new();
-        let future = b"mechanical 3\nwhatever\n".to_vec();
+        let future = b"mechanical 4\nwhatever\n".to_vec();
         d.set(MECHANICAL_DOMAIN, true, future.clone()).unwrap();
-        assert_eq!(d.mechanical_version().unwrap(), Some(3));
+        assert_eq!(d.mechanical_version().unwrap(), Some(4));
         assert!(d.mechanical(&s.expr, &s.mechanical).is_err());
         assert!(d.set_mechanical(&with_features(), &s.mechanical).is_err());
         assert_eq!(d.get(MECHANICAL_DOMAIN).unwrap().data, future);
@@ -2400,5 +2517,206 @@ mod feature_tests {
         again.set_mechanical(&plain, &s.mechanical).unwrap();
         again.set_sketches(&[], &k).unwrap();
         assert_eq!(again.to_bytes(), old_bytes);
+    }
+    fn with_patterns() -> Mechanical {
+        use crate::pattern::{Layout, PatternOp, Seed};
+        use crate::units::{Angle, Count};
+        let mut m = Mechanical::new(ParamModel::new(base()).unwrap(), Variables::new());
+        m.steps.push(step(
+            "vents",
+            Operation::AddPattern {
+                id: id(1),
+                pattern: PatternOp {
+                    seed: Seed::Hole(Hole {
+                        name: "vent".into(),
+                        face: Face::Top,
+                        u: mm(20),
+                        v: mm(30),
+                        diameter: mm(4),
+                        style: HoleStyle::Plain,
+                    }),
+                    layout: Layout::Linear {
+                        step: (mm(10), Length::ZERO),
+                        count: Count::new(6).unwrap(),
+                    },
+                },
+            },
+        ));
+        m.steps.push(step(
+            "ring",
+            Operation::AddPattern {
+                id: id(2),
+                pattern: PatternOp {
+                    seed: Seed::Post(Post {
+                        name: "pillar".into(),
+                        board_hole: None,
+                        x: mm(62),
+                        y: mm(30),
+                        outer_diameter: mm(8),
+                        height: mm(6),
+                        kind: BoreKind::Insert,
+                        bore_diameter: Length::new(4_200_000).unwrap(),
+                        bore_depth: mm(5),
+                        base: None,
+                    }),
+                    layout: Layout::Circular {
+                        center: (mm(50), mm(30)),
+                        step: Angle::from_deg(90).unwrap(),
+                        count: Count::new(4).unwrap(),
+                    },
+                },
+            },
+        ));
+        m.steps
+            .push(step("no ring", Operation::RemovePattern { id: id(2) }));
+        m.tip = m.steps.len();
+        m
+    }
+
+    #[test]
+    fn patterns_are_steps_of_version_three_with_a_golden_text() {
+        let s = Settings::defaults();
+        let m = with_patterns();
+        assert_eq!(m.version(), 3);
+        let text = String::from_utf8(m.to_bytes(&s.mechanical).unwrap()).unwrap();
+        assert!(text.starts_with("mechanical 3\n[parameters]\n"));
+        let steps = text.split("[steps]\n").nth(1).unwrap();
+        let expect = format!(
+            "tip 3\n\
+             step 0 vents add-pattern {a} hole vent top 20000000 30000000 4000000 plain linear:10000000:0:6\n\
+             step 0 ring add-pattern {b} post pillar - 62000000 30000000 8000000 6000000 insert 4200000 5000000 none circular:50000000:30000000:90000000000:4\n\
+             step 0 no%20ring remove-pattern {b}\n",
+            a = id(1),
+            b = id(2)
+        );
+        assert_eq!(steps, expect);
+        let read = Mechanical::from_bytes(text.as_bytes(), &s.expr, &s.mechanical).unwrap();
+        assert_eq!(read, m);
+        assert_eq!(read.to_bytes(&s.mechanical).unwrap(), text.as_bytes());
+        // through a project file with a domain of another tool around it
+        let mut d = Document::new();
+        d.set("from-another-tool", false, vec![1, 2, 3]).unwrap();
+        d.set_mechanical(&m, &s.mechanical).unwrap();
+        assert_eq!(d.mechanical_version().unwrap(), Some(3));
+        let bytes = d.to_bytes();
+        let back = Document::from_bytes(&bytes, 1 << 24).unwrap();
+        assert_eq!(
+            back.mechanical(&s.expr, &s.mechanical).unwrap(),
+            Some(m.clone())
+        );
+        assert_eq!(back.to_bytes(), bytes);
+    }
+
+    #[test]
+    fn the_version_follows_the_newest_step_and_old_recipes_keep_their_bytes() {
+        let s = Settings::defaults();
+        // a recipe with a pattern and an extrusion is version 3; without the pattern it is 2
+        let mut both = with_features();
+        both.steps.extend(with_patterns().steps);
+        both.tip = both.steps.len();
+        assert_eq!(both.version(), 3);
+        let mut only_features = both.clone();
+        only_features.steps.truncate(4);
+        only_features.tip = 4;
+        assert_eq!(only_features.version(), 2);
+        assert_eq!(only_features, {
+            let mut f = with_features();
+            f.tip = 4;
+            f
+        });
+        // and one with neither is the version 1 it always was
+        let mut plain = with_patterns();
+        plain.steps.clear();
+        plain.tip = 0;
+        assert_eq!(plain.version(), 1);
+        let text = String::from_utf8(plain.to_bytes(&s.mechanical).unwrap()).unwrap();
+        assert!(text.starts_with("mechanical 1\n"));
+        assert!(!text.contains("pattern"));
+        // the version and the steps have to agree, both ways, for every version
+        let three = String::from_utf8(both.to_bytes(&s.mechanical).unwrap()).unwrap();
+        let parse = |t: &str| Mechanical::from_bytes(t.as_bytes(), &s.expr, &s.mechanical);
+        let e = parse(&three.replacen("mechanical 3", "mechanical 2", 1)).unwrap_err();
+        assert_eq!(e.code(), "PHOENIX-CAD-018");
+        assert!(
+            e.to_string()
+                .contains("version 3 is in a domain of version 2"),
+            "{e}"
+        );
+        let two = String::from_utf8(only_features.to_bytes(&s.mechanical).unwrap()).unwrap();
+        let e = parse(&two.replacen("mechanical 2", "mechanical 3", 1)).unwrap_err();
+        assert!(
+            e.to_string()
+                .contains("version 3 and has no step that needs it"),
+            "{e}"
+        );
+        assert!(parse(&three).is_ok());
+    }
+
+    #[test]
+    fn a_pattern_that_is_not_written_in_the_one_form_is_refused() {
+        let s = Settings::defaults();
+        let m = with_patterns();
+        let good = String::from_utf8(m.to_bytes(&s.mechanical).unwrap()).unwrap();
+        let parse = |t: &str| Mechanical::from_bytes(t.as_bytes(), &s.expr, &s.mechanical);
+        let hole = "hole vent top 20000000 30000000 4000000 plain linear:10000000:0:6";
+        for bad in [
+            "hole vent top 20000000 30000000 4000000 plain linear:10000000:0",
+            "hole vent top 20000000 30000000 4000000 plain linear:10000000:0:6:1",
+            "hole vent top 20000000 30000000 4000000 plain linear:10000000:0:06",
+            "hole vent top 20000000 30000000 4000000 plain linear:10000000:0:-6",
+            "hole vent top 20000000 30000000 4000000 plain linear:10000000:0:1000001",
+            "hole vent top 20000000 30000000 4000000 plain linear:1e7:0:6",
+            "hole vent top 20000000 30000000 4000000 plain line:10000000:0:6",
+            "hole vent top 20000000 30000000 4000000 plain circular:0:0:90:6:1",
+            "hole vent top 20000000 30000000 4000000 plain circular:0:0:090:6",
+            "hole vent top 20000000 30000000 4000000 plain circular:0:0:1000000000000000:6",
+            "hole vent top 20000000 30000000 4000000 linear:10000000:0:6",
+            "disc vent top 20000000 30000000 4000000 plain linear:10000000:0:6",
+            "hole linear:10000000:0:6",
+        ] {
+            let text = good.replace(hole, bad);
+            assert_ne!(text, good);
+            let e = parse(&text).unwrap_err();
+            assert_eq!(e.code(), "PHOENIX-CAD-018", "{bad}: {e}");
+        }
+        // the removal takes exactly one id
+        for bad in ["remove-pattern", "remove-pattern X"] {
+            let text = good.replace(&format!("remove-pattern {}", id(2)), bad);
+            assert!(parse(&text).is_err(), "{bad}");
+        }
+        // the same text with a different count is a different, valid recipe
+        let more = good.replace("linear:10000000:0:6", "linear:10000000:0:7");
+        assert_ne!(parse(&more).unwrap(), m);
+    }
+
+    #[test]
+    fn the_steps_of_a_pattern_build_the_holes_and_posts_and_a_removal_takes_them_out() {
+        let s = Settings::defaults();
+        let m = with_patterns();
+        let built = m.build(&s.constants, &s.expr).unwrap();
+        assert_eq!(built.states, vec![StepState::Valid; 3]);
+        let e = &built.enclosure;
+        assert_eq!(e.holes().len(), 6);
+        assert!(
+            e.posts().is_empty(),
+            "the ring was removed by the last step"
+        );
+        // up to the second step the ring is there
+        let mut early = m.clone();
+        early.tip = 2;
+        let built = early.build(&s.constants, &s.expr).unwrap();
+        assert_eq!(built.enclosure.posts().len(), 4);
+        assert_eq!(built.states[2], StepState::AfterTip);
+        // a limit of the settings makes the step fail with the code of the pattern and the rest goes on
+        let tight = Settings::with_user_config("[pattern]\nmax_count = 5\n").unwrap();
+        let limited = m.clone();
+        let built = limited
+            .build_with_limits(&tight.constants, &tight.expr, None, Some(tight.design))
+            .unwrap();
+        match &built.states[0] {
+            StepState::Failed(e) => assert_eq!(e.code(), "PHOENIX-CAD-042"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(built.states[1], StepState::Valid);
     }
 }

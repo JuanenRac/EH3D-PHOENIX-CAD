@@ -80,6 +80,35 @@ impl MechanicalLimits {
     }
 }
 
+/// The limits of the operations that repeat things, read from the settings file (`[pattern]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DesignLimits {
+    /// The most positions of one pattern of holes or posts.
+    pub pattern_max: u32,
+}
+
+impl DesignLimits {
+    /// The most that any limit can be set to: a pattern is checked position by position against
+    /// the others, so the work grows with the square of the count.
+    pub const PATTERN_CAP: u32 = 10_000;
+
+    /// The limits of the shipped settings.
+    pub fn shipped() -> DesignLimits {
+        Settings::defaults().design
+    }
+
+    fn from_config(c: &Config) -> Result<DesignLimits, CadError> {
+        let pattern_max = c.number("pattern.max_count")?;
+        if !(2..=Self::PATTERN_CAP).contains(&pattern_max) {
+            return Err(CadError::Config(format!(
+                "pattern.max_count must be from 2 to {}",
+                Self::PATTERN_CAP
+            )));
+        }
+        Ok(DesignLimits { pattern_max })
+    }
+}
+
 /// A parsed settings file: values by `section.key`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Config {
@@ -273,6 +302,8 @@ pub struct Settings {
     pub expr: ExprLimits,
     /// The limits of the mechanical domain of the project file.
     pub mechanical: MechanicalLimits,
+    /// The limits of the operations that repeat things.
+    pub design: DesignLimits,
     /// The named values that expressions can use: the sizes of the screws, the compensation of the
     /// printer and the `[constants]` of the settings.
     pub constants: Constants,
@@ -548,6 +579,7 @@ impl Settings {
             c.number("mechanical.max_outline_points")?,
             c.number("mechanical.max_board_holes")?,
         )?;
+        let design = DesignLimits::from_config(c)?;
         let constants = build_constants(c, &screws, &printer, counterbore_extra, &expr)?;
         Ok(Settings {
             backups,
@@ -563,6 +595,7 @@ impl Settings {
             materials,
             expr,
             mechanical,
+            design,
             constants,
         })
     }
@@ -892,6 +925,17 @@ mod tests {
             err.to_string().contains("fixing.M99 has no screw.M99"),
             "{err}"
         );
+        for text in [
+            "[pattern]\nmax_count = 1\n",
+            "[pattern]\nmax_count = 10001\n",
+            "[pattern]\nmax_count = lots\n",
+        ] {
+            let err = Settings::with_user_config(text).unwrap_err();
+            assert_eq!(err.code(), "PHOENIX-CAD-011", "{text:?}: {err}");
+        }
+        assert_eq!(DesignLimits::shipped().pattern_max, 256);
+        let wide = Settings::with_user_config("[pattern]\nmax_count = 10000\n").unwrap();
+        assert_eq!(wide.design.pattern_max, DesignLimits::PATTERN_CAP);
         // the caps themselves are allowed
         let top = "[mechanical]\nmax_bytes = 268435456\nmax_steps = 1000000\nmax_name_bytes = 4096\nmax_outline_points = 1000000\nmax_board_holes = 100000\n";
         assert!(Settings::with_user_config(top).is_ok());

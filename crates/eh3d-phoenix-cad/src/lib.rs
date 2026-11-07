@@ -15,7 +15,7 @@
 //! * [`store`]: saving a file atomically with numbered copies, and loading a file under a size limit;
 //! * [`mass`]: the volume of the material and of the holes, the mass for a density, the centre of mass and the moments of inertia, in integers (pi as a ratio of twelve decimals);
 //! * [`mount`]: posts that rise from the floor (made from the mounting holes of a board, with a bore for an insert or a self-tapping screw and an optional foot) and a lid that is screwed onto them, with the checks of collisions and heights;
-//! * [`pattern`]: rows, grids and circles of holes with exact positions, and batches of operations that apply all or nothing;
+//! * [`pattern`]: rows, grids and circles of holes with exact positions, batches of operations that apply all or nothing, and the pattern as one step of the history (a hole or a post repeated along a line or round a centre, each position checked like a hole or a post of its own);
 //! * [`graph`]: the graph of dependencies between objects, with a deterministic order of calculation, refused cycles, a recalculation that reuses what did not change, and a Graphviz dump;
 //! * [`vars`]: named variables for the master dimensions, the binding of the parameters of an enclosure to them, and families of variants (small, medium, large);
 //! * [`expr`]: the language of expressions for the parameters (`2 * wall + 1 mm`, `if(width > 80 mm, 3 mm, 2 mm)`): exact rational numbers of 128 bits with checked overflow, units and angles, functions, limits read from the settings, and errors that say where;
@@ -272,6 +272,9 @@ pub enum CadError {
     /// sketch, the project that is open, a folder, a folder that does not exist, a text larger
     /// than the settings allow or a writing that failed.
     Export(String),
+    /// A pattern of holes or posts that is not valid: fewer than two positions, more than the
+    /// settings allow, a step of nothing, or a change to one position of a pattern.
+    Pattern(String),
 }
 
 impl CadError {
@@ -319,6 +322,7 @@ impl CadError {
             CadError::Drag(_) => "PHOENIX-CAD-039",
             CadError::ExportExists(_) => "PHOENIX-CAD-040",
             CadError::Export(_) => "PHOENIX-CAD-041",
+            CadError::Pattern(_) => "PHOENIX-CAD-042",
         }
     }
 }
@@ -373,7 +377,8 @@ impl fmt::Display for CadError {
             | CadError::Measure(why)
             | CadError::Drag(why)
             | CadError::ExportExists(why)
-            | CadError::Export(why) => write!(f, "{title}: {why}"),
+            | CadError::Export(why)
+            | CadError::Pattern(why) => write!(f, "{title}: {why}"),
         }
     }
 }
@@ -426,6 +431,7 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-039", "Drag not possible"),
     ("PHOENIX-CAD-040", "File exists and was not written over"),
     ("PHOENIX-CAD-041", "Export not possible"),
+    ("PHOENIX-CAD-042", "Pattern not valid"),
 ];
 
 #[cfg(test)]
@@ -620,6 +626,7 @@ mod tests {
             CadError::Drag("view".into()),
             CadError::ExportExists("a.scad".into()),
             CadError::Export("folder".into()),
+            CadError::Pattern("count".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));

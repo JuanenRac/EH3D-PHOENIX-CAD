@@ -9,6 +9,7 @@
 //! A [`Session`] edits a body in named transactions: all the changes of a transaction are undone
 //! together, and a transaction that fails leaves the body exactly as it was.
 
+use crate::config::DesignLimits;
 use crate::enclosure::{Enclosure, EnclosureParams, Operation};
 use crate::profile::ProfileLimits;
 use crate::sketch::Sketch;
@@ -162,9 +163,23 @@ impl Body {
         sketches: &[Sketch],
         limits: Option<ProfileLimits>,
     ) -> Result<Built, CadError> {
+        self.build_with_limits(sketches, limits, None)
+    }
+
+    /// Like [`Body::build_with`], with the limits of the operations that repeat things (the
+    /// shipped ones when there are none).
+    pub fn build_with_limits(
+        &self,
+        sketches: &[Sketch],
+        limits: Option<ProfileLimits>,
+        design: Option<DesignLimits>,
+    ) -> Result<Built, CadError> {
         let mut enclosure = Enclosure::new(self.base)?;
         if !sketches.is_empty() {
             enclosure.set_sketches(sketches.to_vec(), limits);
+        }
+        if let Some(design) = design {
+            enclosure.set_design_limits(design);
         }
         let mut states = Vec::with_capacity(self.steps.len());
         for (i, step) in self.steps.iter().enumerate() {
