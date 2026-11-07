@@ -7,6 +7,7 @@
 use std::fmt::Write as _;
 
 use crate::enclosure::{Enclosure, Face, Hole, HoleStyle, Treatment};
+use crate::fins::FinSet;
 use crate::mount::{Lid, Lip, Post};
 
 /// A length in nanometres as millimetres, with no trailing zeros: `1500000` is `1.5`.
@@ -384,10 +385,63 @@ fn lip_text(enclosure: &Enclosure, lid: &Lid, lip: &Lip) -> String {
 }
 
 /// What is added to the box after its holes are cut: the posts and the lip.
+/// The point of a face for a position `u`, `v` on it and a height `w` above it (outwards), in
+/// the frame of the script (the faces are seen from outside, `u` to the right and `v` up).
+fn face_point(enclosure: &Enclosure, face: Face, u: i64, v: i64, w: i64) -> [i64; 3] {
+    let (x, y, z) = enclosure.params().outer();
+    let (x, y, z) = (x.get(), y.get(), z.get());
+    match face {
+        Face::Front => [u, -w, v],
+        Face::Back => [x - u, y + w, v],
+        Face::Left => [-w, y - u, v],
+        Face::Right => [x + w, u, v],
+        Face::Top => [u, v, z + w],
+        Face::Bottom => [u, y - v, -w],
+    }
+}
+
+/// A set of cooling fins: one box for each fin, from a little inside the wall (so that the two
+/// solids overlap) to the height of the fin.
+fn fins_text(enclosure: &Enclosure, set: &FinSet) -> String {
+    let p = enclosure.params();
+    let thickness = match set.face {
+        Face::Front | Face::Back | Face::Left | Face::Right => p.wall.get(),
+        Face::Top => p.lid.get(),
+        Face::Bottom => p.floor.get(),
+    };
+    let sunk = thickness.min(1_000_000);
+    let height = set.height.get();
+    let mut out = String::new();
+    let _ = writeln!(out, "  // fins {}, {} face", set.name, set.face.name());
+    for r in set.rects() {
+        // the footprints are in nanometres doubled: halves are dropped
+        let (u0, u1) = (r.u0.div_euclid(2) as i64, r.u1.div_euclid(2) as i64);
+        let (v0, v1) = (r.v0.div_euclid(2) as i64, r.v1.div_euclid(2) as i64);
+        let a = face_point(enclosure, set.face, u0, v0, -sunk);
+        let b = face_point(enclosure, set.face, u1, v1, height);
+        let lo = [a[0].min(b[0]), a[1].min(b[1]), a[2].min(b[2])];
+        let hi = [a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])];
+        let _ = writeln!(
+            out,
+            "  translate([{}, {}, {}]) cube([{}, {}, {}]);",
+            mm_text(lo[0]),
+            mm_text(lo[1]),
+            mm_text(lo[2]),
+            mm_text(hi[0] - lo[0]),
+            mm_text(hi[1] - lo[1]),
+            mm_text(hi[2] - lo[2])
+        );
+    }
+    out
+}
+
 fn mounting_text(enclosure: &Enclosure) -> String {
     let mut out = String::new();
     for post in enclosure.posts().values() {
         out.push_str(&post_text(enclosure, post));
+    }
+    for set in enclosure.fins().values() {
+        out.push_str(&fins_text(enclosure, set));
     }
     if let Some(lid) = enclosure.lid() {
         if let Some(lip) = &lid.lip {

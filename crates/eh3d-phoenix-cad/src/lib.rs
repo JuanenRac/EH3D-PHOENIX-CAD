@@ -16,6 +16,7 @@
 //! * [`mass`]: the volume of the material and of the holes, the mass for a density, the centre of mass and the moments of inertia, in integers (pi as a ratio of twelve decimals);
 //! * [`mount`]: posts that rise from the floor (made from the mounting holes of a board, with a bore for an insert or a self-tapping screw and an optional foot) and a lid that is screwed onto them, with the checks of collisions and heights;
 //! * [`pattern`]: rows, grids and circles of holes with exact positions, batches of operations that apply all or nothing, and the pattern as one step of the history (a hole or a post repeated along a line or round a centre, each position checked like a hole or a post of its own);
+//! * [`fins`]: sets of cooling fins that rise from a face (how many, how thick, how tall, how far apart, where they start and how long they run), checked against the limits of the settings, the edges and the holes of the face and the other sets, and an estimate, marked as one, of the heat they give to still air from a coefficient of the settings;
 //! * [`graph`]: the graph of dependencies between objects, with a deterministic order of calculation, refused cycles, a recalculation that reuses what did not change, and a Graphviz dump;
 //! * [`vars`]: named variables for the master dimensions, the binding of the parameters of an enclosure to them, and families of variants (small, medium, large);
 //! * [`expr`]: the language of expressions for the parameters (`2 * wall + 1 mm`, `if(width > 80 mm, 3 mm, 2 mm)`): exact rational numbers of 128 bits with checked overflow, units and angles, functions, limits read from the settings, and errors that say where;
@@ -69,6 +70,7 @@ pub mod drag;
 pub mod enclosure;
 pub mod export;
 pub mod expr;
+pub mod fins;
 pub mod fit;
 pub mod graph;
 #[cfg(feature = "gui")]
@@ -103,6 +105,7 @@ pub use enclosure::{
     Edging, Enclosure, EnclosureParams, Face, Feature, FeatureKind, Hole, HoleStyle, Id, Operation,
     Treatment,
 };
+pub use fins::{FinAxis, FinSet};
 pub use fit::{check_fit, Envelope, FitReport};
 pub use mount::{Lid, LidFixing, Post};
 
@@ -275,6 +278,9 @@ pub enum CadError {
     /// A pattern of holes or posts that is not valid: fewer than two positions, more than the
     /// settings allow, a step of nothing, or a change to one position of a pattern.
     Pattern(String),
+    /// A set of cooling fins that does not fit: too many, too thin, too tall for their thickness,
+    /// too close together, outside the face, in the way of a hole or of another set.
+    Fins(String),
 }
 
 impl CadError {
@@ -323,6 +329,7 @@ impl CadError {
             CadError::ExportExists(_) => "PHOENIX-CAD-040",
             CadError::Export(_) => "PHOENIX-CAD-041",
             CadError::Pattern(_) => "PHOENIX-CAD-042",
+            CadError::Fins(_) => "PHOENIX-CAD-043",
         }
     }
 }
@@ -378,7 +385,8 @@ impl fmt::Display for CadError {
             | CadError::Drag(why)
             | CadError::ExportExists(why)
             | CadError::Export(why)
-            | CadError::Pattern(why) => write!(f, "{title}: {why}"),
+            | CadError::Pattern(why)
+            | CadError::Fins(why) => write!(f, "{title}: {why}"),
         }
     }
 }
@@ -432,6 +440,7 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-040", "File exists and was not written over"),
     ("PHOENIX-CAD-041", "Export not possible"),
     ("PHOENIX-CAD-042", "Pattern not valid"),
+    ("PHOENIX-CAD-043", "Cooling fins not valid"),
 ];
 
 #[cfg(test)]
@@ -627,6 +636,7 @@ mod tests {
             CadError::ExportExists("a.scad".into()),
             CadError::Export("folder".into()),
             CadError::Pattern("count".into()),
+            CadError::Fins("thickness".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));

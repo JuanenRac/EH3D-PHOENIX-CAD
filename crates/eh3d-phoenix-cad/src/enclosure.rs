@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 use eh3d_container::ObjectId;
 
 use crate::config::DesignLimits;
+use crate::fins::{FinContext, FinSet};
 use crate::mount::{lid_holes_of, Lid, Post};
 use crate::pattern::{PatternOp, Seed};
 use crate::profile::{Profile, ProfileLimits};
@@ -543,6 +544,19 @@ pub enum Operation {
         /// The id of the pattern.
         id: Id,
     },
+    /// Adds a set of cooling fins that rise outwards from a face. The fins are checked against the
+    /// edges of the face, the holes of the face and the other sets on it.
+    AddFins {
+        /// The id of the set.
+        id: Id,
+        /// The fins.
+        fins: FinSet,
+    },
+    /// Removes a set of fins.
+    RemoveFins {
+        /// The id of the set.
+        id: Id,
+    },
 }
 
 /// What a feature does to the box.
@@ -603,6 +617,7 @@ pub struct Enclosure {
     limits: Option<ProfileLimits>,
     patterns: BTreeMap<Id, PatternOp>,
     pattern_members: BTreeMap<Id, Id>,
+    fins: BTreeMap<Id, FinSet>,
     design: Option<DesignLimits>,
 }
 
@@ -621,8 +636,88 @@ impl Enclosure {
             limits: None,
             patterns: BTreeMap::new(),
             pattern_members: BTreeMap::new(),
+            fins: BTreeMap::new(),
             design: None,
         })
+    }
+
+    /// The sets of cooling fins by id (ordered by id).
+    pub fn fins(&self) -> &BTreeMap<Id, FinSet> {
+        &self.fins
+    }
+
+    /// The holes of the faces and the holes that the fixing of the lid derives, for the given
+    /// state.
+    fn holes_of_state(
+        params: &EnclosureParams,
+        holes: &BTreeMap<Id, Hole>,
+        posts: &BTreeMap<Id, Post>,
+        lid: Option<&Lid>,
+    ) -> Vec<Hole> {
+        let mut all: Vec<Hole> = holes.values().cloned().collect();
+        if let Some(lid) = lid {
+            if let Ok(derived) = lid_holes_of(
+                params.wall,
+                params.inner_length,
+                params.inner_width,
+                posts,
+                lid,
+            ) {
+                all.extend(derived);
+            }
+        }
+        all
+    }
+
+    /// Every set of fins against the box in the given state: the edges of the face with the
+    /// margin and the treatment of the edges, the holes of the face (the derived ones of the lid
+    /// among them) and the other sets.
+    fn check_fins_in(
+        &self,
+        params: &EnclosureParams,
+        edging: &Edging,
+        holes: &BTreeMap<Id, Hole>,
+        posts: &BTreeMap<Id, Post>,
+        lid: Option<&Lid>,
+        fins: &BTreeMap<Id, FinSet>,
+    ) -> Result<(), CadError> {
+        if fins.is_empty() {
+            return Ok(());
+        }
+        let limits = self.design_limits();
+        let all = Self::holes_of_state(params, holes, posts, lid);
+        for (id, set) in fins {
+            let (w, h) = face_size_of(params, set.face);
+            let [u_low, u_high, v_low, v_high] = set.face.neighbours();
+            let margin = |side: Face| {
+                i128::from(
+                    params
+                        .edge_margin
+                        .get()
+                        .max(edging.treatment_of(set.face, side).size().get()),
+                )
+            };
+            let on_face: Vec<Hole> = all
+                .iter()
+                .filter(|hole| hole.face == set.face)
+                .cloned()
+                .collect();
+            let others: Vec<&FinSet> = fins
+                .iter()
+                .filter(|(other, s)| *other != id && s.face == set.face)
+                .map(|(_, s)| s)
+                .collect();
+            set.check(&FinContext {
+                limits,
+                width: i128::from(w.get()),
+                height: i128::from(h.get()),
+                margins: [margin(u_low), margin(u_high), margin(v_low), margin(v_high)],
+                min_web: i128::from(params.min_web.get()),
+                holes: &on_face,
+                others: &others,
+            })?;
+        }
+        Ok(())
     }
 
     /// Gives the enclosure the limits of the operations that repeat things (the shipped ones when
@@ -711,10 +806,14 @@ impl Enclosure {
         &self.features
     }
 
-    /// The volume added by the extrusions and the volume taken away by the pockets, in cubic
-    /// nanometres. Where a pocket meets a hole of the same face the volume of both is counted.
+    /// The volume added by the extrusions and the cooling fins and the volume taken away by the
+    /// pockets, in cubic nanometres. Where a pocket meets a hole of the same face the volume of
+    /// both is counted.
     pub fn features_volume_nm3(&self) -> (i128, i128) {
         let (mut added, mut removed) = (0i128, 0i128);
+        for set in self.fins.values() {
+            added += set.volume_nm3();
+        }
         for f in self.features.values() {
             let v = f.volume_nm3(&self.params);
             match f.kind {
@@ -1168,6 +1267,7 @@ impl Enclosure {
                 }
                 self.check_hole(&hole, None)?;
                 self.check_floor_hole_against_posts(id, &hole)?;
+                self.check_holes_against_fins(id, &hole)?;
                 self.holes.insert(id, hole);
                 Ok(Operation::RemoveHole { id })
             }
@@ -1183,6 +1283,7 @@ impl Enclosure {
                 let old = self.holes.get(&id).ok_or(CadError::HoleId(id))?.clone();
                 self.check_hole(&hole, Some(id))?;
                 self.check_floor_hole_against_posts(id, &hole)?;
+                self.check_holes_against_fins(id, &hole)?;
                 self.holes.insert(id, hole);
                 Ok(Operation::ReplaceHole { id, hole: old })
             }
@@ -1194,6 +1295,14 @@ impl Enclosure {
                 for feature in self.features.values() {
                     Self::check_feature(&params, feature)?;
                 }
+                self.check_fins_in(
+                    &params,
+                    &self.edging,
+                    &self.holes,
+                    &self.posts,
+                    self.lid.as_ref(),
+                    &self.fins,
+                )?;
                 let old = self.params;
                 self.params = params;
                 Ok(Operation::SetParams(old))
@@ -1201,6 +1310,14 @@ impl Enclosure {
             Operation::SetEdging(edging) => {
                 edging.check(&self.params)?;
                 self.check_all(&self.params, &edging)?;
+                self.check_fins_in(
+                    &self.params,
+                    &edging,
+                    &self.holes,
+                    &self.posts,
+                    self.lid.as_ref(),
+                    &self.fins,
+                )?;
                 let old = self.edging;
                 self.edging = edging;
                 Ok(Operation::SetEdging(old))
@@ -1255,6 +1372,27 @@ impl Enclosure {
             }
             Operation::AddPattern { id, pattern } => self.add_pattern(id, pattern),
             Operation::RemovePattern { id } => self.remove_pattern(id),
+            Operation::AddFins { id, fins } => {
+                if self.fins.contains_key(&id) {
+                    return Err(CadError::HoleId(id));
+                }
+                let mut sets = self.fins.clone();
+                sets.insert(id, fins);
+                self.check_fins_in(
+                    &self.params,
+                    &self.edging,
+                    &self.holes,
+                    &self.posts,
+                    self.lid.as_ref(),
+                    &sets,
+                )?;
+                self.fins = sets;
+                Ok(Operation::RemoveFins { id })
+            }
+            Operation::RemoveFins { id } => match self.fins.remove(&id) {
+                Some(fins) => Ok(Operation::AddFins { id, fins }),
+                None => Err(CadError::HoleId(id)),
+            },
             Operation::RemoveFeature { id } => {
                 let feature = self.features.remove(&id).ok_or(CadError::HoleId(id))?;
                 Ok(match feature.kind {
@@ -1279,7 +1417,32 @@ impl Enclosure {
         posts: &BTreeMap<Id, Post>,
         lid: Option<&Lid>,
     ) -> Result<(), CadError> {
-        Self::check_state(&self.params, &self.edging, &self.holes, posts, lid)
+        Self::check_state(&self.params, &self.edging, &self.holes, posts, lid)?;
+        self.check_fins_in(
+            &self.params,
+            &self.edging,
+            &self.holes,
+            posts,
+            lid,
+            &self.fins,
+        )
+    }
+
+    /// The cooling fins against a hole that is added or replaced under `id`.
+    fn check_holes_against_fins(&self, id: Id, hole: &Hole) -> Result<(), CadError> {
+        if self.fins.is_empty() {
+            return Ok(());
+        }
+        let mut holes = self.holes.clone();
+        holes.insert(id, hole.clone());
+        self.check_fins_in(
+            &self.params,
+            &self.edging,
+            &holes,
+            &self.posts,
+            self.lid.as_ref(),
+            &self.fins,
+        )
     }
 
     /// A hole of the floor, added or replaced under `id`, against the posts.

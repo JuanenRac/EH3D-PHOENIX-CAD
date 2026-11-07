@@ -23,8 +23,8 @@
 //! `remove-feature`, which refer to a sketch of the project by its name; a recipe that has none of
 //! them is still written as version 1, so a project without extrusions or pockets opens in the
 //! programs that only know version 1. Version 3 adds the steps `add-pattern` and `remove-pattern`
-//! (a hole or a post repeated along a line or round a centre); a recipe with one of them is
-//! written as version 3, one with only the steps of version 2 as version 2 and one with neither
+//! (a hole or a post repeated along a line or round a centre) and `add-fins` and `remove-fins`
+//! (a set of cooling fins on a face); a recipe with one of them is written as version 3, one with only the steps of version 2 as version 2 and one with neither
 //! as version 1, so every project that did not use the newer steps keeps its bytes. The sketches
 //! are not in this domain: they have their own domain, `sketch` (see [`crate::sketch::domain`]).
 
@@ -37,6 +37,7 @@ use crate::body::{Body, Built, Step};
 use crate::config::{DesignLimits, MechanicalLimits};
 use crate::enclosure::{Edging, EnclosureParams, Face, Hole, HoleStyle, Id, Operation, Treatment};
 use crate::expr::{Constants, ExprLimits};
+use crate::fins::{FinAxis, FinSet};
 use crate::mount::{Base, BoardHole, BoardInterface, BoreKind, Lid, LidFixing, Lip, Post};
 use crate::parametric::ParamModel;
 use crate::pattern::{Layout, PatternOp, Seed};
@@ -478,6 +479,28 @@ fn operation_words(op: &Operation, limits: &MechanicalLimits) -> Result<Vec<Stri
             words.push("remove-pattern".to_string());
             words.push(id.to_string());
         }
+        Operation::AddFins { id, fins } => {
+            words.push("add-fins".to_string());
+            words.push(id.to_string());
+            words.push(escape(&fins.name, limits)?);
+            words.push(fins.face.name().to_string());
+            words.push(fins.along.name().to_string());
+            words.push(fins.count.get().to_string());
+            for length in [
+                fins.thickness,
+                fins.height,
+                fins.pitch,
+                fins.first,
+                fins.start,
+                fins.length,
+            ] {
+                words.push(length.get().to_string());
+            }
+        }
+        Operation::RemoveFins { id } => {
+            words.push("remove-fins".to_string());
+            words.push(id.to_string());
+        }
     }
     Ok(words)
 }
@@ -503,10 +526,10 @@ fn layout_word(layout: &Layout) -> String {
     }
 }
 
-fn count_value(word: &str) -> Result<Count, CadError> {
-    let n = count_of(word, "count of a pattern")?;
-    Count::new(i64::try_from(n).map_err(|_| bad("the count of a pattern is too large"))?)
-        .map_err(|_| bad("the count of a pattern is too large"))
+fn count_value(word: &str, what: &str) -> Result<Count, CadError> {
+    let n = count_of(word, what)?;
+    Count::new(i64::try_from(n).map_err(|_| bad(&format!("the {what} is too large")))?)
+        .map_err(|_| bad(&format!("the {what} is too large")))
 }
 
 fn layout_of(word: &str) -> Result<Layout, CadError> {
@@ -517,7 +540,7 @@ fn layout_of(word: &str) -> Result<Layout, CadError> {
                 length_of(du, "step of a pattern")?,
                 length_of(dv, "step of a pattern")?,
             ),
-            count: count_value(count)?,
+            count: count_value(count, "count of a pattern")?,
         }),
         ["circular", cu, cv, angle, count] => {
             let ndeg = angle
@@ -532,18 +555,21 @@ fn layout_of(word: &str) -> Result<Layout, CadError> {
                 ),
                 step: Angle::new(ndeg)
                     .map_err(|_| bad("the angle of a pattern is out of range"))?,
-                count: count_value(count)?,
+                count: count_value(count, "count of a pattern")?,
             })
         }
         _ => Err(bad("the layout of a pattern is not understood")),
     }
 }
 
-/// The version of the domain a step needs: 3 for a pattern, 2 for an extrusion or a pocket and
-/// 1 for the rest.
+/// The version of the domain a step needs: 3 for a pattern or cooling fins, 2 for an extrusion or
+/// a pocket and 1 for the rest.
 fn step_version(op: &Operation) -> u32 {
     match op {
-        Operation::AddPattern { .. } | Operation::RemovePattern { .. } => 3,
+        Operation::AddPattern { .. }
+        | Operation::RemovePattern { .. }
+        | Operation::AddFins { .. }
+        | Operation::RemoveFins { .. } => 3,
         Operation::Extrude { .. } | Operation::Pocket { .. } | Operation::RemoveFeature { .. } => 2,
         _ => FIRST_VERSION,
     }
@@ -652,6 +678,25 @@ fn operation_of(words: &[&str], limits: &MechanicalLimits) -> Result<Operation, 
             },
         }),
         ["remove-pattern", id] => Ok(Operation::RemovePattern { id: id_of(id)? }),
+        ["add-fins", id, name, face, axis, count, thickness, height, pitch, first, start, length] => {
+            Ok(Operation::AddFins {
+                id: id_of(id)?,
+                fins: FinSet {
+                    name: unescape(name, limits)?,
+                    face: face_of(face)?,
+                    along: FinAxis::from_name(axis)
+                        .ok_or_else(|| bad("the direction of the fins is not known"))?,
+                    count: count_value(count, "count of the fins")?,
+                    thickness: length_of(thickness, "thickness of a fin")?,
+                    height: length_of(height, "height of a fin")?,
+                    pitch: length_of(pitch, "pitch of the fins")?,
+                    first: length_of(first, "position of the first fin")?,
+                    start: length_of(start, "start of the fins")?,
+                    length: length_of(length, "length of the fins")?,
+                },
+            })
+        }
+        ["remove-fins", id] => Ok(Operation::RemoveFins { id: id_of(id)? }),
         _ => Err(bad("a step is not understood")),
     }
 }
@@ -2718,5 +2763,124 @@ mod feature_tests {
             other => panic!("{other:?}"),
         }
         assert_eq!(built.states[1], StepState::Valid);
+    }
+
+    fn with_fins() -> Mechanical {
+        use crate::fins::{FinAxis, FinSet};
+        use crate::units::Count;
+        let mut m = Mechanical::new(ParamModel::new(base()).unwrap(), Variables::new());
+        m.steps.push(step(
+            "heat sink",
+            Operation::AddFins {
+                id: id(1),
+                fins: FinSet {
+                    name: "sink".into(),
+                    face: Face::Top,
+                    along: FinAxis::U,
+                    count: Count::new(3).unwrap(),
+                    thickness: mm(2),
+                    height: mm(10),
+                    pitch: mm(8),
+                    first: mm(20),
+                    start: mm(10),
+                    length: mm(50),
+                },
+            },
+        ));
+        m.steps
+            .push(step("no sink", Operation::RemoveFins { id: id(1) }));
+        m.tip = 1;
+        m
+    }
+
+    #[test]
+    fn cooling_fins_are_steps_of_version_three_with_a_golden_text() {
+        let s = Settings::defaults();
+        let m = with_fins();
+        assert_eq!(m.version(), 3);
+        let text = String::from_utf8(m.to_bytes(&s.mechanical).unwrap()).unwrap();
+        assert!(text.starts_with("mechanical 3\n[parameters]\n"));
+        let steps = text.split("[steps]\n").nth(1).unwrap();
+        let expect = format!(
+            "tip 1\n\
+             step 0 heat%20sink add-fins {a} sink top u 3 2000000 10000000 8000000 20000000 10000000 50000000\n\
+             step 0 no%20sink remove-fins {a}\n",
+            a = id(1)
+        );
+        assert_eq!(steps, expect);
+        let read = Mechanical::from_bytes(text.as_bytes(), &s.expr, &s.mechanical).unwrap();
+        assert_eq!(read, m);
+        assert_eq!(read.to_bytes(&s.mechanical).unwrap(), text.as_bytes());
+        // the tip is before the removal: the set is there, and with the tip after it, it is gone
+        let built = m.build(&s.constants, &s.expr).unwrap();
+        assert_eq!(built.enclosure.fins().len(), 1);
+        assert_eq!(built.states[1], StepState::AfterTip);
+        let mut all = m.clone();
+        all.tip = 2;
+        let built = all.build(&s.constants, &s.expr).unwrap();
+        assert!(built.enclosure.fins().is_empty());
+    }
+
+    #[test]
+    fn fins_that_are_not_written_in_the_one_form_are_refused() {
+        let s = Settings::defaults();
+        let good = String::from_utf8(with_fins().to_bytes(&s.mechanical).unwrap()).unwrap();
+        let parse = |t: &str| Mechanical::from_bytes(t.as_bytes(), &s.expr, &s.mechanical);
+        let line = "sink top u 3 2000000 10000000 8000000 20000000 10000000 50000000";
+        for bad in [
+            "sink top w 3 2000000 10000000 8000000 20000000 10000000 50000000",
+            "sink side u 3 2000000 10000000 8000000 20000000 10000000 50000000",
+            "sink top u 03 2000000 10000000 8000000 20000000 10000000 50000000",
+            "sink top u -3 2000000 10000000 8000000 20000000 10000000 50000000",
+            "sink top u 1000001 2000000 10000000 8000000 20000000 10000000 50000000",
+            "sink top u 3 2e6 10000000 8000000 20000000 10000000 50000000",
+            "sink top u 3 2000000 10000000 8000000 20000000 10000000",
+            "sink top u 3 2000000 10000000 8000000 20000000 10000000 50000000 1",
+            "sink top u 3 2000000 10000000 8000000 20000000 10000000 2000000000000000",
+            "si%nk top u 3 2000000 10000000 8000000 20000000 10000000 50000000",
+        ] {
+            let text = good.replace(line, bad);
+            assert_ne!(text, good);
+            let e = parse(&text).unwrap_err();
+            assert_eq!(e.code(), "PHOENIX-CAD-018", "{bad}: {e}");
+        }
+        // the version has to agree with the steps, as for the patterns
+        let e = parse(&good.replacen("mechanical 3", "mechanical 2", 1)).unwrap_err();
+        assert!(
+            e.to_string()
+                .contains("version 3 is in a domain of version 2"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn a_project_with_fins_and_patterns_goes_through_the_file_and_the_limits_of_the_settings_apply()
+    {
+        let s = Settings::defaults();
+        let mut m = with_patterns();
+        m.steps.extend(with_fins().steps);
+        m.tip = m.steps.len();
+        assert_eq!(m.version(), 3);
+        let mut d = Document::new();
+        d.set_mechanical(&m, &s.mechanical).unwrap();
+        let read = Document::from_bytes(&d.to_bytes(), 1 << 24).unwrap();
+        assert_eq!(
+            read.mechanical(&s.expr, &s.mechanical).unwrap(),
+            Some(m.clone())
+        );
+        // a limit of the settings on the count of the fins fails the step with its code
+        let tight = Settings::with_user_config("[fins]\nmax_count = 2\n").unwrap();
+        let mut only = with_fins();
+        only.tip = 1;
+        let built = only
+            .build_with_limits(&tight.constants, &tight.expr, None, Some(tight.design))
+            .unwrap();
+        match &built.states[0] {
+            StepState::Failed(e) => {
+                assert_eq!(e.code(), "PHOENIX-CAD-043");
+                assert!(e.to_string().contains("3 fins are more than the 2"), "{e}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }

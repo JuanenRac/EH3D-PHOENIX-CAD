@@ -748,8 +748,9 @@ impl Enclosure {
     /// treatment of the edges is not taken from the solid (the volume is the one without it), a
     /// countersink is taken as a cylinder of its mean diameter, a slot as the rectangle that holds
     /// it, and a hole that is not wholly in the thin part of its face is as long as that part. The
-    /// posts, the centring lip and the holes of the lid fixing are not part of the solid, so a model
-    /// that has any of them is never exact.
+    /// posts, the centring lip, the holes of the lid fixing, the extrusions and pockets of the
+    /// sketches and the cooling fins are not part of the solid, so a model that has any of them
+    /// is never exact.
     pub fn mass_properties(&self, density_kg_m3: u32) -> Result<MassProperties, CadError> {
         let fail = || CadError::Overflow("mass properties");
         let (pieces, exact) = self.mass_pieces()?;
@@ -785,7 +786,10 @@ impl Enclosure {
                 xz: signed(&raw.products[1])?,
                 yz: signed(&raw.products[2])?,
             },
-            exact: exact && !self.has_mounting(),
+            exact: exact
+                && !self.has_mounting()
+                && self.features().is_empty()
+                && self.fins().is_empty(),
         })
     }
 }

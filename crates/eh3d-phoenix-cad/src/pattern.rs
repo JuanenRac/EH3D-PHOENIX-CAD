@@ -969,7 +969,10 @@ mod tests {
     #[test]
     fn the_limit_of_the_settings_is_the_one_the_enclosure_uses() {
         let mut e = enclosure();
-        e.set_design_limits(crate::config::DesignLimits { pattern_max: 4 });
+        e.set_design_limits(crate::config::DesignLimits {
+            pattern_max: 4,
+            ..crate::config::DesignLimits::shipped()
+        });
         let err = e
             .apply(Operation::AddPattern {
                 id: pid(),

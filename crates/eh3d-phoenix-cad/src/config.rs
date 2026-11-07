@@ -80,17 +80,32 @@ impl MechanicalLimits {
     }
 }
 
-/// The limits of the operations that repeat things, read from the settings file (`[pattern]`).
+/// The limits of the operations that repeat things or grow the box, read from the settings file
+/// (`[pattern]` and `[fins]`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DesignLimits {
     /// The most positions of one pattern of holes or posts.
     pub pattern_max: u32,
+    /// The most fins of one set of cooling fins.
+    pub fin_max_count: u32,
+    /// The thinnest fin.
+    pub fin_min_thickness: Length,
+    /// The least air between two fins.
+    pub fin_min_gap: Length,
+    /// The tallest fin, as a multiple of its thickness.
+    pub fin_max_ratio: u32,
 }
 
 impl DesignLimits {
     /// The most that any limit can be set to: a pattern is checked position by position against
     /// the others, so the work grows with the square of the count.
     pub const PATTERN_CAP: u32 = 10_000;
+
+    /// The most that the count of the fins of a set can be set to.
+    pub const FIN_CAP: u32 = 10_000;
+
+    /// The most that the ratio of the height of a fin to its thickness can be set to.
+    pub const FIN_RATIO_CAP: u32 = 1_000;
 
     /// The limits of the shipped settings.
     pub fn shipped() -> DesignLimits {
@@ -105,7 +120,87 @@ impl DesignLimits {
                 Self::PATTERN_CAP
             )));
         }
-        Ok(DesignLimits { pattern_max })
+        let fin_max_count = c.number("fins.max_count")?;
+        if !(1..=Self::FIN_CAP).contains(&fin_max_count) {
+            return Err(CadError::Config(format!(
+                "fins.max_count must be from 1 to {}",
+                Self::FIN_CAP
+            )));
+        }
+        let fin_max_ratio = c.number("fins.max_height_ratio")?;
+        if !(1..=Self::FIN_RATIO_CAP).contains(&fin_max_ratio) {
+            return Err(CadError::Config(format!(
+                "fins.max_height_ratio must be from 1 to {}",
+                Self::FIN_RATIO_CAP
+            )));
+        }
+        let fin_min_thickness = c.length("fins.min_thickness")?;
+        let fin_min_gap = c.length("fins.min_gap")?;
+        for (what, v) in [
+            ("fins.min_thickness", fin_min_thickness),
+            ("fins.min_gap", fin_min_gap),
+        ] {
+            if v.get() <= 0 {
+                return Err(CadError::Config(format!("{what} must be positive")));
+            }
+        }
+        Ok(DesignLimits {
+            pattern_max,
+            fin_max_count,
+            fin_min_thickness,
+            fin_min_gap,
+            fin_max_ratio,
+        })
+    }
+}
+
+/// The values of the estimate of the heat that cooling fins give to the air (`[thermal]`), in
+/// thousandths of their unit so that the settings stay whole numbers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThermalSettings {
+    /// The coefficient of heat transfer to still air, in milliwatts per square metre and kelvin.
+    pub convection_mw_m2k: u32,
+    /// The conductivity of the material of the fins, in milliwatts per metre and kelvin.
+    pub conductivity_mw_mk: u32,
+    /// How many millikelvin the base of the fins is warmer than the air.
+    pub delta_t_mk: u32,
+}
+
+impl ThermalSettings {
+    /// The most any of the three can be set to, in thousandths: a thousand units.
+    pub const CAP_MILLI: u32 = 1_000_000;
+
+    fn from_config(c: &Config) -> Result<ThermalSettings, CadError> {
+        let get = |key: &str| -> Result<u32, CadError> {
+            let v = c.milli(key)?;
+            if v == 0 || v > Self::CAP_MILLI {
+                return Err(CadError::Config(format!(
+                    "{key} must be above 0 and at most {}",
+                    Self::CAP_MILLI / 1_000
+                )));
+            }
+            Ok(v)
+        };
+        Ok(ThermalSettings {
+            convection_mw_m2k: get("thermal.convection_w_m2k")?,
+            conductivity_mw_mk: get("thermal.conductivity_w_mk")?,
+            delta_t_mk: get("thermal.delta_t_k")?,
+        })
+    }
+
+    /// The coefficient of heat transfer in watts per square metre and kelvin.
+    pub fn convection_w_m2k(&self) -> f64 {
+        f64::from(self.convection_mw_m2k) / 1_000.0
+    }
+
+    /// The conductivity of the fins in watts per metre and kelvin.
+    pub fn conductivity_w_mk(&self) -> f64 {
+        f64::from(self.conductivity_mw_mk) / 1_000.0
+    }
+
+    /// The temperature of the base over the air, in kelvin.
+    pub fn delta_t_k(&self) -> f64 {
+        f64::from(self.delta_t_mk) / 1_000.0
     }
 }
 
@@ -199,6 +294,31 @@ impl Config {
     /// A length with its unit; the key must exist.
     pub fn length(&self, key: &str) -> Result<Length, CadError> {
         parse_length(self.need(key)?).map_err(|e| CadError::Config(format!("{key}: {e}")))
+    }
+
+    /// A number from 0 up with at most three decimals (a point or a comma), as whole thousandths:
+    /// `8` is 8000 and `0.25` is 250. The key must exist.
+    pub fn milli(&self, key: &str) -> Result<u32, CadError> {
+        let text = self.need(key)?;
+        let bad = || CadError::Config(format!("{key} is not a number with at most three decimals"));
+        let (int, frac) = match text.split_once(['.', ',']) {
+            Some((a, b)) => (a, b),
+            None => (text, ""),
+        };
+        let digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
+        if int.is_empty() || int.len() > 6 || frac.len() > 3 || !digits(int) || !digits(frac) {
+            return Err(bad());
+        }
+        let whole: u32 = int.parse().map_err(|_| bad())?;
+        let fraction: u32 = if frac.is_empty() {
+            0
+        } else {
+            format!("{frac:0<3}").parse().map_err(|_| bad())?
+        };
+        whole
+            .checked_mul(1_000)
+            .and_then(|w| w.checked_add(fraction))
+            .ok_or_else(bad)
     }
 
     /// A whole number from 0 up; the key must exist.
@@ -302,8 +422,10 @@ pub struct Settings {
     pub expr: ExprLimits,
     /// The limits of the mechanical domain of the project file.
     pub mechanical: MechanicalLimits,
-    /// The limits of the operations that repeat things.
+    /// The limits of the operations that repeat things or grow the box.
     pub design: DesignLimits,
+    /// The values of the estimate of the heat that cooling fins give to the air.
+    pub thermal: ThermalSettings,
     /// The named values that expressions can use: the sizes of the screws, the compensation of the
     /// printer and the `[constants]` of the settings.
     pub constants: Constants,
@@ -580,6 +702,7 @@ impl Settings {
             c.number("mechanical.max_board_holes")?,
         )?;
         let design = DesignLimits::from_config(c)?;
+        let thermal = ThermalSettings::from_config(c)?;
         let constants = build_constants(c, &screws, &printer, counterbore_extra, &expr)?;
         Ok(Settings {
             backups,
@@ -596,6 +719,7 @@ impl Settings {
             expr,
             mechanical,
             design,
+            thermal,
             constants,
         })
     }
@@ -934,6 +1058,47 @@ mod tests {
             assert_eq!(err.code(), "PHOENIX-CAD-011", "{text:?}: {err}");
         }
         assert_eq!(DesignLimits::shipped().pattern_max, 256);
+        for text in [
+            "[fins]\nmax_count = 0\n",
+            "[fins]\nmax_count = 10001\n",
+            "[fins]\nmax_height_ratio = 0\n",
+            "[fins]\nmax_height_ratio = 1001\n",
+            "[fins]\nmin_thickness = 0 mm\n",
+            "[fins]\nmin_gap = -1 mm\n",
+            "[fins]\nmin_gap = wide\n",
+            "[thermal]\nconvection_w_m2k = 0\n",
+            "[thermal]\nconvection_w_m2k = 1001\n",
+            "[thermal]\nconductivity_w_mk = -5\n",
+            "[thermal]\nconductivity_w_mk = 1.2345\n",
+            "[thermal]\ndelta_t_k = hot\n",
+            "[thermal]\ndelta_t_k = 1e2\n",
+            "[thermal]\ndelta_t_k = \n",
+        ] {
+            let err = Settings::with_user_config(text).unwrap_err();
+            assert_eq!(err.code(), "PHOENIX-CAD-011", "{text:?}: {err}");
+        }
+        let s = Settings::defaults();
+        assert_eq!(s.design.fin_max_count, 128);
+        assert_eq!(s.design.fin_min_thickness.get(), 800_000);
+        assert_eq!(s.design.fin_min_gap.get(), 3_000_000);
+        assert_eq!(s.design.fin_max_ratio, 12);
+        assert_eq!(
+            (
+                s.thermal.convection_mw_m2k,
+                s.thermal.conductivity_mw_mk,
+                s.thermal.delta_t_mk
+            ),
+            (8_000, 200_000, 40_000)
+        );
+        let own = Settings::with_user_config(
+            "[thermal]\nconvection_w_m2k = 5,5\nconductivity_w_mk = 0.2\ndelta_t_k = 25.125\n[fins]\nmin_gap = 2.5 mm\nmax_count = 10000\n",
+        )
+        .unwrap();
+        assert_eq!(own.thermal.convection_w_m2k(), 5.5);
+        assert_eq!(own.thermal.conductivity_w_mk(), 0.2);
+        assert_eq!(own.thermal.delta_t_k(), 25.125);
+        assert_eq!(own.design.fin_min_gap.get(), 2_500_000);
+        assert_eq!(own.design.fin_max_count, DesignLimits::FIN_CAP);
         let wide = Settings::with_user_config("[pattern]\nmax_count = 10000\n").unwrap();
         assert_eq!(wide.design.pattern_max, DesignLimits::PATTERN_CAP);
         // the caps themselves are allowed

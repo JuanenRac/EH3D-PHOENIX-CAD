@@ -66,6 +66,14 @@ impl PrinterProfile {
             lid.hole_diameter = widened;
             out.apply(Operation::SetLid(Some(lid)))?;
         }
+        // the cooling fins are not holes: they are printed as designed, but they have to stay
+        // clear of the holes once these are widened
+        for (id, fins) in design.fins() {
+            out.apply(Operation::AddFins {
+                id: *id,
+                fins: fins.clone(),
+            })?;
+        }
         Ok(out)
     }
 }

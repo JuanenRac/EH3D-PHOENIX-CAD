@@ -9,6 +9,7 @@
 use crate::datum::Datum;
 use crate::drag::Plane;
 use crate::enclosure::{Enclosure, EnclosureParams, Face, Feature, FeatureKind, Hole, Id};
+use crate::fins::FinSet;
 use crate::measure::{Label, Reference};
 use crate::mount::Post;
 pub use crate::projection::{
@@ -203,6 +204,53 @@ fn push_post(
             b: [cx + dx, cy + dy, z1],
             kind,
         });
+    }
+}
+
+/// A set of cooling fins: each fin as a box from the face to its height, twelve lines.
+fn push_fins(out: &mut Vec<Segment>, enclosure: &Enclosure, set: &FinSet, kind: Kind) {
+    let datum = Datum::of_face(enclosure, set.face);
+    let unit = |axis: [i64; 3]| -> Point3 {
+        let r = datum.rotation.apply(axis);
+        [r[0] as f64, r[1] as f64, r[2] as f64]
+    };
+    let (ax, ay, az) = (unit([1, 0, 0]), unit([0, 1, 0]), unit([0, 0, 1]));
+    let origin = [
+        mm(datum.origin[0].get()),
+        mm(datum.origin[1].get()),
+        mm(datum.origin[2].get()),
+    ];
+    let at = |u: f64, v: f64, w: f64| -> Point3 {
+        [
+            origin[0] + ax[0] * u + ay[0] * v + az[0] * w,
+            origin[1] + ax[1] * u + ay[1] * v + az[1] * w,
+            origin[2] + ax[2] * u + ay[2] * v + az[2] * w,
+        ]
+    };
+    let height = mm(set.height.get());
+    // the footprints are in nanometres doubled
+    let half_mm = |doubled: i128| doubled as f64 / 2.0e6;
+    for r in set.rects() {
+        let (u0, u1, v0, v1) = (half_mm(r.u0), half_mm(r.u1), half_mm(r.v0), half_mm(r.v1));
+        let corners = [(u0, v0), (u1, v0), (u1, v1), (u0, v1)];
+        for i in 0..4 {
+            let (a, b) = (corners[i], corners[(i + 1) % 4]);
+            out.push(Segment {
+                a: at(a.0, a.1, 0.0),
+                b: at(b.0, b.1, 0.0),
+                kind,
+            });
+            out.push(Segment {
+                a: at(a.0, a.1, height),
+                b: at(b.0, b.1, height),
+                kind,
+            });
+            out.push(Segment {
+                a: at(a.0, a.1, 0.0),
+                b: at(a.0, a.1, height),
+                kind,
+            });
+        }
     }
 }
 
@@ -453,6 +501,15 @@ pub fn scene_of(
             Kind::Hole
         };
         push_feature(&mut out, enclosure, feature, kind);
+    }
+    for (id, set) in enclosure.fins() {
+        // the fins are material that rises from the face, drawn like a post
+        let kind = if highlight == Highlight::Object(*id) {
+            Kind::Selected
+        } else {
+            Kind::Post
+        };
+        push_fins(&mut out, enclosure, set, kind);
     }
     if let Some(b) = board {
         push_box(&mut out, b.min, b.max, Kind::Board);

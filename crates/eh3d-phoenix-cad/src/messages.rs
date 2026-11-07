@@ -558,6 +558,19 @@ const TEXTS: &[Row] = &[
             "Padrão inválido",
         ],
     ),
+    (
+        "PHOENIX-CAD-043",
+        [
+            "Cooling fins not valid",
+            "Aletas de refrigeración no válidas",
+            "Kühlrippen ungültig",
+            "Ailettes de refroidissement non valides",
+            "Alette di raffreddamento non valide",
+            "冷却フィンが無効です",
+            "散热片无效",
+            "Alhetas de arrefecimento inválidas",
+        ],
+    ),
 ];
 
 /// The text of a diagnostic in a language (`en`, `es`, `de`, `fr`, `it`, `ja`, `zh` or `pt`), or
