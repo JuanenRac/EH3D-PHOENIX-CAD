@@ -15,6 +15,7 @@ use crate::enclosure::{
 };
 use crate::export::{self, Format};
 use crate::expr::{parse, Constants, Names, Value};
+use crate::fins::{FinAxis, FinSet};
 use crate::fit::{check_fit, Envelope, FitReport};
 use crate::history::History;
 use crate::lang::{fill, Lang, Msg};
@@ -63,6 +64,8 @@ pub enum Selection {
     Feature(usize),
     /// A pattern of holes or posts: the index of its step.
     Pattern(usize),
+    /// A set of cooling fins: the index of its step.
+    Fins(usize),
     /// A step that has no editor of its own: its index.
     Other(usize),
     /// A screw hole of the lid, by its position in the list the lid derives.
@@ -90,6 +93,8 @@ pub enum NewStep {
     HolePattern,
     /// A pattern of posts on the floor.
     PostPattern,
+    /// A set of cooling fins on a face.
+    Fins,
 }
 
 /// A row of the sheet of variables.
@@ -131,6 +136,7 @@ impl Selection {
             | Selection::Lid(i)
             | Selection::Feature(i)
             | Selection::Pattern(i)
+            | Selection::Fins(i)
             | Selection::Other(i) => Some(i),
             Selection::Nothing
             | Selection::Body
@@ -202,6 +208,26 @@ pub enum Key {
     CenterV,
     /// The angle between two positions of a circle.
     StepAngle,
+    /// The direction the fins of a set run.
+    FinDirection,
+    /// How many fins a set has.
+    FinCount,
+    /// The thickness of a fin.
+    FinThickness,
+    /// The height of a fin.
+    FinHeight,
+    /// The distance from the middle of one fin to the middle of the next.
+    FinPitch,
+    /// Where the middle of the first fin is, across the direction the fins run.
+    FinFirst,
+    /// Where the fins start, along the direction they run.
+    FinStart,
+    /// The length of a fin.
+    FinLength,
+    /// The surface of the fins and the face between them (read only).
+    FinArea,
+    /// The estimate of the heat the fins give to still air (read only).
+    FinPower,
 }
 
 /// How a field is edited.
@@ -576,6 +602,7 @@ pub fn step_label(step: &Step) -> String {
         Operation::AddHole { hole, .. } | Operation::ReplaceHole { hole, .. } => hole.name.clone(),
         Operation::AddPost { post, .. } | Operation::ReplacePost { post, .. } => post.name.clone(),
         Operation::AddPattern { pattern, .. } => pattern.name().to_string(),
+        Operation::AddFins { fins, .. } => fins.name.clone(),
         _ => "-".to_string(),
     }
 }
@@ -588,6 +615,7 @@ fn the_selection_of(index: usize, step: &Step) -> Selection {
         Operation::SetLid(Some(_)) => Selection::Lid(index),
         Operation::Extrude { .. } | Operation::Pocket { .. } => Selection::Feature(index),
         Operation::AddPattern { .. } => Selection::Pattern(index),
+        Operation::AddFins { .. } => Selection::Fins(index),
         _ => Selection::Other(index),
     }
 }
@@ -776,6 +804,7 @@ impl Window {
         let mut holes = Vec::new();
         let mut posts = Vec::new();
         let mut patterns = Vec::new();
+        let mut fins = Vec::new();
         let mut edges = Vec::new();
         let mut lids = Vec::new();
         let mut features = Vec::new();
@@ -791,6 +820,7 @@ impl Window {
                 Selection::Hole(_) => holes.push(item),
                 Selection::Post(_) => posts.push(item),
                 Selection::Pattern(_) => patterns.push(item),
+                Selection::Fins(_) => fins.push(item),
                 Selection::Edging(_) => edges.push(item),
                 Selection::Lid(_) => lids.push(item),
                 Selection::Feature(_) => features.push(item),
@@ -829,6 +859,7 @@ impl Window {
             (Msg::GroupHoles, holes),
             (Msg::GroupPosts, posts),
             (Msg::GroupPatterns, patterns),
+            (Msg::GroupFins, fins),
             (Msg::GroupEdges, edges),
             (Msg::GroupLid, lids),
             (Msg::GroupScrews, screws),
@@ -859,6 +890,7 @@ impl Window {
             | Selection::Lid(i)
             | Selection::Feature(i)
             | Selection::Pattern(i)
+            | Selection::Fins(i)
             | Selection::Other(i) => i < self.mech.steps.len(),
             Selection::Screw(k) => k < self.built.enclosure.lid_holes().len(),
             Selection::Nothing | Selection::Body | Selection::Fit | Selection::Sheet => true,
@@ -874,7 +906,8 @@ impl Window {
                 Some(Operation::AddHole { id, .. })
                 | Some(Operation::AddPost { id, .. })
                 | Some(Operation::Extrude { id, .. })
-                | Some(Operation::Pocket { id, .. }) => Highlight::Object(*id),
+                | Some(Operation::Pocket { id, .. })
+                | Some(Operation::AddFins { id, .. }) => Highlight::Object(*id),
                 Some(Operation::AddPattern { id, .. }) => Highlight::Pattern(*id),
                 _ => Highlight::Nothing,
             }
@@ -883,7 +916,8 @@ impl Window {
             Selection::Hole(i)
             | Selection::Post(i)
             | Selection::Feature(i)
-            | Selection::Pattern(i) => id_of(i),
+            | Selection::Pattern(i)
+            | Selection::Fins(i) => id_of(i),
             Selection::Screw(k) => Highlight::Screw(k),
             _ => Highlight::Nothing,
         }
@@ -1042,6 +1076,9 @@ impl Window {
             ],
             (Selection::Pattern(_), Some(Operation::AddPattern { pattern, .. })) => {
                 self.pattern_fields(pattern, writable)
+            }
+            (Selection::Fins(_), Some(Operation::AddFins { fins, .. })) => {
+                self.fins_fields(fins, writable)
             }
             (Selection::Edging(_), Some(Operation::SetEdging(edging))) => {
                 let mut out = Vec::new();
@@ -1209,6 +1246,89 @@ impl Window {
         out
     }
 
+    /// The fields of a set of cooling fins, and the surface and the estimate of the heat, which
+    /// are read only.
+    fn fins_fields(&self, fins: &FinSet, writable: bool) -> Vec<Field> {
+        let lang = self.lang;
+        let plain = |key: Key, label: Msg, text: String, editable: bool, note: String| Field {
+            key,
+            label,
+            text,
+            note,
+            input: Input::Text,
+            editable,
+        };
+        let mut out = vec![
+            plain(
+                Key::Name,
+                Msg::FieldName,
+                fins.name.clone(),
+                writable,
+                String::new(),
+            ),
+            Field {
+                key: Key::Face,
+                label: Msg::FieldFace,
+                text: fins.face.name().to_string(),
+                note: String::new(),
+                input: Input::Choice(face_choices()),
+                editable: writable,
+            },
+            Field {
+                key: Key::FinDirection,
+                label: Msg::FieldFinDirection,
+                text: fins.along.name().to_string(),
+                note: String::new(),
+                input: Input::Choice(vec![("u", Msg::FinRunsU), ("v", Msg::FinRunsV)]),
+                editable: writable,
+            },
+            plain(
+                Key::FinCount,
+                Msg::FieldFinCount,
+                fins.count.get().to_string(),
+                writable,
+                String::new(),
+            ),
+        ];
+        for (key, label, value) in [
+            (Key::FinThickness, Msg::FieldFinThickness, fins.thickness),
+            (Key::FinHeight, Msg::FieldHeight, fins.height),
+            (Key::FinPitch, Msg::FieldFinPitch, fins.pitch),
+            (Key::FinFirst, Msg::FieldFinFirst, fins.first),
+            (Key::FinStart, Msg::FieldFinStart, fins.start),
+            (Key::FinLength, Msg::FieldFinLength, fins.length),
+        ] {
+            out.push(self.length_field(key, label, value, writable));
+        }
+        let thermal = fins.thermal(&self.settings.thermal);
+        let temperature = self.settings.thermal.delta_t_k();
+        out.push(plain(
+            Key::FinArea,
+            Msg::FieldFinArea,
+            fill(
+                Msg::FinAreaText.tr(lang),
+                &[&format!("{:.1}", thermal.area_mm2 / 100.0)],
+            ),
+            false,
+            String::new(),
+        ));
+        out.push(plain(
+            Key::FinPower,
+            Msg::FieldFinPower,
+            fill(
+                Msg::FinPowerText.tr(lang),
+                &[
+                    &format!("{:.2}", thermal.power_w),
+                    &format!("{temperature}"),
+                    &format!("{:.1}", thermal.power_w / thermal.flat_power_w),
+                ],
+            ),
+            false,
+            Msg::FinEstimateNote.tr(lang).to_string(),
+        ));
+        out
+    }
+
     fn refresh_fields(&mut self) {
         self.fields = self.make_fields();
     }
@@ -1310,6 +1430,10 @@ impl Window {
                 id: *id,
                 pattern: self.edited_pattern(pattern, key, text)?,
             }),
+            Operation::AddFins { id, fins } => Ok(Operation::AddFins {
+                id: *id,
+                fins: self.edited_fins(fins, key, text)?,
+            }),
             Operation::SetEdging(edging) => {
                 Ok(Operation::SetEdging(self.edited_edging(edging, key, text)?))
             }
@@ -1394,6 +1518,37 @@ impl Window {
             }
         }
         Ok(p)
+    }
+
+    /// A set of cooling fins after an edit of the field `key`.
+    fn edited_fins(&self, fins: &FinSet, key: Key, text: &str) -> Result<FinSet, CadError> {
+        let mut s = fins.clone();
+        match key {
+            Key::Name => s.name = text.trim().to_string(),
+            Key::Face => {
+                s.face = Face::from_name(text.trim())
+                    .ok_or_else(|| CadError::Reference(text.trim().to_string()))?;
+            }
+            Key::FinDirection => {
+                s.along = FinAxis::from_name(text.trim())
+                    .ok_or_else(|| CadError::Reference(text.trim().to_string()))?;
+            }
+            Key::FinCount => {
+                let n = text
+                    .trim()
+                    .parse::<i64>()
+                    .map_err(|_| CadError::ValueOutOfRange("count"))?;
+                s.count = Count::new(n)?;
+            }
+            Key::FinThickness => s.thickness = self.parse_text(text)?,
+            Key::FinHeight => s.height = self.parse_text(text)?,
+            Key::FinPitch => s.pitch = self.parse_text(text)?,
+            Key::FinFirst => s.first = self.parse_text(text)?,
+            Key::FinStart => s.start = self.parse_text(text)?,
+            Key::FinLength => s.length = self.parse_text(text)?,
+            _ => return Err(refusal()),
+        }
+        Ok(s)
     }
 
     /// The layout a pattern gets when it is changed to `kind` (`linear` or `circular`): a line
@@ -1748,7 +1903,9 @@ impl Window {
                 | Operation::Extrude { id, .. }
                 | Operation::Pocket { id, .. }
                 | Operation::RemoveFeature { id }
-                | Operation::RemovePattern { id } => ids.push(*id),
+                | Operation::RemovePattern { id }
+                | Operation::AddFins { id, .. }
+                | Operation::RemoveFins { id } => ids.push(*id),
                 Operation::AddPattern { id, pattern } => ids.extend(pattern.instance_ids(*id)),
                 Operation::AddPost { id, post } | Operation::ReplacePost { id, post } => {
                     ids.push(*id);
@@ -1899,6 +2056,34 @@ impl Window {
                     msg,
                 ))
             }
+            NewStep::Fins => {
+                let count = self
+                    .mech
+                    .steps
+                    .iter()
+                    .filter(|s| matches!(s.op, Operation::AddFins { .. }))
+                    .count();
+                let name = fill(Msg::NameFins.tr(self.lang), &[&(count + 1).to_string()]);
+                let fins = FinSet {
+                    name: name.clone(),
+                    face: d.fin_face,
+                    along: d.fin_along,
+                    count: Count::new(i64::from(d.fin_count))?,
+                    thickness: d.fin_thickness,
+                    height: d.fin_height,
+                    pitch: d.fin_pitch,
+                    first: d.fin_first.checked_add(shift)?,
+                    start: d.fin_start,
+                    length: d.fin_length,
+                };
+                Ok((
+                    Operation::AddFins {
+                        id: self.fresh_id()?,
+                        fins,
+                    },
+                    name,
+                ))
+            }
             NewStep::Extrude | NewStep::Pocket => {
                 let sketch = self
                     .active_sketch
@@ -1970,9 +2155,11 @@ impl Window {
     fn step_addition(&mut self, kind: NewStep) -> Result<(), CadError> {
         let tries = match kind {
             NewStep::Edging | NewStep::Extrude | NewStep::Pocket => 1,
-            NewStep::Hole | NewStep::Post | NewStep::HolePattern | NewStep::PostPattern => {
-                self.ui.new_step.tries
-            }
+            NewStep::Hole
+            | NewStep::Post
+            | NewStep::HolePattern
+            | NewStep::PostPattern
+            | NewStep::Fins => self.ui.new_step.tries,
         };
         let mut last = refusal();
         for attempt in 0..tries {
@@ -2389,6 +2576,21 @@ impl Window {
                 }
             };
             lines.push(format!("{:>3}  {}  {state}", i + 1, step_label(step)));
+        }
+        // the estimate of each set of fins, said to be one
+        let temperature = format!("{}", self.settings.thermal.delta_t_k());
+        for set in self.built.enclosure.fins().values() {
+            let t = set.thermal(&self.settings.thermal);
+            lines.push(fill(
+                Msg::ReportFins.tr(lang),
+                &[
+                    &set.name,
+                    &set.count.get().to_string(),
+                    &format!("{:.1}", t.area_mm2 / 100.0),
+                    &format!("{:.2}", t.power_w),
+                    &temperature,
+                ],
+            ));
         }
         lines.join(
             "
@@ -4840,5 +5042,202 @@ mod tests {
         let second = dir.0.join("again.phoenixproj");
         assert!(again.save_to(&second));
         assert_eq!(std::fs::read(&second).unwrap(), bytes);
+    }
+
+    fn fins_of(w: &Window, index: usize) -> FinSet {
+        match &w.mech.steps[index].op {
+            Operation::AddFins { fins, .. } => fins.clone(),
+            other => panic!("not fins: {other:?}"),
+        }
+    }
+
+    fn text_of(w: &Window, key: Key) -> String {
+        w.fields[field(w, key)].text.clone()
+    }
+
+    #[test]
+    fn a_set_of_cooling_fins_is_added_from_the_settings_with_its_surface_and_an_estimate() {
+        let mut w = fresh();
+        let bare = w.info.material_nm3;
+        w.add_step(NewStep::Fins);
+        assert!(!problem(&w), "{:?}", w.status);
+        assert_eq!(w.selection, Selection::Fins(0));
+        assert_eq!(w.mech.steps[0].name, "Fins 1");
+        let set = fins_of(&w, 0);
+        assert_eq!(
+            (set.face, set.along, set.count.get()),
+            (Face::Top, FinAxis::U, 5)
+        );
+        // 5 fins of 2 x 15 x 80 mm add 12000 mm3 of material
+        assert_eq!(
+            w.info.material_nm3 - bare,
+            12_000i128 * 1_000_000_000_000_000_000
+        );
+        let groups = w.tree();
+        let group = groups.iter().find(|g| g.title == Msg::GroupFins).unwrap();
+        assert_eq!(group.items.len(), 1);
+        assert_eq!(group.items[0].selection, Selection::Fins(0));
+        let keys: Vec<Key> = w.fields.iter().map(|f| f.key).collect();
+        assert_eq!(
+            keys,
+            vec![
+                Key::Name,
+                Key::Face,
+                Key::FinDirection,
+                Key::FinCount,
+                Key::FinThickness,
+                Key::FinHeight,
+                Key::FinPitch,
+                Key::FinFirst,
+                Key::FinStart,
+                Key::FinLength,
+                Key::FinArea,
+                Key::FinPower
+            ]
+        );
+        // worked out by hand: a fin of 2 x 15 x 80 mm has 2620 mm2, five of them 13100 mm2, and the
+        // bare face between them 34 * 80 - 5 * 2 * 80 = 1920 mm2: 15020 mm2 = 150.2 cm2
+        assert_eq!(text_of(&w, Key::FinArea), "150.2 cm2");
+        assert_eq!(
+            text_of(&w, Key::FinPower),
+            "4.79 W at 40 K over the air, 5.5 times the bare face"
+        );
+        // both are read only, and the second says that it is an estimate
+        for key in [Key::FinArea, Key::FinPower] {
+            assert!(!w.fields[field(&w, key)].editable);
+        }
+        assert!(w.fields[field(&w, Key::FinPower)].note.contains("estimate"));
+        assert_eq!(text_of(&w, Key::FinThickness), "2.000 mm");
+        let id = match &w.mech.steps[0].op {
+            Operation::AddFins { id, .. } => *id,
+            _ => unreachable!(),
+        };
+        assert_eq!(w.highlight(), Highlight::Object(id));
+        // the report says the numbers are an estimate
+        assert!(w
+            .report_text()
+            .ends_with("Fins 1: 5 fins, 150.2 cm2 of surface, about 4.79 W at 40 K over the air (estimate for still air)"));
+    }
+
+    #[test]
+    fn editing_the_fins_gives_new_numbers_and_every_limit_refuses_with_its_code() {
+        let mut w = fresh();
+        w.add_step(NewStep::Fins);
+        set(&mut w, Key::FinCount, "7");
+        assert!(!problem(&w), "{:?}", w.status);
+        // 7 fins: 212.2 cm2 and 6.77 W (worked out by hand and by a second calculation)
+        assert_eq!(text_of(&w, Key::FinArea), "212.2 cm2");
+        assert_eq!(
+            text_of(&w, Key::FinPower),
+            "6.77 W at 40 K over the air, 5.3 times the bare face"
+        );
+        // each refusal leaves the set as it was and says why
+        for (key, text) in [
+            (Key::FinPitch, "4 mm"),
+            (Key::FinThickness, "0.5 mm"),
+            (Key::FinHeight, "40 mm"),
+            (Key::FinFirst, "1 mm"),
+            (Key::FinLength, "120 mm"),
+            (Key::FinCount, "129"),
+            (Key::Face, "front"),
+            (Key::FinDirection, "v"),
+        ] {
+            let before = w.mech.clone();
+            set(&mut w, key, text);
+            assert!(problem(&w), "{key:?} {text}");
+            assert!(
+                w.status.text(Lang::En).contains("PHOENIX-CAD-043"),
+                "{key:?} {text}: {}",
+                w.status.text(Lang::En)
+            );
+            assert_eq!(w.mech, before, "{key:?} {text}");
+        }
+        // a count that is not a number is another error
+        set(&mut w, Key::FinCount, "lots");
+        assert!(w.status.text(Lang::En).contains("PHOENIX-CAD-007"));
+        // the floor takes the same fins, and the name is free text
+        set(&mut w, Key::Face, "bottom");
+        assert!(!problem(&w), "{:?}", w.status);
+        assert_eq!(fins_of(&w, 0).face, Face::Bottom);
+        set(&mut w, Key::Name, "radiator");
+        assert_eq!(w.mech.steps[0].name, "Fins 1");
+        assert_eq!(fins_of(&w, 0).name, "radiator");
+        assert!(w
+            .tree()
+            .iter()
+            .any(|g| g.items.iter().any(|i| i.label == "Fins 1")));
+        // undo goes back one change at a time
+        w.undo();
+        assert_eq!(fins_of(&w, 0).name, "Fins 1");
+        w.undo();
+        assert_eq!(fins_of(&w, 0).face, Face::Top);
+    }
+
+    #[test]
+    fn the_estimate_follows_the_settings_and_a_second_set_that_has_no_room_is_refused() {
+        // fins printed in plastic (0.2 W/mK): the estimate drops from 4.79 W to 1.92 W
+        let plastic = Settings::with_user_config("[thermal]\nconductivity_w_mk = 0.2\n").unwrap();
+        let mut w = Window::new(Lang::En, plastic, UiSettings::defaults()).unwrap();
+        w.add_step(NewStep::Fins);
+        assert_eq!(
+            text_of(&w, Key::FinPower),
+            "1.92 W at 40 K over the air, 2.2 times the bare face"
+        );
+        let warm =
+            Settings::with_user_config("[thermal]\ndelta_t_k = 25.5\nconvection_w_m2k = 10\n")
+                .unwrap();
+        let mut v = Window::new(Lang::Es, warm, UiSettings::defaults()).unwrap();
+        v.add_step(NewStep::Fins);
+        assert!(
+            text_of(&v, Key::FinPower).contains("con 25.5 K sobre el aire"),
+            "{}",
+            text_of(&v, Key::FinPower)
+        );
+        // the face has no room for a second set of five fins: every try is refused
+        let mut x = fresh();
+        x.add_step(NewStep::Fins);
+        x.add_step(NewStep::Fins);
+        assert!(problem(&x));
+        assert!(x.status.text(Lang::En).contains("PHOENIX-CAD-043"));
+        assert_eq!(x.mech.steps.len(), 1);
+        // but a short first set leaves room: 2 fins up to 21 mm, then 5 fins from 36 mm would
+        // end at 69 mm, past the face, so the second set is made smaller first
+        set(&mut x, Key::FinCount, "2");
+        x.add_step(NewStep::Fins);
+        assert!(problem(&x));
+        x.ui.new_step.fin_count = 2;
+        x.add_step(NewStep::Fins);
+        assert!(!problem(&x), "{:?}", x.status);
+        assert_eq!(x.mech.steps.len(), 2);
+        assert_eq!(x.mech.steps[1].name, "Fins 2");
+        assert_eq!(x.enclosure().fins().len(), 2);
+        // removing the first takes its fins, and undo brings them back
+        x.select(Selection::Fins(0));
+        x.remove_step();
+        assert_eq!(x.enclosure().fins().len(), 1);
+        x.undo();
+        assert_eq!(x.enclosure().fins().len(), 2);
+    }
+
+    #[test]
+    fn a_project_with_fins_is_written_as_version_three_and_the_script_has_them() {
+        let dir = Scratch::new("fins");
+        let path = dir.0.join("sink.phoenixproj");
+        let mut w = fresh();
+        w.add_step(NewStep::Fins);
+        assert!(w.save_to(&path), "{:?}", w.status);
+        let bytes = std::fs::read(&path).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("mechanical 3\n"), "{text}");
+        assert!(text.contains(" add-fins "));
+        let mut again = fresh();
+        assert!(again.open(&path), "{:?}", again.status);
+        assert_eq!(again.mech, w.mech);
+        assert_eq!(again.enclosure().fins().len(), 1);
+        let script = again.export_text(Format::Script).unwrap();
+        assert!(script.contains("// fins Fins 1, top face"));
+        // the STEP file does not draw them and says so
+        let err = again.export_text(Format::Step).unwrap_err();
+        assert_eq!(err.code(), "PHOENIX-CAD-022");
     }
 }

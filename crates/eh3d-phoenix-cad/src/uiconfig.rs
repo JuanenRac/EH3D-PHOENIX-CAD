@@ -8,6 +8,7 @@
 use crate::config::Config;
 use crate::enclosure::{Enclosure, EnclosureParams, Face};
 use crate::export::Format;
+use crate::fins::FinAxis;
 use crate::mount::BoreKind;
 use crate::units::{parse_angle, Angle, Unit};
 use crate::{CadError, Length};
@@ -59,6 +60,24 @@ pub struct NewStepDefaults {
     pub pattern_radius: Length,
     /// The angle between two positions of a circle.
     pub pattern_angle: Angle,
+    /// The face of a new set of cooling fins.
+    pub fin_face: Face,
+    /// The direction the fins of a new set run.
+    pub fin_along: FinAxis,
+    /// How many fins a new set has.
+    pub fin_count: u32,
+    /// The thickness of a fin of a new set.
+    pub fin_thickness: Length,
+    /// The height of a fin of a new set.
+    pub fin_height: Length,
+    /// The distance from the middle of one fin to the middle of the next in a new set.
+    pub fin_pitch: Length,
+    /// Where the first fin of a new set is, across the direction they run.
+    pub fin_first: Length,
+    /// Where the fins of a new set start, along the direction they run.
+    pub fin_start: Length,
+    /// The length of a fin of a new set.
+    pub fin_length: Length,
 }
 
 /// How a hole or a post is dragged with the mouse in the views.
@@ -186,6 +205,8 @@ impl NewStepDefaults {
     fn from_config(c: &Config) -> Result<NewStepDefaults, CadError> {
         let face = word(c, "new_step.hole_face")?;
         let kind = word(c, "new_step.post_kind")?;
+        let fin_face = word(c, "new_step.fin_face")?;
+        let fin_along = word(c, "new_step.fin_along")?;
         Ok(NewStepDefaults {
             tries: count(c, "new_step.tries", 1, 1000)?,
             pitch: c.length("new_step.pitch")?,
@@ -220,6 +241,19 @@ impl NewStepDefaults {
                 }
                 angle
             },
+            fin_face: Face::from_name(fin_face).ok_or_else(|| {
+                CadError::Config(format!("new_step.fin_face: {fin_face} is not a face"))
+            })?,
+            fin_along: FinAxis::from_name(fin_along).ok_or_else(|| {
+                CadError::Config(format!("new_step.fin_along: {fin_along} is not u or v"))
+            })?,
+            fin_count: count(c, "new_step.fin_count", 1, 1000)?,
+            fin_thickness: positive(c, "new_step.fin_thickness")?,
+            fin_height: positive(c, "new_step.fin_height")?,
+            fin_pitch: positive(c, "new_step.fin_pitch")?,
+            fin_first: c.length("new_step.fin_first")?,
+            fin_start: c.length("new_step.fin_start")?,
+            fin_length: positive(c, "new_step.fin_length")?,
         })
     }
 }
@@ -385,6 +419,18 @@ mod tests {
         assert_eq!((n.pattern_count, n.pattern_step), (4, mm(10)));
         assert_eq!(n.pattern_radius, mm(5));
         assert_eq!(n.pattern_angle, Angle::from_deg(90).unwrap());
+        assert_eq!(
+            (n.fin_face, n.fin_along, n.fin_count),
+            (Face::Top, FinAxis::U, 5)
+        );
+        assert_eq!(
+            (n.fin_thickness, n.fin_height, n.fin_pitch),
+            (mm(2), mm(15), mm(8))
+        );
+        assert_eq!(
+            (n.fin_first, n.fin_start, n.fin_length),
+            (mm(12), mm(10), mm(80))
+        );
     }
 
     #[test]
@@ -525,6 +571,19 @@ marker = big
         assert_eq!(s.new_step.pattern_step, Length::new(2_500_000).unwrap());
         assert_eq!(s.new_step.pattern_radius, Length::new(12_700_000).unwrap());
         assert_eq!(s.new_step.pattern_angle.get(), 22_500_000_000);
+        let s = UiSettings::with_user_config(
+            "[new_step]\nfin_face = right\nfin_along = v\nfin_count = 1000\nfin_first = 0 mm\n",
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                s.new_step.fin_face,
+                s.new_step.fin_along,
+                s.new_step.fin_count
+            ),
+            (Face::Right, FinAxis::V, 1000)
+        );
+        assert_eq!(s.new_step.fin_first, Length::ZERO);
         for text in [
             "[new_step]\nhole_face = side\n",
             "[new_step]\npost_kind = glue\n",
@@ -536,6 +595,14 @@ marker = big
             "[new_step]\npattern_radius = -1 mm\n",
             "[new_step]\npattern_angle = 0\n",
             "[new_step]\npattern_angle = round\n",
+            "[new_step]\nfin_face = roof\n",
+            "[new_step]\nfin_along = w\n",
+            "[new_step]\nfin_count = 0\n",
+            "[new_step]\nfin_count = 1001\n",
+            "[new_step]\nfin_thickness = 0 mm\n",
+            "[new_step]\nfin_height = -2 mm\n",
+            "[new_step]\nfin_pitch = 0 mm\n",
+            "[new_step]\nfin_length = thin\n",
         ] {
             let error = UiSettings::with_user_config(text).unwrap_err();
             assert_eq!(error.code(), "PHOENIX-CAD-011", "{text:?}: {error}");
