@@ -26,7 +26,7 @@ Mechanical design for the PHOENIX family: parametric enclosures, chassis and hea
 
 A library written in Rust with a window and a command-line interface and, where it applies, a kind of task for the server. Programs of the suite exchange work through project files or through the server, never by depending on each other.
 
-The first crate is `eh3d-phoenix-cad` (lengths with their own range, the enclosure, the operations, the script and the fit check). The program of the same crate has a window (the model tree, the properties, a 3D view and a plan where holes and posts are dragged and distances and angles are measured, built with `--features gui`) and the commands `check` and `config`. The server task and the heat sinks are not written; the other crates will be decided together with their code.
+The first crate is `eh3d-phoenix-cad` (lengths with their own range, the enclosure, the operations, the script and the fit check). The program of the same crate has a window (the model tree, the properties, a 3D view and a plan where holes and posts are dragged and distances and angles are measured, and a menu that writes the script, the STEP file and the fit report to a file, built with `--features gui`) and the commands `check` and `config`. The server task and the heat sinks are not written; the other crates will be decided together with their code.
 
 ## Where it sits
 

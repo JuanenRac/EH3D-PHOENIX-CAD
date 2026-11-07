@@ -40,13 +40,14 @@
       "title": "The code",
       "lines": [
         "enclosure, holes, change operations,",
-        "sketches, extrusions, script and fit check"
+        "sketches, extrusions, script, export and fit check"
       ],
       "code": [
         "crates/eh3d-phoenix-cad/src/enclosure.rs",
         "crates/eh3d-phoenix-cad/src/profile.rs",
         "crates/eh3d-phoenix-cad/src/sketch.rs",
         "crates/eh3d-phoenix-cad/src/scad.rs",
+        "crates/eh3d-phoenix-cad/src/export.rs",
         "crates/eh3d-phoenix-cad/src/fit.rs"
       ]
     },

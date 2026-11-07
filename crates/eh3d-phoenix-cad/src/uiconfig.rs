@@ -1,6 +1,6 @@
 //! The settings of the window: the size it opens at, how the views turn and zoom, how a hole or a
-//! post is dragged, how things are measured, the box a new project starts with and the envelope
-//! checked when a project has no board.
+//! post is dragged, how things are measured, how the files written from the window are made, the
+//! box a new project starts with and the envelope checked when a project has no board.
 //!
 //! They live in `phoenix-cad-window.default.cfg`, the same form as the settings of the library;
 //! the code holds none of the values. A user file only needs the keys it changes.
