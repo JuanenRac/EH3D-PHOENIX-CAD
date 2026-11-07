@@ -212,6 +212,121 @@ impl ThermalSettings {
     }
 }
 
+/// The settings of the solid made for the STL file (`[mesh]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeshSettings {
+    /// The sides of every circle (a multiple of four, so that a quarter of a circle has whole sides).
+    pub circle_segments: u32,
+    /// The most triangles of one export.
+    pub max_triangles: u32,
+    /// Whether the STL file is binary (1) or text (0).
+    pub binary: bool,
+    /// How far, in parts per million of the volume of the model, the volume of the triangles may
+    /// be from the exact volume.
+    pub volume_tolerance_ppm: u32,
+}
+
+impl MeshSettings {
+    /// The least sides of a circle.
+    pub const MIN_SEGMENTS: u32 = 8;
+    /// The most sides of a circle.
+    pub const MAX_SEGMENTS: u32 = 720;
+    /// The most triangles that can be asked for.
+    pub const TRIANGLES_CAP: u32 = 20_000_000;
+    /// The widest tolerance of the volume: one tenth.
+    pub const TOLERANCE_CAP_PPM: u32 = 100_000;
+
+    fn from_config(c: &Config) -> Result<MeshSettings, CadError> {
+        let circle_segments = c.number("mesh.circle_segments")?;
+        if !(Self::MIN_SEGMENTS..=Self::MAX_SEGMENTS).contains(&circle_segments)
+            || circle_segments % 4 != 0
+        {
+            return Err(CadError::Config(format!(
+                "mesh.circle_segments must be a multiple of 4 from {} to {}",
+                Self::MIN_SEGMENTS,
+                Self::MAX_SEGMENTS
+            )));
+        }
+        let max_triangles = c.number("mesh.max_triangles")?;
+        if !(12..=Self::TRIANGLES_CAP).contains(&max_triangles) {
+            return Err(CadError::Config(format!(
+                "mesh.max_triangles must be from 12 to {}",
+                Self::TRIANGLES_CAP
+            )));
+        }
+        let binary = match c.number("mesh.stl_binary")? {
+            0 => false,
+            1 => true,
+            _ => return Err(CadError::Config("mesh.stl_binary must be 0 or 1".into())),
+        };
+        let volume_tolerance_ppm = c.number("mesh.volume_tolerance_ppm")?;
+        if !(1..=Self::TOLERANCE_CAP_PPM).contains(&volume_tolerance_ppm) {
+            return Err(CadError::Config(format!(
+                "mesh.volume_tolerance_ppm must be from 1 to {}",
+                Self::TOLERANCE_CAP_PPM
+            )));
+        }
+        Ok(MeshSettings {
+            circle_segments,
+            max_triangles,
+            binary,
+            volume_tolerance_ppm,
+        })
+    }
+}
+
+/// The settings of the flat drawings, DXF and SVG (`[drawing]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DrawingSettings {
+    /// The most entities (lines, circles and arcs) of one drawing.
+    pub max_entities: u32,
+    /// The width of the page of the SVG drawing, which is scaled to fit it.
+    pub svg_width: Length,
+    /// Whether the SVG drawing has the dimensions of the box and the sizes of the holes (1) or
+    /// not (0).
+    pub dimensions: bool,
+    /// How far the centre lines go past what they mark.
+    pub axis_overshoot: Length,
+}
+
+impl DrawingSettings {
+    /// The most entities that can be asked for.
+    pub const ENTITIES_CAP: u32 = 5_000_000;
+
+    fn from_config(c: &Config) -> Result<DrawingSettings, CadError> {
+        let max_entities = c.number("drawing.max_entities")?;
+        if !(8..=Self::ENTITIES_CAP).contains(&max_entities) {
+            return Err(CadError::Config(format!(
+                "drawing.max_entities must be from 8 to {}",
+                Self::ENTITIES_CAP
+            )));
+        }
+        let svg_width = c.length("drawing.svg_width")?;
+        if svg_width.get() < 10_000_000 || svg_width.get() > 10_000_000_000 {
+            return Err(CadError::Config(
+                "drawing.svg_width must be from 10 mm to 10000 mm".into(),
+            ));
+        }
+        let dimensions = match c.number("drawing.dimensions")? {
+            0 => false,
+            1 => true,
+            _ => return Err(CadError::Config("drawing.dimensions must be 0 or 1".into())),
+        };
+        let axis_overshoot = c.length("drawing.axis_overshoot")?;
+        if axis_overshoot.get() < 0 || axis_overshoot.get() > 1_000_000_000 {
+            return Err(CadError::Config(
+                "drawing.axis_overshoot must be from 0 mm to 1000 mm".into(),
+            ));
+        }
+        Ok(DrawingSettings {
+            max_entities,
+            svg_width,
+            dimensions,
+            axis_overshoot,
+        })
+    }
+}
+
 /// A parsed settings file: values by `section.key`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Config {
@@ -434,6 +549,10 @@ pub struct Settings {
     pub design: DesignLimits,
     /// The values of the estimate of the heat that cooling fins give to the air.
     pub thermal: ThermalSettings,
+    /// The settings of the solid made for the STL file.
+    pub mesh: MeshSettings,
+    /// The settings of the flat drawings (DXF and SVG).
+    pub drawing: DrawingSettings,
     /// The named values that expressions can use: the sizes of the screws, the compensation of the
     /// printer and the `[constants]` of the settings.
     pub constants: Constants,
@@ -711,6 +830,8 @@ impl Settings {
         )?;
         let design = DesignLimits::from_config(c)?;
         let thermal = ThermalSettings::from_config(c)?;
+        let mesh = MeshSettings::from_config(c)?;
+        let drawing = DrawingSettings::from_config(c)?;
         let constants = build_constants(c, &screws, &printer, counterbore_extra, &expr)?;
         Ok(Settings {
             backups,
@@ -728,6 +849,8 @@ impl Settings {
             mechanical,
             design,
             thermal,
+            mesh,
+            drawing,
             constants,
         })
     }
@@ -1112,5 +1235,74 @@ mod tests {
         // the caps themselves are allowed
         let top = "[mechanical]\nmax_bytes = 268435456\nmax_steps = 1000000\nmax_name_bytes = 4096\nmax_outline_points = 1000000\nmax_board_holes = 100000\n";
         assert!(Settings::with_user_config(top).is_ok());
+    }
+
+    #[test]
+    fn the_settings_of_the_solid_and_of_the_drawings_are_the_shipped_ones() {
+        let s = Settings::defaults();
+        assert_eq!(
+            s.mesh,
+            MeshSettings {
+                circle_segments: 64,
+                max_triangles: 400_000,
+                binary: true,
+                volume_tolerance_ppm: 2000,
+            }
+        );
+        assert_eq!(
+            s.drawing,
+            DrawingSettings {
+                max_entities: 20_000,
+                svg_width: Length::new(200_000_000).unwrap(),
+                dimensions: true,
+                axis_overshoot: Length::new(3_000_000).unwrap(),
+            }
+        );
+        let own = Settings::with_user_config(
+            "[mesh]\ncircle_segments = 720\nmax_triangles = 12\nstl_binary = 0\nvolume_tolerance_ppm = 100000\n[drawing]\nmax_entities = 8\nsvg_width = 10 mm\ndimensions = 0\naxis_overshoot = 0 mm\n",
+        )
+        .unwrap();
+        assert_eq!(own.mesh.circle_segments, 720);
+        assert!(!own.mesh.binary);
+        assert_eq!(own.mesh.max_triangles, 12);
+        assert_eq!(own.drawing.max_entities, 8);
+        assert!(!own.drawing.dimensions);
+        assert_eq!(own.drawing.axis_overshoot, Length::ZERO);
+    }
+
+    #[test]
+    fn every_value_of_the_solid_and_of_the_drawings_is_checked_on_both_sides() {
+        for text in [
+            "[mesh]\ncircle_segments = 6\n",
+            "[mesh]\ncircle_segments = 724\n",
+            "[mesh]\ncircle_segments = 10\n",
+            "[mesh]\nmax_triangles = 11\n",
+            "[mesh]\nmax_triangles = 20000001\n",
+            "[mesh]\nstl_binary = 2\n",
+            "[mesh]\nvolume_tolerance_ppm = 0\n",
+            "[mesh]\nvolume_tolerance_ppm = 100001\n",
+            "[drawing]\nmax_entities = 7\n",
+            "[drawing]\nmax_entities = 5000001\n",
+            "[drawing]\nsvg_width = 9 mm\n",
+            "[drawing]\nsvg_width = 10001 mm\n",
+            "[drawing]\ndimensions = 2\n",
+            "[drawing]\naxis_overshoot = -1 mm\n",
+            "[drawing]\naxis_overshoot = 1001 mm\n",
+            "[drawing]\nsvg_width = wide\n",
+        ] {
+            let error = Settings::with_user_config(text).unwrap_err();
+            assert_eq!(error.code(), "PHOENIX-CAD-011", "{text:?}: {error}");
+        }
+        // the edges of the ranges are allowed
+        for text in [
+            "[mesh]\ncircle_segments = 8\n",
+            "[mesh]\nmax_triangles = 20000000\n",
+            "[mesh]\nvolume_tolerance_ppm = 1\n",
+            "[drawing]\nmax_entities = 5000000\n",
+            "[drawing]\nsvg_width = 10000 mm\n",
+            "[drawing]\naxis_overshoot = 1000 mm\n",
+        ] {
+            assert!(Settings::with_user_config(text).is_ok(), "{text:?}");
+        }
     }
 }
