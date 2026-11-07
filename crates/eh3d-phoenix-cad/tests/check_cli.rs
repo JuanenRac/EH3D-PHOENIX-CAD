@@ -7,6 +7,7 @@ const BIN: &str = env!("CARGO_BIN_EXE_eh3d-phoenix-cad");
 const EXAMPLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/box.phoenixproj");
 const FRAME: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/frame.phoenixproj");
 const LIBRARY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/chassis.phoenixlib");
+const ASSEMBLY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/assembly.phoenixproj");
 
 fn run(args: &[&str]) -> (i32, String, String) {
     let out = Command::new(BIN)
@@ -278,4 +279,110 @@ fn the_config_command_writes_the_settings_of_the_catalog() {
     assert!(text.contains("refuse_profile_overlap = 1"), "{text}");
     assert!(text.contains("part_axis = +z"), "{text}");
     assert!(text.contains("[material.steel]"), "{text}");
+}
+
+#[test]
+fn the_interference_of_the_assembly_example_is_none_and_the_bolt_is_a_pass() {
+    let (code, text, _) = run(&["interference", ASSEMBLY, "--lang", "en"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(
+        text,
+        "Mates: 11\nInterference: none (1 pairs with overlapping boxes looked at, 1 screws through holes)\n"
+    );
+    // the check of the project says the same in the last lines of its report
+    let (code, report, _) = run(&["check", ASSEMBLY, "--lang", "en"]);
+    assert_eq!(code, 0, "{report}");
+    assert!(report.contains("Mates: 11"), "{report}");
+    assert!(
+        report.contains("Parts: 6 pieces, 171166.535 mm3 of material, 462.881 g"),
+        "{report}"
+    );
+    // the frame has its bolts through the holes of its brackets
+    let (code, text, _) = run(&["interference", FRAME, "--lang", "en"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(
+        text,
+        "Interference: none (4 pairs with overlapping boxes looked at, 4 screws through holes)\n"
+    );
+    // a project without parts has nothing to look at
+    let (code, text, _) = run(&["interference", EXAMPLE, "--lang", "en"]);
+    assert_eq!(code, 0, "{text}");
+    assert_eq!(
+        text,
+        "Interference: none (0 pairs with overlapping boxes looked at, 0 screws through holes)\n"
+    );
+}
+
+#[test]
+fn the_interference_lists_the_pairs_in_conflict_and_exits_with_one() {
+    // a hole must be 2 mm wider than the shank: the 4.5 mm hole no longer takes the 3 mm bolt
+    let dir = std::env::temp_dir().join(format!("phoenix-cad-interference-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = dir.join("wide.cfg");
+    std::fs::write(&config, "[assembly]\nhole_clearance = 2 mm\n").unwrap();
+    let config = config.to_str().unwrap();
+    let (code, text, _) = run(&["interference", ASSEMBLY, "--lang", "en", "--config", config]);
+    assert_eq!(code, 1, "{text}");
+    assert_eq!(
+        text,
+        "Mates: 11\nInterference: 1 pairs share volume (1 pairs with overlapping boxes looked at, 0 screws through holes)\n  shelf bracket / shelf bolt: up to 181.500 mm3 shared by the bounding boxes\n"
+    );
+    let (code, spanish, _) = run(&["interference", ASSEMBLY, "--lang", "es", "--config", config]);
+    assert_eq!(code, 1);
+    assert!(
+        spanish.contains("Interferencias: 1 pares comparten volumen"),
+        "{spanish}"
+    );
+    assert!(
+        spanish.contains("hasta 181.500 mm3 compartidos por las cajas envolventes"),
+        "{spanish}"
+    );
+    // only the pairs the settings allow are listed, the rest are counted
+    std::fs::write(
+        dir.join("none.cfg"),
+        "[assembly]\nhole_clearance = 2 mm\nmax_report_pairs = 1\n",
+    )
+    .unwrap();
+    let (code, text, _) = run(&[
+        "interference",
+        FRAME,
+        "--lang",
+        "en",
+        "--config",
+        dir.join("none.cfg").to_str().unwrap(),
+    ]);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(code, 1, "{text}");
+    assert!(
+        text.contains("Interference: 4 pairs share volume (4 pairs with overlapping boxes looked at, 0 screws through holes)"),
+        "{text}"
+    );
+    assert_eq!(text.lines().count(), 3, "{text}");
+    assert!(text.ends_with("  and 3 more\n"), "{text}");
+}
+
+#[test]
+fn the_interference_asks_for_a_project_and_refuses_a_file_that_is_not_one() {
+    let (code, _, error) = run(&["interference"]);
+    assert_eq!(code, 1);
+    assert!(
+        error.contains("interference needs a project file"),
+        "{error}"
+    );
+    let (code, _, error) = run(&["interference", ASSEMBLY, EXAMPLE]);
+    assert_eq!(code, 1);
+    assert!(error.contains("only one project"), "{error}");
+    let (code, _, error) = run(&["interference", "no/such/file.phoenixproj"]);
+    assert_eq!(code, 1);
+    assert!(error.contains("PHOENIX-CAD-012"), "{error}");
+    let (code, _, error) = run(&["interference", ASSEMBLY, "--colour"]);
+    assert_eq!(code, 1);
+    assert!(error.contains("unknown option --colour"), "{error}");
+    // the help lists the command
+    let (code, help, _) = run(&["help"]);
+    assert_eq!(code, 0);
+    assert!(
+        help.contains("eh3d-phoenix-cad interference PROJECT.phoenixproj"),
+        "{help}"
+    );
 }

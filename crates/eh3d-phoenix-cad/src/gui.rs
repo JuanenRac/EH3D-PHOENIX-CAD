@@ -313,6 +313,7 @@ impl App {
                         (NewStep::PostPattern, Msg::AddPostPattern),
                         (NewStep::Fins, Msg::AddFins),
                         (NewStep::Part, Msg::AddPart),
+                        (NewStep::Mate, Msg::AddMate),
                     ] {
                         if ui
                             .add_enabled(editable, egui::Button::new(msg.tr(lang)))

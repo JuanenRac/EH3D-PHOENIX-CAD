@@ -21,6 +21,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad [gui] [PROJECT.phoenixproj | SKETCH.phoenixsketch] [--view model|sketch] [--lang CODE] [--config FILE]   the window (a build with --features gui): with no arguments it opens with a new project; the sketches of a project are kept in the project file, and a .phoenixsketch file is opened to edit it and put in the project, or written from the sketch as a copy
   eh3d-phoenix-cad gui [PROJECT | SKETCH] [--view model|sketch] --shot OUT.png [--size WxH] [--theme forge|dark|light] [--wait N] [--lang CODE] [--config FILE] [--replace]   a picture of the window (a build with --features gui)
   eh3d-phoenix-cad check PROJECT.phoenixproj [--lang CODE] [--config FILE]       reads a project, builds the box (with the extrusions and pockets of its sketches) and prints its measures, the fit of the board and the state of every step
+  eh3d-phoenix-cad interference PROJECT.phoenixproj [--lang CODE] [--config FILE]  reads a project, puts the parts where their mates place them and lists the pairs of parts that share volume (touching is not sharing; a screw through the hole of a bracket is allowed)
   eh3d-phoenix-cad bill PROJECT.phoenixproj [--config FILE]                       the bill of materials of the parts placed in a project (profiles cut to a length, screws and brackets) as comma separated values, with the volume and the mass for the density of each material
   eh3d-phoenix-cad library FILE.phoenixlib [--config FILE]                        reads a library of parts, checks it and lists its parts
   eh3d-phoenix-cad config                                                         every setting of the library, of the window and of the sketch with its default value, as a file for --config
@@ -28,7 +29,8 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
 --open FILE is the same as giving the file by itself; a sketch file opens the window on the sketch. --lang takes en, es, de, fr, it, ja, zh or pt; without it the language of the system is used.
 --shot writes a PNG file of the window (the exit code is 0 when it was written, 1 when it was not and 2 when the arguments are wrong); the window keeps no settings in that mode.
 --config FILE reads a settings file over the defaults: it only needs the keys it changes (see the output of config).
-check exits with 0 when every step was applied and the board fits, and with 1 when a step was refused or the board does not fit.";
+check exits with 0 when every step was applied and the board fits, and with 1 when a step was refused or the board does not fit.
+interference exits with 0 when every step was applied and no two parts share volume, and with 1 when one does.";
 
 /// The settings of the library and of the window, with the keys of a user file put over the defaults.
 fn load_settings(config: Option<&Path>) -> Result<(Settings, UiSettings), String> {
@@ -68,9 +70,9 @@ fn load_sketch_settings(
     Ok((solver, ui))
 }
 
-/// `check`: reads a project and says what the model makes of it. The answer is whether every step
-/// was applied and the board fits.
-fn run_check(args: &[String]) -> Result<bool, String> {
+/// Opens the project that `check` and `interference` are given, with the language and the settings
+/// file of their options.
+fn open_project(args: &[String], command: &str) -> Result<(Window, Lang), String> {
     let mut lang = Lang::from_env();
     let mut config: Option<PathBuf> = None;
     let mut file: Option<PathBuf> = None;
@@ -94,7 +96,7 @@ fn run_check(args: &[String]) -> Result<bool, String> {
             }
         }
     }
-    let file = file.ok_or("check needs a project file")?;
+    let file = file.ok_or_else(|| format!("{command} needs a project file"))?;
     let (settings, ui) = load_settings(config.as_deref())?;
     let mut win = Window::new(lang, settings, ui).map_err(|e| error_text(&e, lang))?;
     win.sketch_settings = load_solver_settings(config.as_deref())?;
@@ -104,8 +106,23 @@ fn run_check(args: &[String]) -> Result<bool, String> {
     if win.status.is_problem() {
         eprintln!("note: {}", win.status.text(lang));
     }
+    Ok((win, lang))
+}
+
+/// `check`: reads a project and says what the model makes of it. The answer is whether every step
+/// was applied and the board fits.
+fn run_check(args: &[String]) -> Result<bool, String> {
+    let (win, _) = open_project(args, "check")?;
     println!("{}", win.report_text());
     Ok(win.info.failed == 0 && win.info.fit.fits)
+}
+
+/// `interference`: reads a project, puts its parts where their mates place them and says which
+/// pairs of parts share volume. The answer is whether every step was applied and none does.
+fn run_interference(args: &[String]) -> Result<bool, String> {
+    let (win, _) = open_project(args, "interference")?;
+    println!("{}", win.assembly_text());
+    Ok(win.info.failed == 0 && win.assembly_clear())
 }
 
 /// The project and the settings file of the commands `bill` and `library`.
@@ -187,6 +204,7 @@ fn run(args: &[String]) -> Result<bool, String> {
             Ok(true)
         }
         "check" => run_check(rest),
+        "interference" => run_interference(rest),
         "bill" => run_bill(rest),
         "library" => run_library(rest),
         "gui" => Err("this build has no window: build it with --features gui".to_owned()),
@@ -200,7 +218,9 @@ fn run(args: &[String]) -> Result<bool, String> {
 fn window_request(args: &[String]) -> Option<Result<shot::WindowArgs, String>> {
     match args.first().map(String::as_str) {
         None | Some("gui") => {}
-        Some("help" | "--help" | "-h" | "config" | "check" | "bill" | "library") => return None,
+        Some(
+            "help" | "--help" | "-h" | "config" | "check" | "interference" | "bill" | "library",
+        ) => return None,
         Some(first) if first.starts_with("--") => {}
         Some(first) => {
             let path = Path::new(first);
