@@ -19,11 +19,15 @@ use crate::mechanical::{Mechanical, MECHANICAL_DOMAIN};
 use crate::messages;
 use crate::mount::{Lid, Post};
 use crate::parametric::{ParamModel, Parameter};
+use crate::profile::ProfileLimits;
 use crate::project::{Document, PARAMETERS_DOMAIN};
 use crate::scad::mm_text;
 use crate::scene::{
     mm, outer_size, project, scene_of, BoardBox, Camera, Fit, Frame, Highlight, Line2,
 };
+use crate::sketch::file as sketch_file;
+use crate::sketch::settings::SketchSettings;
+use crate::sketch::{check_sketch_name, Sketch};
 use crate::store;
 use crate::uiconfig::UiSettings;
 use crate::units::{format_length, parse_length};
@@ -49,6 +53,8 @@ pub enum Selection {
     Edging(usize),
     /// The fixing of the lid: the index of its step.
     Lid(usize),
+    /// An extrusion or a pocket: the index of its step.
+    Feature(usize),
     /// A step that has no editor of its own: its index.
     Other(usize),
     /// A screw hole of the lid, by its position in the list the lid derives.
@@ -68,6 +74,10 @@ pub enum NewStep {
     Post,
     /// The treatment of the edges.
     Edging,
+    /// An extrusion of a sketch of the project.
+    Extrude,
+    /// A pocket of a sketch of the project.
+    Pocket,
 }
 
 /// A row of the sheet of variables.
@@ -107,6 +117,7 @@ impl Selection {
             | Selection::Post(i)
             | Selection::Edging(i)
             | Selection::Lid(i)
+            | Selection::Feature(i)
             | Selection::Other(i) => Some(i),
             Selection::Nothing
             | Selection::Body
@@ -158,6 +169,12 @@ pub enum Key {
     LipDepth,
     /// One side of the envelope that is checked (0 length, 1 width, 2 height).
     Fit(usize),
+    /// The sketch an extrusion or a pocket is made from.
+    Sketch,
+    /// The height of an extrusion.
+    Height,
+    /// The depth of a pocket, or that it goes through.
+    PocketDepth,
 }
 
 /// How a field is edited.
@@ -270,7 +287,8 @@ pub struct Info {
     pub outer: [Length; 3],
     /// The inner size.
     pub inner: [Length; 3],
-    /// The volume of the material of the empty box, in cubic nanometres.
+    /// The volume of the material of the empty box, in cubic nanometres, plus the extrusions and
+    /// minus the pockets.
     pub material_nm3: i128,
     /// How many steps the model refused.
     pub failed: usize,
@@ -372,6 +390,10 @@ pub struct Window {
     pub info: Info,
     /// The envelope checked when the project has no board.
     pub manual: [Length; 3],
+    /// The settings of the sketches: the limits of their outlines and of the domain of the file.
+    pub sketch_settings: SketchSettings,
+    /// The sketch the next extrusion or pocket is made from (the first one when it is none).
+    pub active_sketch: Option<String>,
     document: Document,
     history: History<Mechanical>,
     built: Built,
@@ -464,6 +486,7 @@ fn the_selection_of(index: usize, step: &Step) -> Selection {
         Operation::AddPost { .. } => Selection::Post(index),
         Operation::SetEdging(_) => Selection::Edging(index),
         Operation::SetLid(Some(_)) => Selection::Lid(index),
+        Operation::Extrude { .. } | Operation::Pocket { .. } => Selection::Feature(index),
         _ => Selection::Other(index),
     }
 }
@@ -525,6 +548,8 @@ impl Window {
             fields: Vec::new(),
             status: Status::Ready,
             manual,
+            sketch_settings: SketchSettings::defaults(),
+            active_sketch: None,
             document: Document::new(),
             built,
         };
@@ -613,6 +638,25 @@ impl Window {
         }
     }
 
+    /// Builds a recipe with the settings of the window, the limits of the profiles of the sketches
+    /// among them.
+    fn rebuild(&self, mech: &Mechanical) -> Result<Built, CadError> {
+        mech.build_with(
+            &self.settings.constants,
+            &self.settings.expr,
+            Some(ProfileLimits::from_settings(&self.sketch_settings)),
+        )
+    }
+
+    /// Changes the settings of the sketches and builds the project again with them.
+    pub fn set_sketch_settings(&mut self, settings: SketchSettings) {
+        self.sketch_settings = settings;
+        if let Ok(built) = self.rebuild(&self.mech) {
+            self.built = built;
+            self.refresh();
+        }
+    }
+
     // -----------------------------------------------------------------------------------------
     // The tree and the selection
     // -----------------------------------------------------------------------------------------
@@ -624,6 +668,7 @@ impl Window {
         let mut posts = Vec::new();
         let mut edges = Vec::new();
         let mut lids = Vec::new();
+        let mut features = Vec::new();
         let mut others = Vec::new();
         for (i, step) in self.mech.steps.iter().enumerate() {
             let selection = the_selection_of(i, step);
@@ -637,6 +682,7 @@ impl Window {
                 Selection::Post(_) => posts.push(item),
                 Selection::Edging(_) => edges.push(item),
                 Selection::Lid(_) => lids.push(item),
+                Selection::Feature(_) => features.push(item),
                 _ => others.push(item),
             }
         }
@@ -674,6 +720,7 @@ impl Window {
             (Msg::GroupEdges, edges),
             (Msg::GroupLid, lids),
             (Msg::GroupScrews, screws),
+            (Msg::GroupFeatures, features),
             (Msg::GroupOther, others),
         ] {
             if !items.is_empty() {
@@ -698,6 +745,7 @@ impl Window {
             | Selection::Post(i)
             | Selection::Edging(i)
             | Selection::Lid(i)
+            | Selection::Feature(i)
             | Selection::Other(i) => i < self.mech.steps.len(),
             Selection::Screw(k) => k < self.built.enclosure.lid_holes().len(),
             Selection::Nothing | Selection::Body | Selection::Fit | Selection::Sheet => true,
@@ -710,14 +758,15 @@ impl Window {
     pub fn highlight(&self) -> Highlight {
         let id_of = |i: usize| -> Highlight {
             match self.mech.steps.get(i).map(|s| &s.op) {
-                Some(Operation::AddHole { id, .. }) | Some(Operation::AddPost { id, .. }) => {
-                    Highlight::Object(*id)
-                }
+                Some(Operation::AddHole { id, .. })
+                | Some(Operation::AddPost { id, .. })
+                | Some(Operation::Extrude { id, .. })
+                | Some(Operation::Pocket { id, .. }) => Highlight::Object(*id),
                 _ => Highlight::Nothing,
             }
         };
         match self.selection {
-            Selection::Hole(i) | Selection::Post(i) => id_of(i),
+            Selection::Hole(i) | Selection::Post(i) | Selection::Feature(i) => id_of(i),
             Selection::Screw(k) => Highlight::Screw(k),
             _ => Highlight::Nothing,
         }
@@ -748,6 +797,27 @@ impl Window {
             note: String::new(),
             input: Input::Text,
             editable,
+        }
+    }
+
+    fn sketch_field(&self, sketch: &str, editable: bool) -> Field {
+        Field {
+            key: Key::Sketch,
+            label: Msg::FieldSketch,
+            text: sketch.to_string(),
+            note: String::new(),
+            input: Input::Text,
+            editable,
+        }
+    }
+
+    /// The depth of a pocket as typed: a length, or empty or the word for through.
+    fn parse_depth(&self, text: &str) -> Result<Option<Length>, CadError> {
+        let t = text.trim();
+        if t.is_empty() || t.eq_ignore_ascii_case("through") || t == Msg::Through.tr(self.lang) {
+            Ok(None)
+        } else {
+            self.parse_text(t).map(Some)
         }
     }
 
@@ -832,6 +902,26 @@ impl Window {
                     post.bore_depth,
                     writable,
                 ),
+            ],
+            (Selection::Feature(_), Some(Operation::Extrude { sketch, height, .. })) => vec![
+                self.sketch_field(sketch, writable),
+                self.length_field(Key::Height, Msg::FieldHeight, *height, writable),
+            ],
+            (Selection::Feature(_), Some(Operation::Pocket { sketch, depth, .. })) => vec![
+                self.sketch_field(sketch, writable),
+                match depth {
+                    Some(d) => {
+                        self.length_field(Key::PocketDepth, Msg::FieldPocketDepth, *d, writable)
+                    }
+                    None => Field {
+                        key: Key::PocketDepth,
+                        label: Msg::FieldPocketDepth,
+                        text: Msg::Through.tr(self.lang).to_string(),
+                        note: String::new(),
+                        input: Input::Text,
+                        editable: writable,
+                    },
+                },
             ],
             (Selection::Edging(_), Some(Operation::SetEdging(edging))) => {
                 let mut out = Vec::new();
@@ -1012,6 +1102,37 @@ impl Window {
             Operation::SetLid(Some(lid)) => {
                 Ok(Operation::SetLid(Some(self.edited_lid(lid, key, text)?)))
             }
+            Operation::Extrude { id, sketch, height } => Ok(Operation::Extrude {
+                id: *id,
+                sketch: self.edited_sketch(sketch, key, text)?,
+                height: if key == Key::Height {
+                    self.parse_text(text)?
+                } else {
+                    *height
+                },
+            }),
+            Operation::Pocket { id, sketch, depth } => Ok(Operation::Pocket {
+                id: *id,
+                sketch: self.edited_sketch(sketch, key, text)?,
+                depth: if key == Key::PocketDepth {
+                    self.parse_depth(text)?
+                } else {
+                    *depth
+                },
+            }),
+            _ => Err(refusal()),
+        }
+    }
+
+    /// The name of the sketch of a feature after an edit of the field `key`.
+    fn edited_sketch(&self, sketch: &str, key: Key, text: &str) -> Result<String, CadError> {
+        match key {
+            Key::Sketch => {
+                let name = text.trim();
+                check_sketch_name(name)?;
+                Ok(name.to_string())
+            }
+            Key::Height | Key::PocketDepth => Ok(sketch.to_string()),
             _ => Err(refusal()),
         }
     }
@@ -1111,7 +1232,7 @@ impl Window {
         if next == self.mech {
             return Ok(());
         }
-        let built = next.build(&self.settings.constants, &self.settings.expr)?;
+        let built = self.rebuild(&next)?;
         if let Some(index) = check_step {
             if let Some(StepState::Failed(e)) = built.states.get(index) {
                 return Err(e.clone());
@@ -1322,7 +1443,10 @@ impl Window {
                 Operation::AddHole { id, .. }
                 | Operation::ReplaceHole { id, .. }
                 | Operation::RemoveHole { id }
-                | Operation::RemovePost { id } => ids.push(*id),
+                | Operation::RemovePost { id }
+                | Operation::Extrude { id, .. }
+                | Operation::Pocket { id, .. }
+                | Operation::RemoveFeature { id } => ids.push(*id),
                 Operation::AddPost { id, post } | Operation::ReplacePost { id, post } => {
                     ids.push(*id);
                     ids.extend(post.board_hole);
@@ -1412,6 +1536,41 @@ impl Window {
                     name,
                 ))
             }
+            NewStep::Extrude | NewStep::Pocket => {
+                let sketch = self
+                    .active_sketch
+                    .as_ref()
+                    .filter(|name| self.mech.sketch(name).is_some())
+                    .cloned()
+                    .or_else(|| self.mech.sketches.first().map(|s| s.name().to_string()))
+                    .ok_or_else(|| CadError::Feature("the project has no sketch".to_string()))?;
+                let count = self
+                    .mech
+                    .steps
+                    .iter()
+                    .filter(|s| {
+                        matches!(s.op, Operation::Extrude { .. } | Operation::Pocket { .. })
+                    })
+                    .count();
+                let id = self.fresh_id()?;
+                let n = (count + 1).to_string();
+                if kind == NewStep::Extrude {
+                    Ok((
+                        Operation::Extrude {
+                            id,
+                            sketch,
+                            height: d.extrude_height,
+                        },
+                        fill(Msg::NameExtrude.tr(self.lang), &[&n]),
+                    ))
+                } else {
+                    let depth = (d.pocket_depth.get() > 0).then_some(d.pocket_depth);
+                    Ok((
+                        Operation::Pocket { id, sketch, depth },
+                        fill(Msg::NamePocket.tr(self.lang), &[&n]),
+                    ))
+                }
+            }
             NewStep::Edging => {
                 if self
                     .mech
@@ -1447,7 +1606,7 @@ impl Window {
 
     fn step_addition(&mut self, kind: NewStep) -> Result<(), CadError> {
         let tries = match kind {
-            NewStep::Edging => 1,
+            NewStep::Edging | NewStep::Extrude | NewStep::Pocket => 1,
             NewStep::Hole | NewStep::Post => self.ui.new_step.tries,
         };
         let mut last = refusal();
@@ -1479,6 +1638,99 @@ impl Window {
         Err(last)
     }
 
+    /// The names of the sketches of the project.
+    pub fn sketch_names(&self) -> Vec<String> {
+        self.mech
+            .sketches
+            .iter()
+            .map(|s| s.name().to_string())
+            .collect()
+    }
+
+    /// Puts a sketch in the project (replacing the one of the same name) and makes it the one
+    /// the next extrusion or pocket uses. One entry of the history; the steps that use the sketch
+    /// are built again from it.
+    pub fn keep_sketch(&mut self, sketch: Sketch) {
+        if self.read_only_refusal() {
+            return;
+        }
+        let name = sketch.name().to_string();
+        let mut next = self.mech.clone();
+        if next.sketches.len() >= self.sketch_settings.max_sketches && next.sketch(&name).is_none()
+        {
+            self.status = Status::Error(CadError::ValueOutOfRange("sketches"));
+            return;
+        }
+        next.put_sketch(sketch);
+        let title = fill(Msg::SketchKept.tr(self.lang), &[&name]);
+        let done = Status::Done(Msg::SketchKept, vec![name.clone()]);
+        let result = self.change(&title, done, next, None);
+        if result.is_ok() {
+            self.active_sketch = Some(name);
+        }
+        self.finish(result);
+    }
+
+    /// Reads a sketch file (`.phoenixsketch`) and puts it in the project: the way in for the
+    /// sketches that were kept next to a project before they could be kept inside it.
+    pub fn import_sketch_file(&mut self, path: &Path) -> bool {
+        match sketch_file::read_file(path, &self.sketch_settings) {
+            Ok(sketch) => {
+                self.keep_sketch(sketch);
+                !self.status.is_problem()
+            }
+            Err(e) => {
+                self.status = Status::Error(e);
+                false
+            }
+        }
+    }
+
+    /// Writes a sketch of the project to a sketch file: the way out.
+    pub fn export_sketch_file(&mut self, name: &str, path: &Path) -> bool {
+        let Some(sketch) = self.mech.sketch(name) else {
+            self.status = Status::Error(CadError::UnknownName(name.to_string()));
+            return false;
+        };
+        match sketch_file::write_file(path, sketch, self.settings.backups) {
+            Ok(()) => {
+                let file = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                self.status = Status::Done(Msg::Saved, vec![file]);
+                true
+            }
+            Err(e) => {
+                self.status = Status::Error(e);
+                false
+            }
+        }
+    }
+
+    /// Removes a sketch from the project. A sketch that a step uses is refused.
+    pub fn remove_sketch(&mut self, name: &str) {
+        if self.read_only_refusal() {
+            return;
+        }
+        let used = self.mech.steps.iter().any(|s| match &s.op {
+            Operation::Extrude { sketch, .. } | Operation::Pocket { sketch, .. } => sketch == name,
+            _ => false,
+        });
+        let result = if used {
+            Err(CadError::InUse(name.to_string()))
+        } else if self.mech.sketch(name).is_none() {
+            Err(CadError::UnknownName(name.to_string()))
+        } else {
+            let mut next = self.mech.clone();
+            next.sketches.retain(|s| s.name() != name);
+            let title = fill(Msg::StepRemoved.tr(self.lang), &[name]);
+            let done = Status::Done(Msg::StepRemoved, vec![name.to_string()]);
+            self.change(&title, done, next, None)
+        };
+        self.finish(result);
+    }
+
     /// Removes the selected step. A step that others need (a hole that a later step replaces, for
     /// one) is refused and the recipe stays as it was.
     pub fn remove_step(&mut self) {
@@ -1498,7 +1750,7 @@ impl Window {
         if index < next.tip {
             next.tip -= 1;
         }
-        let built = next.build(&self.settings.constants, &self.settings.expr)?;
+        let built = self.rebuild(&next)?;
         let failed = built
             .states
             .iter()
@@ -1535,7 +1787,7 @@ impl Window {
     }
 
     fn restore(&mut self, mech: Mechanical, message: Msg, name: String) {
-        match mech.build(&self.settings.constants, &self.settings.expr) {
+        match self.rebuild(&mech) {
             Ok(built) => {
                 self.mech = mech;
                 self.built = built;
@@ -1573,18 +1825,26 @@ impl Window {
         let bytes = store::load_limited(path, limit as u64).map_err(Status::Error)?;
         let opened = Document::open(&bytes, limit, &[MECHANICAL_DOMAIN, PARAMETERS_DOMAIN])
             .map_err(Status::Error)?;
-        let mech = opened
+        let mut mech = opened
             .document
             .mechanical(&self.settings.expr, &self.settings.mechanical)
             .map_err(Status::Error)?
             .ok_or_else(|| Status::Problem(Msg::NoMechanical, Vec::new()))?;
-        let built = mech
-            .build(&self.settings.constants, &self.settings.expr)
-            .map_err(Status::Error)?;
+        // sketches that cannot be read (damaged, or of a newer version) leave the project open
+        // but not editable, so that they are kept as they are
+        let damaged = match opened.document.sketches(&self.sketch_settings) {
+            Ok(list) => {
+                mech.sketches = list;
+                None
+            }
+            Err(e) => Some(e),
+        };
+        let built = self.rebuild(&mech).map_err(Status::Error)?;
         self.mech = mech;
         self.built = built;
         self.document = opened.document;
-        self.read_only = opened.read_only;
+        self.read_only = opened.read_only || damaged.is_some();
+        self.active_sketch = None;
         self.path = Some(path.to_path_buf());
         self.dirty = false;
         self.history.clear();
@@ -1593,7 +1853,9 @@ impl Window {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        self.status = if self.read_only {
+        self.status = if let Some(e) = damaged {
+            Status::Error(e)
+        } else if self.read_only {
             Status::Problem(Msg::ReadOnlyOpened, Vec::new())
         } else {
             Status::Done(Msg::Opened, vec![name])
@@ -1612,6 +1874,7 @@ impl Window {
         let mut document = self.document.clone();
         let written = document
             .set_mechanical(&self.mech, &self.settings.mechanical)
+            .and_then(|()| document.set_sketches(&self.mech.sketches, &self.sketch_settings))
             .and_then(|()| store::save_atomic(path, &document.to_bytes(), self.settings.backups));
         match written {
             Ok(()) => {
@@ -1683,7 +1946,10 @@ impl Window {
         Info {
             outer: [ox, oy, oz],
             inner: [p.inner_length, p.inner_width, p.inner_height],
-            material_nm3: e.material_volume_nm3(),
+            material_nm3: {
+                let (added, removed) = e.features_volume_nm3();
+                e.material_volume_nm3() + added - removed
+            },
             failed: self
                 .built
                 .states
@@ -2638,5 +2904,229 @@ mod tests {
         assert_eq!(again.mech, w.mech);
         assert_eq!(again.sheet()[0].value, mm_len(5));
         assert!(again.states().iter().all(|s| *s == StepState::Valid));
+    }
+
+    /// A sketch on the lid: a rectangle of 40 by 25 mm and a hole of diameter 6 mm in it, with
+    /// its origin at (10, 10) mm of the face.
+    fn plate() -> Sketch {
+        let plane = crate::sketch::SketchPlane {
+            face: Face::Top,
+            u0: mm_len(10),
+            v0: mm_len(10),
+            offset: Length::ZERO,
+        };
+        let mut k = Sketch::new("plate", plane).unwrap();
+        k.add_rectangle((mm_len(0), mm_len(0)), (mm_len(40), mm_len(25)))
+            .unwrap();
+        let c = k.add_point(mm_len(20), mm_len(12)).unwrap();
+        k.add_circle(c, mm_len(3)).unwrap();
+        k
+    }
+
+    /// The material of the empty box (52 960 mm3) with `extra` mm3 more, in cubic nanometres.
+    fn material(extra_mm3: f64) -> f64 {
+        (52_960.0 + extra_mm3) * 1e18
+    }
+
+    fn area_mm2() -> f64 {
+        1000.0 - 9.0 * std::f64::consts::PI
+    }
+
+    fn close(a: i128, b: f64) -> bool {
+        (a as f64 - b).abs() < 1e8
+    }
+
+    #[test]
+    fn an_extrusion_needs_a_sketch_and_then_changes_the_tree_the_volume_and_the_history() {
+        let mut w = fresh();
+        w.add_step(NewStep::Extrude);
+        assert!(problem(&w));
+        assert!(w.status.text(Lang::En).contains("PHOENIX-CAD-037"));
+        assert!(w.mech.steps.is_empty() && !w.can_undo());
+        w.keep_sketch(plate());
+        assert_eq!(w.sketch_names(), ["plate"]);
+        assert_eq!(
+            w.status,
+            Status::Done(Msg::SketchKept, vec!["plate".into()])
+        );
+        w.add_step(NewStep::Extrude);
+        assert!(!problem(&w), "{:?}", w.status);
+        assert_eq!(w.selection, Selection::Feature(0));
+        let groups = w.tree();
+        let features = groups
+            .iter()
+            .find(|g| g.title == Msg::GroupFeatures)
+            .unwrap();
+        assert_eq!(features.items.len(), 1);
+        assert_eq!(features.items[0].label, "Extrusion 1");
+        let keys: Vec<Key> = w.fields.iter().map(|f| f.key).collect();
+        assert_eq!(keys, [Key::Sketch, Key::Height]);
+        // the box and 5 mm of the plate: 52 960 + 5 * (1000 - 9 pi) mm3
+        assert!(close(w.info.material_nm3, material(5.0 * area_mm2())));
+        set(&mut w, Key::Height, "10 mm");
+        assert!(
+            close(w.info.material_nm3, material(10.0 * area_mm2())),
+            "{}",
+            w.info.material_nm3
+        );
+        assert!(
+            w.measures_text().contains("material 62.7 cm3"),
+            "{}",
+            w.measures_text()
+        );
+        // the lines of the views have the outline and its height
+        let with = w.lines(ViewKind::Iso, (400.0, 300.0)).len();
+        w.undo();
+        w.undo();
+        w.undo();
+        assert!(w.mech.steps.is_empty() && w.mech.sketches.is_empty());
+        assert!(w.lines(ViewKind::Iso, (400.0, 300.0)).len() < with);
+        w.redo();
+        w.redo();
+        w.redo();
+        assert!(close(w.info.material_nm3, material(10.0 * area_mm2())));
+    }
+
+    #[test]
+    fn a_pocket_goes_through_or_to_a_depth_and_takes_its_volume_away() {
+        let mut w = fresh();
+        w.keep_sketch(plate());
+        w.add_step(NewStep::Pocket);
+        assert!(!problem(&w), "{:?}", w.status);
+        let depth = field(&w, Key::PocketDepth);
+        assert_eq!(w.fields[depth].text, "through");
+        // the lid is 3 mm thick
+        assert!(close(w.info.material_nm3, material(-3.0 * area_mm2())));
+        set(&mut w, Key::PocketDepth, "2 mm");
+        assert!(close(w.info.material_nm3, material(-2.0 * area_mm2())));
+        // deeper than the lid is refused and the pocket stays as it was
+        set(&mut w, Key::PocketDepth, "4 mm");
+        assert!(problem(&w));
+        assert!(close(w.info.material_nm3, material(-2.0 * area_mm2())));
+        set(&mut w, Key::PocketDepth, "through");
+        assert!(matches!(
+            w.mech.steps[0].op,
+            Operation::Pocket { depth: None, .. }
+        ));
+        // a name that is not a name of a sketch is refused too
+        set(&mut w, Key::Sketch, "no such sketch");
+        assert!(problem(&w));
+        set(&mut w, Key::Sketch, "other");
+        assert!(problem(&w));
+        assert_eq!(w.sketch_names(), ["plate"]);
+    }
+
+    #[test]
+    fn a_change_of_the_sketch_changes_the_steps_that_use_it_and_a_used_sketch_cannot_be_removed() {
+        let mut w = fresh();
+        w.keep_sketch(plate());
+        w.add_step(NewStep::Extrude);
+        let mut small = plate();
+        small.set_plane(crate::sketch::SketchPlane {
+            face: Face::Top,
+            u0: mm_len(10),
+            v0: mm_len(10),
+            offset: Length::ZERO,
+        });
+        let c = small.add_point(mm_len(5), mm_len(5)).unwrap();
+        small.add_circle(c, mm_len(2)).unwrap();
+        w.keep_sketch(small);
+        assert_eq!(w.sketch_names(), ["plate"]);
+        // a second hole of diameter 4 mm: 5 * pi * 2^2 less
+        let expect = material(5.0 * (area_mm2() - 4.0 * std::f64::consts::PI));
+        assert!(close(w.info.material_nm3, expect));
+        w.remove_sketch("plate");
+        assert!(problem(&w));
+        assert_eq!(w.sketch_names(), ["plate"]);
+        w.select(Selection::Feature(0));
+        w.remove_step();
+        w.remove_sketch("plate");
+        assert!(!problem(&w), "{:?}", w.status);
+        assert!(w.sketch_names().is_empty());
+    }
+
+    #[test]
+    fn the_sketches_and_the_steps_go_to_the_project_file_and_come_back() {
+        let dir = Scratch::new("sketches");
+        let path = dir.0.join("with.phoenixproj");
+        let mut w = fresh();
+        w.keep_sketch(plate());
+        w.add_step(NewStep::Extrude);
+        w.add_step(NewStep::Pocket);
+        assert!(w.save_to(&path), "{:?}", w.status);
+        let bytes = std::fs::read(&path).unwrap();
+        let text = String::from_utf8_lossy(&bytes).to_string();
+        assert!(text.contains("domain sketch optional "));
+        assert!(text.contains("mechanical 2\n"));
+        let mut again = fresh();
+        assert!(again.open(&path), "{:?}", again.status);
+        assert_eq!(again.mech, w.mech);
+        assert!(again.states().iter().all(|s| *s == StepState::Valid));
+        assert_eq!(again.info.material_nm3, w.info.material_nm3);
+        // saving it again gives the same file
+        assert!(again.save_to(&path));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        // a project with no sketch has no such domain and stays in version 1
+        let plain = dir.0.join("plain.phoenixproj");
+        let mut p = fresh();
+        p.add_step(NewStep::Hole);
+        assert!(p.save_to(&plain));
+        let plain_text = String::from_utf8_lossy(&std::fs::read(&plain).unwrap()).to_string();
+        assert!(!plain_text.contains("domain sketch") && plain_text.contains("mechanical 1\n"));
+        // the example, written before the sketches existed, opens as it did
+        let old = example();
+        assert!(old.mech.sketches.is_empty() && !old.read_only);
+    }
+
+    #[test]
+    fn sketches_that_cannot_be_read_open_the_project_read_only_and_are_kept_as_they_are() {
+        let dir = Scratch::new("damaged");
+        let path = dir.0.join("with.phoenixproj");
+        let mut w = fresh();
+        w.keep_sketch(plate());
+        w.add_step(NewStep::Extrude);
+        assert!(w.save_to(&path));
+        let good = Document::from_bytes(&std::fs::read(&path).unwrap(), 1 << 24).unwrap();
+        for (what, data) in [
+            ("damaged", b"hello\n".to_vec()),
+            ("newer", b"sketch 2\nwhat comes later \xff\n".to_vec()),
+        ] {
+            let mut doc = good.clone();
+            doc.set("sketch", false, data.clone()).unwrap();
+            let broken = dir.0.join(format!("{what}.phoenixproj"));
+            std::fs::write(&broken, doc.to_bytes()).unwrap();
+            let before = std::fs::read(&broken).unwrap();
+            let mut opened = fresh();
+            assert!(opened.open(&broken), "{what}: {:?}", opened.status);
+            assert!(opened.read_only, "{what}");
+            match &opened.status {
+                Status::Error(e) => assert_eq!(e.code(), "PHOENIX-CAD-035", "{what}"),
+                other => panic!("{what}: {other:?}"),
+            }
+            // the steps that need the sketch say they failed, and nothing can be written over it
+            assert!(matches!(opened.states()[0], StepState::Failed(_)), "{what}");
+            assert!(!opened.save_to(&broken));
+            assert_eq!(std::fs::read(&broken).unwrap(), before, "{what}");
+        }
+    }
+
+    #[test]
+    fn a_sketch_file_is_imported_into_the_project_and_a_sketch_is_exported_to_one() {
+        let dir = Scratch::new("files");
+        let file = dir.0.join("plate.phoenixsketch");
+        let mut w = fresh();
+        w.keep_sketch(plate());
+        assert!(w.export_sketch_file("plate", &file), "{:?}", w.status);
+        assert!(!w.export_sketch_file("nothing", &file));
+        let mut other = fresh();
+        assert!(other.import_sketch_file(&file), "{:?}", other.status);
+        assert_eq!(other.mech.sketches, w.mech.sketches);
+        assert!(other.dirty && other.can_undo());
+        // a file that is not a sketch is refused and the project is as it was
+        std::fs::write(dir.0.join("bad.phoenixsketch"), "nothing\n").unwrap();
+        let mut third = fresh();
+        assert!(!third.import_sketch_file(&dir.0.join("bad.phoenixsketch")));
+        assert!(third.mech.sketches.is_empty() && !third.dirty);
+        assert!(!third.import_sketch_file(&dir.0.join("missing.phoenixsketch")));
     }
 }

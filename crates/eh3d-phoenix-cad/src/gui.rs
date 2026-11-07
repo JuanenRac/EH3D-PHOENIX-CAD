@@ -239,6 +239,8 @@ impl App {
                         (NewStep::Hole, Msg::AddHole),
                         (NewStep::Post, Msg::AddPost),
                         (NewStep::Edging, Msg::AddEdging),
+                        (NewStep::Extrude, Msg::AddExtrude),
+                        (NewStep::Pocket, Msg::AddPocket),
                     ] {
                         if ui
                             .add_enabled(editable, egui::Button::new(msg.tr(lang)))
@@ -959,6 +961,22 @@ impl App {
                 }
                 if ui.button(Msg::SaveAs.tr(lang)).clicked() {
                     self.save_sketch_dialog();
+                }
+                ui.separator();
+                let name =
+                    egui::TextEdit::singleline(&mut self.sketch.name_input).desired_width(110.0);
+                ui.add(name);
+                if ui
+                    .add_enabled(
+                        !self.win.read_only,
+                        egui::Button::new(Msg::KeepSketch.tr(lang)),
+                    )
+                    .clicked()
+                {
+                    if let Some(kept) = self.sketch.sketch_for_project() {
+                        self.win.keep_sketch(kept);
+                        self.sketch.mark_kept();
+                    }
                 }
                 ui.separator();
                 if ui
@@ -1709,16 +1727,20 @@ fn make_window(start: Start) -> Result<(Window, SketchEditor, StartView), String
     let mut sketch = SketchEditor::new(
         start.lang,
         start.settings.clone(),
-        start.solver,
+        start.solver.clone(),
         start.sketch_ui,
     );
     let mut win = Window::new(start.lang, start.settings, start.ui).map_err(|e| e.to_string())?;
+    win.sketch_settings = start.solver;
     if let Some(path) = start.project {
         win.open(&path);
     }
     sketch.set_variables(&win.mech.vars);
     if let Some(path) = &start.sketch {
         sketch.open_file(path);
+    } else if let Some(first) = win.mech.sketches.first() {
+        // the sketches of a project are in its file; the one next to it is only an import
+        sketch.load_from_project(first.clone());
     } else if start.view == StartView::Sketch {
         // the sketch of a project is the file next to it
         let next_to = win.path.as_deref().map(sketch_file::sibling_path);

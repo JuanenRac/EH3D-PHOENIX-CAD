@@ -7,7 +7,7 @@
 //! for a picture and is never used to decide anything about the model.
 
 use crate::datum::Datum;
-use crate::enclosure::{Enclosure, EnclosureParams, Face, Hole, Id};
+use crate::enclosure::{Enclosure, EnclosureParams, Face, Feature, FeatureKind, Hole, Id};
 use crate::mount::Post;
 
 /// A point in millimetres: x along the length of the box, y along its width, z up. The smallest
@@ -239,6 +239,65 @@ fn push_post(
     }
 }
 
+/// An extrusion or a pocket: its outline on the face and at the height or depth it goes to, joined
+/// by a line at each corner (four points of a circle).
+fn push_feature(out: &mut Vec<Segment>, enclosure: &Enclosure, feature: &Feature, kind: Kind) {
+    let datum = Datum::of_face(enclosure, feature.face);
+    let unit = |axis: [i64; 3]| -> Point3 {
+        let r = datum.rotation.apply(axis);
+        [r[0] as f64, r[1] as f64, r[2] as f64]
+    };
+    let (ax, ay, az) = (unit([1, 0, 0]), unit([0, 1, 0]), unit([0, 0, 1]));
+    let origin = [
+        mm(datum.origin[0].get()),
+        mm(datum.origin[1].get()),
+        mm(datum.origin[2].get()),
+    ];
+    let at = |u: f64, v: f64, w: f64| -> Point3 {
+        [
+            origin[0] + ax[0] * u + ay[0] * v + az[0] * w,
+            origin[1] + ax[1] * u + ay[1] * v + az[1] * w,
+            origin[2] + ax[2] * u + ay[2] * v + az[2] * w,
+        ]
+    };
+    let depth = mm(feature.depth_in(enclosure.params()).get());
+    let w = match feature.kind {
+        FeatureKind::Extrude => depth,
+        FeatureKind::Pocket => -depth,
+    };
+    let (u0, v0) = (mm(feature.u0.get()), mm(feature.v0.get()));
+    let on = |p: (i64, i64)| -> (f64, f64) { (u0 + mm(p.0), v0 + mm(p.1)) };
+    for outline in feature.profile.outlines() {
+        let poly = outline.polygon();
+        let n = poly.len();
+        for i in 0..n {
+            let (a, b) = (on(poly[i]), on(poly[(i + 1) % n]));
+            out.push(Segment {
+                a: at(a.0, a.1, 0.0),
+                b: at(b.0, b.1, 0.0),
+                kind,
+            });
+            out.push(Segment {
+                a: at(a.0, a.1, w),
+                b: at(b.0, b.1, w),
+                kind,
+            });
+        }
+        let corners: Vec<(i64, i64)> = match outline.circle_of() {
+            Some(((cx, cy), r)) => vec![(cx + r, cy), (cx, cy + r), (cx - r, cy), (cx, cy - r)],
+            None => outline.pieces().iter().map(|piece| piece.start()).collect(),
+        };
+        for p in corners {
+            let a = on(p);
+            out.push(Segment {
+                a: at(a.0, a.1, 0.0),
+                b: at(a.0, a.1, w),
+                kind,
+            });
+        }
+    }
+}
+
 /// The size of the outer box in millimetres.
 pub fn outer_size(enclosure: &Enclosure) -> Point3 {
     let (x, y, z) = enclosure.params().outer();
@@ -301,6 +360,17 @@ pub fn scene_of(
             Kind::Post
         };
         push_post(&mut out, p, post, segments, kind);
+    }
+    for (id, feature) in enclosure.features() {
+        // an extrusion is drawn like a post (material) and a pocket like a hole
+        let kind = if highlight == Highlight::Object(*id) {
+            Kind::Selected
+        } else if feature.kind == FeatureKind::Extrude {
+            Kind::Post
+        } else {
+            Kind::Hole
+        };
+        push_feature(&mut out, enclosure, feature, kind);
     }
     if let Some(b) = board {
         push_box(&mut out, b.min, b.max, Kind::Board);
@@ -470,6 +540,70 @@ mod tests {
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-6
+    }
+
+    fn with_plate() -> Enclosure {
+        use crate::sketch::{Sketch, SketchPlane};
+        let plane = SketchPlane {
+            face: Face::Top,
+            u0: mmlen(10),
+            v0: mmlen(10),
+            offset: Length::ZERO,
+        };
+        let mut k = Sketch::new("plate", plane).unwrap();
+        k.add_rectangle((mmlen(0), mmlen(0)), (mmlen(40), mmlen(25)))
+            .unwrap();
+        let c = k.add_point(mmlen(20), mmlen(12)).unwrap();
+        k.add_circle(c, mmlen(3)).unwrap();
+        let mut e = enclosure();
+        e.set_sketches(vec![k], None);
+        e
+    }
+
+    #[test]
+    fn an_extrusion_is_drawn_above_the_lid_and_a_pocket_into_it() {
+        let mut e = with_plate();
+        e.apply(Operation::Extrude {
+            id: id(1),
+            sketch: "plate".into(),
+            height: mmlen(10),
+        })
+        .unwrap();
+        let lines = scene_of(&e, None, Highlight::Nothing, 16);
+        let boss: Vec<&Segment> = lines.iter().filter(|s| s.kind == Kind::Post).collect();
+        // the outline of the rectangle and of the hole at the lid and 10 mm above it, and a
+        // vertical line at each of the four corners and at four points of the hole
+        let zs: Vec<f64> = boss.iter().flat_map(|s| [s.a[2], s.b[2]]).collect();
+        let (lo, hi) = zs
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(l, h), z| (l.min(*z), h.max(*z)));
+        assert!(close(lo, 35.0) && close(hi, 45.0), "{lo} {hi}");
+        let vertical = boss
+            .iter()
+            .filter(|s| close(s.a[0], s.b[0]) && close(s.a[1], s.b[1]))
+            .count();
+        assert_eq!(vertical, 8);
+        assert!(lines.iter().all(|s| s.kind != Kind::Selected));
+        let picked = scene_of(&e, None, Highlight::Object(id(1)), 16);
+        assert_eq!(
+            picked.iter().filter(|s| s.kind == Kind::Selected).count(),
+            boss.len()
+        );
+        let mut p = with_plate();
+        p.apply(Operation::Pocket {
+            id: id(2),
+            sketch: "plate".into(),
+            depth: None,
+        })
+        .unwrap();
+        let lines = scene_of(&p, None, Highlight::Nothing, 16);
+        let cut: Vec<&Segment> = lines.iter().filter(|s| s.kind == Kind::Hole).collect();
+        let zs: Vec<f64> = cut.iter().flat_map(|s| [s.a[2], s.b[2]]).collect();
+        let (lo, hi) = zs
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(l, h), z| (l.min(*z), h.max(*z)));
+        // through the lid, which is 3 mm thick
+        assert!(close(lo, 32.0) && close(hi, 35.0), "{lo} {hi}");
     }
 
     #[test]

@@ -43,6 +43,10 @@ pub struct NewStepDefaults {
     pub post_bore_diameter: Length,
     /// The depth of the bore of a new post.
     pub post_bore_depth: Length,
+    /// The height of a new extrusion.
+    pub extrude_height: Length,
+    /// The depth of a new pocket; zero cuts through the face.
+    pub pocket_depth: Length,
 }
 
 /// The settings of the window with their types.
@@ -135,6 +139,8 @@ impl NewStepDefaults {
             })?,
             post_bore_diameter: c.length("new_step.post_bore_diameter")?,
             post_bore_depth: c.length("new_step.post_bore_depth")?,
+            extrude_height: c.length("new_step.extrude_height")?,
+            pocket_depth: c.length("new_step.pocket_depth")?,
         })
     }
 }

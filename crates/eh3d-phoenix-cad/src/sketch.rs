@@ -505,6 +505,13 @@ impl Sketch {
         &self.name
     }
 
+    /// Gives the sketch another name: letters, digits, `_` and `-`.
+    pub fn set_name(&mut self, name: &str) -> Result<(), CadError> {
+        check_sketch_name(name)?;
+        self.name = name.to_string();
+        Ok(())
+    }
+
     /// The plane.
     pub fn plane(&self) -> &SketchPlane {
         &self.plane

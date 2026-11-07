@@ -870,6 +870,8 @@ pub struct SketchEditor {
     pub ui: SketchUiSettings,
     /// The variables of the project, which the dimensions may use.
     pub variables: Variables,
+    /// The name typed for the sketch, which it takes when it is kept in the project.
+    pub name_input: String,
     history: History<Sketch>,
     pending: Vec<Anchor>,
     chain: Option<Sketch>,
@@ -917,6 +919,7 @@ impl SketchEditor {
             solver,
             ui,
             variables: Variables::new(),
+            name_input: "sketch".to_string(),
             pending: Vec::new(),
             chain: None,
             chain_first: None,
@@ -940,6 +943,7 @@ impl SketchEditor {
     /// Starts an empty sketch.
     pub fn new_sketch(&mut self) {
         self.sketch = new_sketch();
+        self.name_input = self.sketch.name().to_string();
         self.reset_session();
         self.path = None;
         self.status = Status::Done(Msg::SketchNew, Vec::new());
@@ -2285,6 +2289,7 @@ impl SketchEditor {
 
     fn restore(&mut self, sketch: Sketch, message: Msg, name: String) {
         self.sketch = sketch;
+        self.name_input = self.sketch.name().to_string();
         self.dirty = true;
         self.picked
             .elements
@@ -2306,6 +2311,7 @@ impl SketchEditor {
         match file::read_file(path, &self.solver) {
             Ok(sketch) => {
                 self.sketch = sketch;
+                self.name_input = self.sketch.name().to_string();
                 self.reset_session();
                 self.path = Some(path.to_path_buf());
                 self.evaluate(false);
@@ -2318,6 +2324,33 @@ impl SketchEditor {
                 false
             }
         }
+    }
+
+    /// Takes a sketch of the project to edit. It has no file until it is saved to one.
+    pub fn load_from_project(&mut self, sketch: Sketch) {
+        self.sketch = sketch;
+        self.name_input = self.sketch.name().to_string();
+        self.reset_session();
+        self.path = None;
+        self.evaluate(false);
+        self.fit();
+        self.status = Status::Ready;
+    }
+
+    /// The sketch to keep in the project, under the name typed for it. The answer is `None`
+    /// (and the status says why) when the name is not valid.
+    pub fn sketch_for_project(&mut self) -> Option<Sketch> {
+        let name = self.name_input.trim().to_string();
+        if !name.is_empty() && name != self.sketch.name() {
+            self.edit("Name", |s, _| s.set_name(&name))?;
+        }
+        self.name_input = self.sketch.name().to_string();
+        Some(self.sketch.clone())
+    }
+
+    /// Says in the status bar that the sketch was kept in the project.
+    pub fn mark_kept(&mut self) {
+        self.status = Status::Done(Msg::SketchKept, vec![self.sketch.name().to_string()]);
     }
 
     /// Writes the sketch to `path`, atomically, keeping the copies of the settings.
@@ -3954,5 +3987,44 @@ mod tests {
         assert!(to_len(f64::NAN).is_err());
         assert!(to_len(1e12).is_err());
         assert_eq!(to_len(1.5).unwrap().get(), 1_500_000);
+    }
+
+    #[test]
+    fn a_sketch_of_the_project_is_taken_renamed_and_kept_under_its_name() {
+        let mut w = editor();
+        let mut k = Sketch::new("plate", SketchPlane::on_face(Face::Front)).unwrap();
+        k.add_rectangle(
+            (Length::from_mm(0).unwrap(), Length::from_mm(0).unwrap()),
+            (Length::from_mm(40).unwrap(), Length::from_mm(25).unwrap()),
+        )
+        .unwrap();
+        w.load_from_project(k.clone());
+        assert_eq!(w.sketch, k);
+        assert_eq!(w.name_input, "plate");
+        assert!(w.path.is_none() && !w.dirty && !w.can_undo());
+        // the same name keeps the sketch as it is
+        assert_eq!(w.sketch_for_project().unwrap(), k);
+        // another name renames it, as a step of the history
+        w.name_input = " cover ".to_string();
+        let kept = w.sketch_for_project().unwrap();
+        assert_eq!(kept.name(), "cover");
+        assert!(w.dirty && w.can_undo());
+        w.undo();
+        assert_eq!(w.sketch.name(), "plate");
+        assert_eq!(w.name_input, "plate");
+        // a name that is not a name is refused and the sketch is as it was
+        w.name_input = "two words".to_string();
+        assert!(w.sketch_for_project().is_none());
+        assert!(w.status.is_problem() || matches!(w.status, Status::Error(_)));
+        assert_eq!(w.sketch.name(), "plate");
+        w.name_input = "plate".to_string();
+        w.sketch_for_project().unwrap();
+        w.mark_kept();
+        assert_eq!(
+            w.status,
+            Status::Done(Msg::SketchKept, vec!["plate".into()])
+        );
+        w.new_sketch();
+        assert_eq!(w.name_input, "sketch");
     }
 }
