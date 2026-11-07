@@ -71,6 +71,7 @@ pub mod catalog;
 pub mod config;
 pub mod datum;
 pub mod drag;
+pub mod drawing;
 pub mod enclosure;
 pub mod export;
 pub mod expr;
@@ -84,6 +85,7 @@ pub mod lang;
 pub mod mass;
 pub mod measure;
 pub mod mechanical;
+pub mod mesh;
 pub mod messages;
 pub mod mount;
 pub mod names;
@@ -95,11 +97,13 @@ pub mod project;
 pub mod projection;
 pub mod scad;
 pub mod scene;
+pub mod solid;
 pub mod shot;
 pub mod sketch;
 pub mod sketch_ui;
 pub mod step;
 pub mod store;
+pub mod triangulate;
 pub mod uiconfig;
 pub mod units;
 pub mod vars;
@@ -299,6 +303,14 @@ pub enum CadError {
     Mate(String),
     /// Parts that share volume: the pairs in conflict, as the check of the assembly reports them.
     Interference(String),
+    /// A shape the solid of the STL file cannot be made of: a rounded or chamfered edge around the
+    /// lid or the floor, a hole or a shape that is not where the material is, shapes that cross.
+    MeshShape(String),
+    /// A solid that does not match the model: a surface that is not closed, or a volume of the
+    /// triangles that differs from the exact volume by more than the settings allow.
+    MeshCheck(String),
+    /// A solid or a drawing larger than the settings allow: more triangles or more entities.
+    ExportLimit(String),
 }
 
 impl CadError {
@@ -352,6 +364,9 @@ impl CadError {
             CadError::Part(_) => "PHOENIX-CAD-045",
             CadError::Mate(_) => "PHOENIX-CAD-046",
             CadError::Interference(_) => "PHOENIX-CAD-047",
+            CadError::MeshShape(_) => "PHOENIX-CAD-048",
+            CadError::MeshCheck(_) => "PHOENIX-CAD-049",
+            CadError::ExportLimit(_) => "PHOENIX-CAD-050",
         }
     }
 }
@@ -412,7 +427,10 @@ impl fmt::Display for CadError {
             | CadError::Library(why)
             | CadError::Part(why)
             | CadError::Mate(why)
-            | CadError::Interference(why) => write!(f, "{title}: {why}"),
+            | CadError::Interference(why)
+            | CadError::MeshShape(why)
+            | CadError::MeshCheck(why)
+            | CadError::ExportLimit(why) => write!(f, "{title}: {why}"),
         }
     }
 }
@@ -471,6 +489,9 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-045", "Part not valid"),
     ("PHOENIX-CAD-046", "Assembly not valid"),
     ("PHOENIX-CAD-047", "Parts interfere"),
+    ("PHOENIX-CAD-048", "Shape the solid cannot be made of"),
+    ("PHOENIX-CAD-049", "Solid does not match the model"),
+    ("PHOENIX-CAD-050", "Export above the limits"),
 ];
 
 #[cfg(test)]
@@ -671,6 +692,9 @@ mod tests {
             CadError::Part("cut".into()),
             CadError::Mate("cycle".into()),
             CadError::Interference("pairs".into()),
+            CadError::MeshShape("rim".into()),
+            CadError::MeshCheck("open".into()),
+            CadError::ExportLimit("triangles".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));

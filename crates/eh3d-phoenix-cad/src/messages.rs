@@ -623,6 +623,45 @@ const TEXTS: &[Row] = &[
             "As peças interferem",
         ],
     ),
+    (
+        "PHOENIX-CAD-048",
+        [
+            "Shape the solid cannot be made of",
+            "Forma con la que no se puede hacer el sólido",
+            "Form, aus der sich der Körper nicht bilden lässt",
+            "Forme dont le solide ne peut pas être fait",
+            "Forma con cui non si può fare il solido",
+            "ソリッドを作れない形状です",
+            "无法生成实体的形状",
+            "Forma de que o sólido não pode ser feito",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-049",
+        [
+            "Solid does not match the model",
+            "El sólido no coincide con el modelo",
+            "Körper stimmt nicht mit dem Modell überein",
+            "Le solide ne correspond pas au modèle",
+            "Il solido non corrisponde al modello",
+            "ソリッドがモデルと一致しません",
+            "实体与模型不一致",
+            "O sólido não corresponde ao modelo",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-050",
+        [
+            "Export above the limits",
+            "Exportación por encima de los límites",
+            "Export über den Grenzwerten",
+            "Exportation au-dessus des limites",
+            "Esportazione oltre i limiti",
+            "エクスポートが上限を超えています",
+            "导出超出限制",
+            "Exportação acima dos limites",
+        ],
+    ),
 ];
 
 /// The text of a diagnostic in a language (`en`, `es`, `de`, `fr`, `it`, `ja`, `zh` or `pt`), or
