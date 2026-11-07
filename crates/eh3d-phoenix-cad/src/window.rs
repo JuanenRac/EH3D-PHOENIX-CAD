@@ -1,6 +1,7 @@
 //! The state of the window and everything it decides without a screen: the project that is open,
 //! the tree of the model, the fields of the properties, what an edit does, the history of the
-//! changes, the views and the texts of the status bar.
+//! changes, the views and the texts of the status bar. The sketches of the project (kept in its file
+//! and used by the extrusions and pockets) are part of the recipe it edits.
 //!
 //! The window (`gui`) only draws this state and passes on what the person does. An edit is a
 //! transaction: the new recipe is built first and the change is kept only when the model accepts

@@ -1,5 +1,6 @@
-//! The settings of the sketch: the solver (tolerance, iterations, step, damping) and the limits
-//! of a sketch and of its file.
+//! The settings of the sketch: the solver (tolerance, iterations, step, damping), the limits of a
+//! sketch, of its file and of the sketches of a project, and the limits of the profiles that are
+//! raised or cut (the join of two ends, the least area, the sag of a curve).
 //!
 //! They live in `phoenix-cad-sketch.default.cfg`, the same form as the other settings files; the
 //! code holds none of the values. A user file only needs the keys it changes.

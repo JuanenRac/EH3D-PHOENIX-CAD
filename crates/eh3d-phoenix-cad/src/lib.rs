@@ -3,7 +3,7 @@
 //! * [`Length`]: a length in integer nanometres inside the mechanical range (2^40 nm, about 1100 m,
 //!   so a chassis larger than a board is representable: the board model has its own, smaller range);
 //! * [`enclosure`]: a parametric box with round, countersunk, counterbored, rectangular and oval holes in its faces (each with the object identity of
-//!   the suite, a UUID v7), rounded or chamfered edges, and the structured operations that change it. An operation that is refused leaves the model exactly as it was;
+//!   the suite, a UUID v7), rounded or chamfered edges, and the structured operations that change it, among them raising the outline of a sketch from a face (extrusion) and cutting it into one (pocket). An operation that is refused leaves the model exactly as it was;
 //! * [`scad`]: the model as an OpenSCAD-style script, the same text for the same model;
 //! * [`step`]: the model as a STEP file (a boundary representation with the inner space as a void),
 //!   the same text for the same model, checked for its structure only;
@@ -22,10 +22,11 @@
 //! * [`parametric`]: the parameters of an enclosure as values, variables or expressions that refer to variables, to constants of the settings and to each other, calculated through the graph of dependencies;
 //! * [`datum`]: reference frames with an origin and one of the 24 axis-aligned rotations, and the frame of each face of the box;
 //! * [`project`]: the envelope of a project file with a format version, named domains kept byte for byte when unknown, read-only opening when a critical domain is not understood, and migrations from older versions;
-//! * [`mechanical`]: the mechanical domain of the project file: the recipe of steps, the parameters and expressions, and the interface of the board, read again to the same enclosure, with a migration from the domain of the parameters;
+//! * [`mechanical`]: the mechanical domain of the project file: the recipe of steps (version 2 when it has an extrusion or a pocket), the parameters and expressions, and the interface of the board, read again to the same enclosure, with a migration from the domain of the parameters;
 //! * [`messages`]: the text of every diagnostic in the eight languages of the suite;
 //! * [`fit`]: whether an envelope (the outline of a board and its tallest part) fits inside;
-//! * [`sketch`]: the 2D sketch on a face of the box: points, lines, circles, arcs, polylines and rectangles, geometric and dimensional constraints (a dimension may be an expression over the variables), a numeric solver that reports the degrees of freedom left, the constraints that repeat or contradict each other, or that it did not converge, its settings file, and the sketch file kept next to the project;
+//! * [`sketch`]: the 2D sketch on a face of the box: points, lines, circles, arcs, polylines and rectangles, geometric and dimensional constraints (a dimension may be an expression over the variables), a numeric solver that reports the degrees of freedom left, the constraints that repeat or contradict each other, or that it did not converge, its settings file, the sketch file (the way in and out of a sketch) and the domain `sketch` of the project file, where the sketches of a project are kept;
+//! * [`profile`]: the closed outlines of a sketch (chains of lines and arcs and circles, with the holes found by containment), checked for being closed, simple and large enough, with their area; the extrusions and pockets of the enclosure are made from them;
 //! * [`window`], [`scene`], [`history`], [`uiconfig`], [`lang`], [`shot`] and [`browse`]: the state of the window (the tree of the model, the properties, the
 //!   views, the history of the changes), the lines it draws, its settings, its texts in the eight languages, the picture mode and the list of files; the window itself is
 //!   `gui` (built with `--features gui`).

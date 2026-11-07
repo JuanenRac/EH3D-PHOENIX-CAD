@@ -8,13 +8,14 @@
 //! opened read-only instead of being edited and saved without it.
 //!
 //! A file of an older version is brought to the current one by a chain of migrations; a file of a
-//! newer version is refused. Nothing here says what most domains hold: the mechanical domain of the
-//! project format belongs to a contract that is not accepted yet. One domain is written here, the
-//! one of the parameters of the enclosure (`mechanical-parameters`): the base values, the
-//! variables and the definition of each parameter as a value, a variable or an expression. It is
-//! a domain of its own, so a file without it opens as before and a file with it opens in an older
-//! program as read-only (it is critical: an older program would not know that a parameter is
-//! a formula).
+//! newer version is refused. Nothing here says what a domain holds, with one exception: the one
+//! of the parameters of the enclosure (`mechanical-parameters`), written here: the base values,
+//! the variables and the definition of each parameter as a value, a variable or an expression. It
+//! is a domain of its own, so a file without it opens as before and a file with it opens in an
+//! older program as read-only (it is critical: an older program would not know that a parameter
+//! is a formula). It is the older form of the domain `mechanical` (`crate::mechanical`), which
+//! replaces it; the sketches of a project are in the optional domain `sketch`
+//! (`crate::sketch::domain`).
 
 use std::collections::{BTreeMap, BTreeSet};
 

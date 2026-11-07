@@ -1,5 +1,5 @@
 //! The drawing of the box as lines: the segments of the box, its inner space, its holes, its
-//! posts and the board, and the projection of those lines onto a pane for the 3D view and the
+//! posts, the extrusions and pockets of its sketches and the board, and the projection of those lines onto a pane for the 3D view and the
 //! plan.
 //!
 //! Everything is calculated from the enclosure and drawn nowhere here: the window only paints the

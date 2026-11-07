@@ -14,8 +14,9 @@
 //!   same identifiers, and a removed identifier is never given again;
 //! * [`solver`] solves the sketch by least squares and reports the degrees of freedom left, the
 //!   constraints that are redundant or in conflict, or that it did not converge;
-//! * [`settings`] holds the tuned values of the solver (a file outside the code) and [`file`] the
-//!   text file of a sketch, kept next to the project file.
+//! * [`settings`] holds the tuned values of the solver and of the profiles (a file outside the
+//!   code), [`file`] the text file of a sketch (a way in and out) and [`domain`] the domain
+//!   `sketch` of the project file, where the sketches of a project are kept.
 //!
 //! The solver works on floating point numbers in millimetres and rounds the result to the
 //! nanometre; it uses only the operations that every platform computes the same way (sums,

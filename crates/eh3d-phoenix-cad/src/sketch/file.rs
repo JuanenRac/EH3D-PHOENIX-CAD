@@ -1,7 +1,8 @@
-//! The sketch file (`.phoenixsketch`): one sketch in plain text, kept next to the project file.
+//! The sketch file (`.phoenixsketch`): one sketch in plain text, the way in and the way out of the
+//! sketches of a project, which are kept in the project file itself (`super::domain`).
 //!
-//! The file has its own version in its first line and does not touch the format of the project
-//! file. One line for the header, one for the name, one for the plane, one for the counters of
+//! The file has its own version in its first line, and the same text is what the domain `sketch`
+//! of the project file holds for each sketch. One line for the header, one for the name, one for the plane, one for the counters of
 //! the identifiers and then one line for each element and each constraint, in the order they
 //! were added:
 //!
@@ -50,7 +51,8 @@ fn bad(line: usize, why: impl AsRef<str>) -> CadError {
 }
 
 /// The path of the sketch file that goes with a project file: the same name with the extension of
-/// the sketch.
+/// the sketch. A project no longer keeps its sketch there; the file is only looked for when a
+/// project has no sketch of its own, so that one kept that way can be put in the project.
 pub fn sibling_path(project: &Path) -> PathBuf {
     project.with_extension(EXTENSION)
 }
