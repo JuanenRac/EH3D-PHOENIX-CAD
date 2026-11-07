@@ -11,3 +11,6 @@
 
 # the sketch files are text with their own line ends: no conversion
 *.phoenixsketch -text
+
+# the library files are text with their own line ends: no conversion
+*.phoenixlib -text
