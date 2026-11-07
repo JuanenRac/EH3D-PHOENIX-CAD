@@ -597,6 +597,13 @@ pub fn format_msg(format: Format) -> Msg {
     match format {
         Format::Script => Msg::ExportScript,
         Format::Step => Msg::ExportStep,
+        Format::Stl => Msg::ExportStl,
+        Format::DxfTop => Msg::ExportDxfTop,
+        Format::DxfFront => Msg::ExportDxfFront,
+        Format::DxfSide => Msg::ExportDxfSide,
+        Format::SvgTop => Msg::ExportSvgTop,
+        Format::SvgFront => Msg::ExportSvgFront,
+        Format::SvgSide => Msg::ExportSvgSide,
         Format::Report => Msg::ExportReport,
         Format::Bill => Msg::ExportBill,
     }
@@ -3325,15 +3332,24 @@ impl Window {
     // Export
     // -----------------------------------------------------------------------------------------
 
-    /// The text of a format for the model as it is now. The STEP file is refused with
+    /// The bytes of a format for the model as it is now. The STEP file is refused with
     /// `PHOENIX-CAD-022` when the model has a shape it does not draw (the extrusions and pockets
-    /// of the sketches among them).
-    pub fn export_text(&self, format: Format) -> Result<String, CadError> {
+    /// of the sketches among them); the STL file with `PHOENIX-CAD-048` to `-050` when the solid
+    /// cannot be made, does not match the model or is above the limits.
+    pub fn export_bytes(&self, format: Format) -> Result<Vec<u8>, CadError> {
         let text = match format {
             Format::Bill => self.bill_csv_text()?,
-            _ => self.report_text(),
+            Format::Report => self.report_text(),
+            _ => String::new(),
         };
-        export::render(format, &self.built.enclosure, &text)
+        export::render(format, &self.built.enclosure, &text, &self.settings)
+    }
+
+    /// The text of a format for the model as it is now; a binary STL file is not text and is
+    /// refused (ask for [`Window::export_bytes`]).
+    pub fn export_text(&self, format: Format) -> Result<String, CadError> {
+        String::from_utf8(self.export_bytes(format)?)
+            .map_err(|_| CadError::Export("the file is binary, not text".to_owned()))
     }
 
     /// The name suggested for a file of a format, from the name of the project.
@@ -3346,10 +3362,10 @@ impl Window {
     /// of the reason it was not; the project and its history are not touched. The answer is false
     /// when nothing was written.
     pub fn export_to(&mut self, format: Format, path: &Path, overwrite: bool) -> bool {
-        let written = self.export_text(format).and_then(|text| {
-            export::write_file(
+        let written = self.export_bytes(format).and_then(|bytes| {
+            export::write_bytes(
                 path,
-                &text,
+                &bytes,
                 overwrite,
                 self.path.as_deref(),
                 self.ui.export.max_kib,
@@ -5360,6 +5376,54 @@ mod tests {
         assert_eq!(w.export_name(Format::Step), "mybox.step");
         assert_eq!(w.export_name(Format::Report), "mybox.txt");
         assert_eq!(fresh().export_name(Format::Step), "box.step");
+    }
+
+    #[test]
+    fn the_solid_and_the_drawings_are_written_from_the_window_and_named_after_the_project() {
+        let dir = Scratch::new("solid");
+        let (mut w, _) = example_copy(&dir, "mybox.phoenixproj");
+        assert_eq!(w.export_name(Format::Stl), "mybox.stl");
+        assert_eq!(w.export_name(Format::DxfFront), "mybox.dxf");
+        assert_eq!(w.export_name(Format::SvgSide), "mybox.svg");
+        let stl = dir.0.join("mybox.stl");
+        assert!(w.export_to(Format::Stl, &stl, false), "{:?}", w.status);
+        let bytes = std::fs::read(&stl).unwrap();
+        let triangles = crate::mesh::read_stl(&bytes).unwrap();
+        assert_eq!(bytes.len(), 84 + 50 * triangles.len());
+        assert_eq!(
+            w.status,
+            Status::Done(Msg::Exported, vec!["mybox.stl".into(), bytes.len().to_string()])
+        );
+        // the same file is not written twice without the order
+        assert!(!w.export_to(Format::Stl, &stl, false));
+        assert!(w.status.text(Lang::En).starts_with("PHOENIX-CAD-040"));
+        // a binary file is not text
+        let err = w.export_text(Format::Stl).unwrap_err();
+        assert_eq!(err.code(), "PHOENIX-CAD-041");
+        assert_eq!(w.export_bytes(Format::Stl).unwrap(), bytes);
+        for (format, name, needle) in [
+            (Format::DxfTop, "plan.dxf", "CONTORNO"),
+            (Format::SvgFront, "front.svg", "<svg "),
+        ] {
+            let target = dir.0.join(name);
+            assert!(w.export_to(format, &target, false), "{:?}", w.status);
+            assert!(std::fs::read_to_string(&target).unwrap().contains(needle));
+        }
+        // the project is not touched by an export
+        assert!(!w.dirty && !w.can_undo());
+    }
+
+    #[test]
+    fn a_solid_that_cannot_be_made_is_refused_in_the_status_bar_and_nothing_is_written() {
+        let dir = Scratch::new("refused");
+        let mut w = fresh();
+        // the plate of the example covers the holes of the screws of its lid
+        let plate = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/plate.phoenixproj"));
+        assert!(w.open(&plate), "{:?}", w.status);
+        let target = dir.0.join("box.stl");
+        assert!(!w.export_to(Format::Stl, &target, false));
+        assert!(w.status.text(Lang::En).starts_with("PHOENIX-CAD-048"));
+        assert!(!target.exists());
     }
 
     #[test]

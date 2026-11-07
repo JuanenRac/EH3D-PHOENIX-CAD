@@ -1,17 +1,23 @@
-//! Writing what the library can make of the model to a file chosen from the window: the script,
-//! the STEP file and the text of the fit report. Everything that decides is here and is tested
-//! without a screen: which formats there are, the name suggested for the file, the checks of the
-//! target (it must not write over a file unless it was ordered to, nor over the project that is
-//! open, nor to a name that belongs to a project or a sketch) and the writing itself.
+//! Writing what the library can make of the model to a file chosen from the window or by the
+//! `export` command: the script, the STEP file, the STL file (triangles, binary or text), the DXF
+//! and SVG drawings of the plan, the front and the side, the text of the fit report and the bill
+//! of materials. Everything that decides is here and is tested without a screen: which formats
+//! there are, the name suggested for the file, the checks of the target (it must not write over a
+//! file unless it was ordered to, nor over the project that is open, nor to a name that belongs to
+//! a project or a sketch) and the writing itself.
 //!
-//! The formats are the ones the library has. The extrusions and pockets of the sketches are not
-//! drawn by the STEP file (the answer is `PHOENIX-CAD-022`, as in the library) and the script
-//! says so in a comment line.
+//! The extrusions and pockets of the sketches are not drawn by the STEP file (the answer is
+//! `PHOENIX-CAD-022`, as in the library) and the script says so in a comment line; the STL file and
+//! the drawings do draw them (see [`crate::solid`] for what the STL file can be made of).
 
 use crate::browse::matches_extension;
+use crate::config::Settings;
+use crate::drawing::{Drawing, View};
 use crate::enclosure::Enclosure;
+use crate::mesh;
 use crate::scad::to_scad;
 use crate::sketch::file as sketch_file;
+use crate::solid;
 use crate::step::export_step;
 use crate::store;
 use crate::window::PROJECT_EXTENSIONS;
@@ -27,6 +33,20 @@ pub enum Format {
     Script,
     /// The model as a STEP file.
     Step,
+    /// The solid of the model as triangles (binary or text as the settings say).
+    Stl,
+    /// The plan as a DXF drawing.
+    DxfTop,
+    /// The front as a DXF drawing.
+    DxfFront,
+    /// The side as a DXF drawing.
+    DxfSide,
+    /// The plan as an SVG drawing.
+    SvgTop,
+    /// The front as an SVG drawing.
+    SvgFront,
+    /// The side as an SVG drawing.
+    SvgSide,
     /// The text of the fit report: the measures, whether the board fits and the state of every
     /// step.
     Report,
@@ -36,13 +56,28 @@ pub enum Format {
 
 impl Format {
     /// Every format, in the order of the menu.
-    pub const ALL: [Format; 4] = [Format::Script, Format::Step, Format::Report, Format::Bill];
+    pub const ALL: [Format; 11] = [
+        Format::Script,
+        Format::Step,
+        Format::Stl,
+        Format::DxfTop,
+        Format::DxfFront,
+        Format::DxfSide,
+        Format::SvgTop,
+        Format::SvgFront,
+        Format::SvgSide,
+        Format::Report,
+        Format::Bill,
+    ];
 
     /// The extension of the files of the format, without the dot.
     pub fn extension(self) -> &'static str {
         match self {
             Format::Script => "scad",
             Format::Step => "step",
+            Format::Stl => "stl",
+            Format::DxfTop | Format::DxfFront | Format::DxfSide => "dxf",
+            Format::SvgTop | Format::SvgFront | Format::SvgSide => "svg",
             Format::Report => "txt",
             Format::Bill => "csv",
         }
@@ -53,6 +88,13 @@ impl Format {
         match self {
             Format::Script => "script",
             Format::Step => "step",
+            Format::Stl => "stl",
+            Format::DxfTop => "dxf-top",
+            Format::DxfFront => "dxf-front",
+            Format::DxfSide => "dxf-side",
+            Format::SvgTop => "svg-top",
+            Format::SvgFront => "svg-front",
+            Format::SvgSide => "svg-side",
             Format::Report => "report",
             Format::Bill => "bill",
         }
@@ -62,17 +104,65 @@ impl Format {
     pub fn from_name(name: &str) -> Option<Format> {
         Format::ALL.into_iter().find(|f| f.name() == name)
     }
+
+    /// The format of a drawing of a view: DXF or SVG.
+    pub fn drawing(dxf: bool, view: View) -> Format {
+        match (dxf, view) {
+            (true, View::Top) => Format::DxfTop,
+            (true, View::Front) => Format::DxfFront,
+            (true, View::Side) => Format::DxfSide,
+            (false, View::Top) => Format::SvgTop,
+            (false, View::Front) => Format::SvgFront,
+            (false, View::Side) => Format::SvgSide,
+        }
+    }
+
+    /// The view of a drawing format, or `None` for the others.
+    pub fn view(self) -> Option<View> {
+        match self {
+            Format::DxfTop | Format::SvgTop => Some(View::Top),
+            Format::DxfFront | Format::SvgFront => Some(View::Front),
+            Format::DxfSide | Format::SvgSide => Some(View::Side),
+            _ => None,
+        }
+    }
 }
 
-/// The text of a format for a model. `text` is the text of the formats that are not a property of
-/// the enclosure alone: the fit report for [`Format::Report`] and the bill of materials for
-/// [`Format::Bill`], which need the settings and the language. The STEP file can be refused with
-/// `PHOENIX-CAD-022`.
-pub fn render(format: Format, enclosure: &Enclosure, text: &str) -> Result<String, CadError> {
+/// The bytes of a format for a model: text, or the binary STL file. `text` is the text of the
+/// formats that are not a property of the enclosure alone: the fit report for [`Format::Report`]
+/// and the bill of materials for [`Format::Bill`], which need the language. The STEP file can be
+/// refused with `PHOENIX-CAD-022`; the STL file with `PHOENIX-CAD-048`, `-049` or `-050`; a
+/// drawing with `PHOENIX-CAD-050`.
+pub fn render(
+    format: Format,
+    enclosure: &Enclosure,
+    text: &str,
+    settings: &Settings,
+) -> Result<Vec<u8>, CadError> {
+    let text_of = |s: String| Ok(s.into_bytes());
     match format {
-        Format::Script => Ok(to_scad(enclosure)),
-        Format::Step => export_step(enclosure),
-        Format::Report | Format::Bill => Ok(text.to_owned()),
+        Format::Script => text_of(to_scad(enclosure)),
+        Format::Step => text_of(export_step(enclosure)?),
+        Format::Report | Format::Bill => text_of(text.to_owned()),
+        Format::Stl => {
+            let bodies = solid::bodies(enclosure, &settings.mesh)?;
+            let list: Vec<(&str, &mesh::Mesh)> =
+                bodies.iter().map(|b| (b.name.as_str(), &b.mesh)).collect();
+            if settings.mesh.binary {
+                Ok(mesh::stl_binary(&list))
+            } else {
+                text_of(mesh::stl_ascii(&list))
+            }
+        }
+        _ => {
+            let view = format.view().unwrap_or(View::Top);
+            let drawing = Drawing::of(enclosure, view, &settings.drawing)?;
+            if format.extension() == "dxf" {
+                text_of(drawing.to_dxf())
+            } else {
+                text_of(drawing.to_svg(&settings.drawing))
+            }
+        }
     }
 }
 
@@ -134,11 +224,8 @@ pub fn check_target(
     }
 }
 
-/// Writes `text` at `path` after the checks of [`check_target`] and returns the bytes written.
-/// Without `overwrite` the file is created only if it does not exist (so that a file that appears
-/// between the check and the writing is not lost); with it, the file is replaced atomically. A
-/// text larger than `max_kib` KiB is refused (`PHOENIX-CAD-041`), and so is a failed writing,
-/// which leaves no half-written file.
+/// Writes `text` at `path` after the checks of [`check_target`] and returns the bytes written;
+/// see [`write_bytes`].
 pub fn write_file(
     path: &Path,
     text: &str,
@@ -146,17 +233,32 @@ pub fn write_file(
     open_project: Option<&Path>,
     max_kib: u32,
 ) -> Result<usize, CadError> {
-    if text.len() as u64 > u64::from(max_kib) * 1024 {
+    write_bytes(path, text.as_bytes(), overwrite, open_project, max_kib)
+}
+
+/// Writes `bytes` at `path` after the checks of [`check_target`] and returns the bytes written.
+/// Without `overwrite` the file is created only if it does not exist (so that a file that appears
+/// between the check and the writing is not lost); with it, the file is replaced atomically. A
+/// file larger than `max_kib` KiB is refused (`PHOENIX-CAD-041`), and so is a failed writing,
+/// which leaves no half-written file.
+pub fn write_bytes(
+    path: &Path,
+    bytes: &[u8],
+    overwrite: bool,
+    open_project: Option<&Path>,
+    max_kib: u32,
+) -> Result<usize, CadError> {
+    if bytes.len() as u64 > u64::from(max_kib) * 1024 {
         return Err(CadError::Export(format!(
-            "the text has {} bytes, more than the {max_kib} KiB allowed",
-            text.len()
+            "the file has {} bytes, more than the {max_kib} KiB allowed",
+            bytes.len()
         )));
     }
     check_target(path, overwrite, open_project)?;
     if overwrite {
-        store::save_atomic(path, text.as_bytes(), 0)
+        store::save_atomic(path, bytes, 0)
             .map_err(|e| CadError::Export(format!("cannot write the file: {e}")))?;
-        return Ok(text.len());
+        return Ok(bytes.len());
     }
     let mut file = fs::OpenOptions::new()
         .write(true)
@@ -170,15 +272,13 @@ pub fn write_file(
             ),
             _ => CadError::Export(format!("cannot create the file: {e}")),
         })?;
-    let written = file
-        .write_all(text.as_bytes())
-        .and_then(|()| file.sync_all());
+    let written = file.write_all(bytes).and_then(|()| file.sync_all());
     if let Err(e) = written {
         drop(file);
         let _ = fs::remove_file(path);
         return Err(CadError::Export(format!("cannot write the file: {e}")));
     }
-    Ok(text.len())
+    Ok(bytes.len())
 }
 
 #[cfg(test)]
@@ -231,6 +331,13 @@ mod tests {
             [
                 ("scad", "script"),
                 ("step", "step"),
+                ("stl", "stl"),
+                ("dxf", "dxf-top"),
+                ("dxf", "dxf-front"),
+                ("dxf", "dxf-side"),
+                ("svg", "svg-top"),
+                ("svg", "svg-front"),
+                ("svg", "svg-side"),
                 ("txt", "report"),
                 ("csv", "bill")
             ]
@@ -238,8 +345,12 @@ mod tests {
         for f in Format::ALL {
             assert_eq!(Format::from_name(f.name()), Some(f));
         }
-        assert_eq!(Format::from_name("stl"), None);
+        assert_eq!(Format::from_name("dxf"), None);
         assert_eq!(Format::from_name(""), None);
+        assert_eq!(Format::drawing(true, View::Front), Format::DxfFront);
+        assert_eq!(Format::drawing(false, View::Side), Format::SvgSide);
+        assert_eq!(Format::SvgTop.view(), Some(View::Top));
+        assert_eq!(Format::Stl.view(), None);
     }
 
     #[test]
@@ -250,6 +361,9 @@ mod tests {
         assert_eq!(suggested_name(Some(project), Format::Report), "my box.txt");
         assert_eq!(suggested_name(Some(project), Format::Bill), "my box.csv");
         assert_eq!(suggested_name(None, Format::Step), "box.step");
+        assert_eq!(suggested_name(Some(project), Format::Stl), "my box.stl");
+        assert_eq!(suggested_name(Some(project), Format::DxfTop), "my box.dxf");
+        assert_eq!(suggested_name(Some(project), Format::SvgSide), "my box.svg");
         assert_eq!(
             suggested_name(Some(Path::new("")), Format::Report),
             "box.txt"
@@ -259,15 +373,56 @@ mod tests {
     #[test]
     fn the_formats_render_the_script_the_step_file_and_the_report_as_given() {
         let e = enclosure();
-        let script = render(Format::Script, &e, "r").unwrap();
+        let settings = Settings::defaults();
+        let text =
+            |f: Format, t: &str| String::from_utf8(render(f, &e, t, &settings).unwrap()).unwrap();
+        let script = text(Format::Script, "r");
         // the same text as the library writes: the six master lengths in millimetres
         assert_eq!(script, to_scad(&e));
         assert!(script.contains("inner_length = 100;"), "{script}");
         assert!(script.contains("wall = 2;"), "{script}");
-        let step = render(Format::Step, &e, "r").unwrap();
+        let step = text(Format::Step, "r");
         assert!(step.starts_with("ISO-10303-21;"), "{step}");
-        assert_eq!(render(Format::Report, &e, "one\ntwo").unwrap(), "one\ntwo");
-        assert_eq!(render(Format::Bill, &e, "a,b\n").unwrap(), "a,b\n");
+        assert_eq!(text(Format::Report, "one\ntwo"), "one\ntwo");
+        assert_eq!(text(Format::Bill, "a,b\n"), "a,b\n");
+    }
+
+    #[test]
+    fn the_solid_and_the_drawings_render_from_the_settings() {
+        let e = enclosure();
+        let mut settings = Settings::defaults();
+        // a plain box: 12 + 12 triangles, 84 + 50 * 24 bytes
+        let binary = render(Format::Stl, &e, "", &settings).unwrap();
+        assert_eq!(binary.len(), 84 + 50 * 24);
+        assert_eq!(mesh::read_stl(&binary).unwrap().len(), 24);
+        settings.mesh.binary = false;
+        let text = render(Format::Stl, &e, "", &settings).unwrap();
+        assert!(text.starts_with(b"solid enclosure\n"));
+        assert_eq!(
+            mesh::read_stl(&text).unwrap(),
+            mesh::read_stl(&binary).unwrap()
+        );
+        let dxf = String::from_utf8(render(Format::DxfTop, &e, "", &settings).unwrap()).unwrap();
+        assert!(dxf.contains("\n0\nEOF\n"));
+        let svg = String::from_utf8(render(Format::SvgFront, &e, "", &settings).unwrap()).unwrap();
+        assert!(svg.contains("<svg "));
+        settings.mesh.max_triangles = 12;
+        let err = render(Format::Stl, &e, "", &settings).unwrap_err();
+        assert_eq!(err.code(), "PHOENIX-CAD-050");
+    }
+
+    #[test]
+    fn a_binary_file_is_written_whole_and_not_over_another() {
+        let dir = Scratch::new("binary");
+        let target = dir.0.join("box.stl");
+        let bytes: Vec<u8> = (0..=255u8).collect();
+        assert_eq!(write_bytes(&target, &bytes, false, None, 64).unwrap(), 256);
+        assert_eq!(fs::read(&target).unwrap(), bytes);
+        let err = write_bytes(&target, b"x", false, None, 64).unwrap_err();
+        assert_eq!(err.code(), "PHOENIX-CAD-040");
+        assert_eq!(fs::read(&target).unwrap(), bytes);
+        assert_eq!(write_bytes(&target, b"xy", true, None, 64).unwrap(), 2);
+        assert_eq!(fs::read(&target).unwrap(), b"xy");
     }
 
     #[test]

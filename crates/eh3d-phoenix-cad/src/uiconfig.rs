@@ -156,7 +156,7 @@ pub struct ExportSettings {
     /// Whether the box to write over an existing file is ticked when the window opens; the
     /// shipped value is no.
     pub overwrite: bool,
-    /// The largest text written, in KiB.
+    /// The largest file written, in KiB.
     pub max_kib: u32,
 }
 
@@ -385,7 +385,7 @@ impl ExportSettings {
         Ok(ExportSettings {
             format: Format::from_name(name).ok_or_else(|| {
                 CadError::Config(format!(
-                    "export.format: {name} is not script, step or report"
+                    "export.format: {name} is not a format of the export menu"
                 ))
             })?,
             overwrite: count(c, "export.overwrite", 0, 1)? == 1,
@@ -574,7 +574,7 @@ max_kib = 1
         );
         for text in [
             "[export]
-format = stl
+format = pdf
 ",
             "[export]
 format = 

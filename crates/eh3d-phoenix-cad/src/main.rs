@@ -4,6 +4,8 @@
 
 use eh3d_phoenix_cad::catalog;
 use eh3d_phoenix_cad::config::{Settings, DEFAULT_CONFIG};
+use eh3d_phoenix_cad::drawing::View;
+use eh3d_phoenix_cad::export::Format;
 use eh3d_phoenix_cad::lang::Lang;
 use eh3d_phoenix_cad::shot;
 use eh3d_phoenix_cad::sketch::settings::SketchSettings;
@@ -24,13 +26,15 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad interference PROJECT.phoenixproj [--lang CODE] [--config FILE]  reads a project, puts the parts where their mates place them and lists the pairs of parts that share volume (touching is not sharing; a screw through the hole of a bracket is allowed)
   eh3d-phoenix-cad bill PROJECT.phoenixproj [--config FILE]                       the bill of materials of the parts placed in a project (profiles cut to a length, screws and brackets) as comma separated values, with the volume and the mass for the density of each material
   eh3d-phoenix-cad library FILE.phoenixlib [--config FILE]                        reads a library of parts, checks it and lists its parts
+  eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|dxf|svg|step|script|report|bill [--view top|front|side] [--out FILE] [--overwrite] [--ascii|--binary] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), the plan, front or side as a drawing (dxf, svg), the STEP file, the OpenSCAD-style script, the fit report or the bill of materials
   eh3d-phoenix-cad config                                                         every setting of the library, of the window and of the sketch with its default value, as a file for --config
 
 --open FILE is the same as giving the file by itself; a sketch file opens the window on the sketch. --lang takes en, es, de, fr, it, ja, zh or pt; without it the language of the system is used.
 --shot writes a PNG file of the window (the exit code is 0 when it was written, 1 when it was not and 2 when the arguments are wrong); the window keeps no settings in that mode.
 --config FILE reads a settings file over the defaults: it only needs the keys it changes (see the output of config).
 check exits with 0 when every step was applied and the board fits, and with 1 when a step was refused or the board does not fit.
-interference exits with 0 when every step was applied and no two parts share volume, and with 1 when one does.";
+interference exits with 0 when every step was applied and no two parts share volume, and with 1 when one does.
+export never writes over a file that exists unless --overwrite is given; --out defaults to the name of the project with the extension of the format, in the current folder; --view is for dxf and svg (the plan, top, is the default); --ascii or --binary overrides the setting mesh.stl_binary for stl. It exits with 0 when the file was written and with 1 when it was not (the code of the reason is printed).";
 
 /// The settings of the library and of the window, with the keys of a user file put over the defaults.
 fn load_settings(config: Option<&Path>) -> Result<(Settings, UiSettings), String> {
@@ -182,6 +186,84 @@ fn run_library(args: &[String]) -> Result<bool, String> {
     Ok(true)
 }
 
+/// The format of the `export` command: a word, and for the drawings the view.
+fn export_format(word: &str, view: Option<View>) -> Result<Format, String> {
+    match word {
+        "dxf" | "svg" => Ok(Format::drawing(word == "dxf", view.unwrap_or(View::Top))),
+        _ if view.is_some() => Err("--view is only for the formats dxf and svg".to_owned()),
+        "stl" | "step" | "script" | "report" | "bill" => {
+            Format::from_name(word).ok_or_else(|| format!("{word}: unknown format"))
+        }
+        other => Err(format!(
+            "{other}: unknown format (stl, dxf, svg, step, script, report or bill)"
+        )),
+    }
+}
+
+/// `export`: reads a project and writes the model to a file in a format. The answer is whether the
+/// file was written.
+fn run_export(args: &[String]) -> Result<bool, String> {
+    let mut lang = Lang::from_env();
+    let mut config: Option<PathBuf> = None;
+    let mut file: Option<PathBuf> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut word: Option<String> = None;
+    let mut view: Option<View> = None;
+    let mut overwrite = false;
+    let mut binary: Option<bool> = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--lang" => {
+                let code = iter.next().ok_or("--lang needs a language code")?;
+                lang = Lang::from_code(code).ok_or("unknown language code")?;
+            }
+            "--config" => {
+                let path = iter.next().ok_or("--config needs a settings file")?;
+                config = Some(PathBuf::from(path));
+            }
+            "--format" => word = Some(iter.next().ok_or("--format needs a format")?.clone()),
+            "--view" => {
+                let name = iter.next().ok_or("--view needs top, front or side")?;
+                view = Some(View::from_name(name).ok_or("--view is top, front or side")?);
+            }
+            "--out" => out = Some(PathBuf::from(iter.next().ok_or("--out needs a file")?)),
+            "--overwrite" => overwrite = true,
+            "--ascii" => binary = Some(false),
+            "--binary" => binary = Some(true),
+            other if other.starts_with("--") => return Err(format!("unknown option {other}")),
+            other => {
+                if file.is_some() {
+                    return Err("only one project can be exported".to_owned());
+                }
+                file = Some(PathBuf::from(other));
+            }
+        }
+    }
+    let file = file.ok_or("export needs a project file")?;
+    let word = word.ok_or("export needs --format")?;
+    let format = export_format(&word, view)?;
+    if binary.is_some() && format != Format::Stl {
+        return Err("--ascii and --binary are only for the format stl".to_owned());
+    }
+    let (settings, ui) = load_settings(config.as_deref())?;
+    let mut win = Window::new(lang, settings, ui).map_err(|e| error_text(&e, lang))?;
+    win.sketch_settings = load_solver_settings(config.as_deref())?;
+    if let Some(b) = binary {
+        win.settings.mesh.binary = b;
+    }
+    if !win.open(&file) {
+        return Err(format!("{}: {}", file.display(), win.status.text(lang)));
+    }
+    let path = out.unwrap_or_else(|| PathBuf::from(win.export_name(format)));
+    if win.export_to(format, &path, overwrite) {
+        println!("{}", win.status.text(lang));
+        Ok(true)
+    } else {
+        Err(win.status.text(lang))
+    }
+}
+
 fn run(args: &[String]) -> Result<bool, String> {
     let Some((command, rest)) = args.split_first() else {
         println!("{HELP}");
@@ -207,6 +289,7 @@ fn run(args: &[String]) -> Result<bool, String> {
         "interference" => run_interference(rest),
         "bill" => run_bill(rest),
         "library" => run_library(rest),
+        "export" => run_export(rest),
         "gui" => Err("this build has no window: build it with --features gui".to_owned()),
         other => Err(format!("{other}: unknown command (see help)")),
     }
@@ -219,7 +302,8 @@ fn window_request(args: &[String]) -> Option<Result<shot::WindowArgs, String>> {
     match args.first().map(String::as_str) {
         None | Some("gui") => {}
         Some(
-            "help" | "--help" | "-h" | "config" | "check" | "interference" | "bill" | "library",
+            "help" | "--help" | "-h" | "config" | "check" | "interference" | "bill" | "library"
+            | "export",
         ) => return None,
         Some(first) if first.starts_with("--") => {}
         Some(first) => {
