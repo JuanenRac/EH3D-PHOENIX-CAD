@@ -37,6 +37,16 @@ pub struct SketchSettings {
     pub max_constraints: usize,
     /// The largest file read.
     pub max_file_bytes: u64,
+    /// The most sketches a project keeps in its file.
+    pub max_sketches: usize,
+    /// Two ends of lines and arcs this near, in millimetres on each axis, are the same corner of
+    /// an outline.
+    pub profile_join: f64,
+    /// The least area, in square millimetres, of an outline or of a hole in it.
+    pub profile_min_area: f64,
+    /// The most, in millimetres, that an arc or a circle sags from the straight lines that stand
+    /// for it in the checks of a profile and in the drawing.
+    pub profile_chord: f64,
 }
 
 fn missing(key: &str) -> CadError {
@@ -98,6 +108,10 @@ impl SketchSettings {
             max_elements: count(c, "sketch.max_elements", 1, 100_000)? as usize,
             max_constraints: count(c, "sketch.max_constraints", 1, 200_000)? as usize,
             max_file_bytes: u64::from(count(c, "sketch.max_file_bytes", 1024, 1 << 30)?),
+            max_sketches: count(c, "sketch.max_sketches", 1, 10_000)? as usize,
+            profile_join: real(c, "sketch.profile_join", 1e-6, 1.0)?,
+            profile_min_area: real(c, "sketch.profile_min_area", 1e-9, 1e6)?,
+            profile_chord: real(c, "sketch.profile_chord", 1e-5, 1.0)?,
         };
         if s.damping_start >= s.damping_max {
             return Err(CadError::Config(
@@ -130,6 +144,11 @@ mod tests {
         assert_eq!(s.stall_tolerance, 1e-7);
         assert_eq!((s.max_elements, s.max_constraints), (500, 1000));
         assert_eq!(s.max_file_bytes, 1_048_576);
+        assert_eq!(s.max_sketches, 64);
+        assert_eq!(
+            (s.profile_join, s.profile_min_area, s.profile_chord),
+            (0.001, 0.01, 0.005)
+        );
         assert_eq!(SketchSettings::with_user_config(default_file()).unwrap(), s);
     }
 
@@ -162,6 +181,10 @@ mod tests {
             "[sketch]\ndamping_start = 100000000000000\n",
             "[sketch]\nmax_file_bytes = 10\n",
             "[sketch]\nfd_step = 5\n",
+            "[sketch]\nprofile_join = 0\n",
+            "[sketch]\nmax_sketches = 0\n",
+            "[sketch]\nprofile_min_area = 0\n",
+            "[sketch]\nprofile_chord = 2\n",
         ] {
             let error = SketchSettings::with_user_config(text).unwrap_err();
             assert_eq!(error.code(), "PHOENIX-CAD-011", "{text:?}: {error}");

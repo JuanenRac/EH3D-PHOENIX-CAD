@@ -10,6 +10,8 @@
 //! together, and a transaction that fails leaves the body exactly as it was.
 
 use crate::enclosure::{Enclosure, EnclosureParams, Operation};
+use crate::profile::ProfileLimits;
+use crate::sketch::Sketch;
 use crate::CadError;
 
 /// One step of the recipe of a body.
@@ -150,7 +152,20 @@ impl Body {
 
     /// Builds the enclosure from the recipe.
     pub fn build(&self) -> Result<Built, CadError> {
+        self.build_with(&[], None)
+    }
+
+    /// Builds the enclosure from the recipe, with the sketches that its extrusions and pockets
+    /// are made from and the limits of their profiles (the shipped ones when there are none).
+    pub fn build_with(
+        &self,
+        sketches: &[Sketch],
+        limits: Option<ProfileLimits>,
+    ) -> Result<Built, CadError> {
         let mut enclosure = Enclosure::new(self.base)?;
+        if !sketches.is_empty() {
+            enclosure.set_sketches(sketches.to_vec(), limits);
+        }
         let mut states = Vec::with_capacity(self.steps.len());
         for (i, step) in self.steps.iter().enumerate() {
             let state = if i >= self.tip {

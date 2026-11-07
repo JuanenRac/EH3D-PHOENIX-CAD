@@ -18,6 +18,12 @@
 //! A project written before this domain existed has only `mechanical-parameters`: it is read as a
 //! recipe without steps, and the first time the domain is written the older one is taken away.
 //! A domain of a newer version is never read or written: the program keeps it byte for byte.
+//!
+//! Version 1 holds the steps above. Version 2 adds the steps `extrude`, `pocket` and
+//! `remove-feature`, which refer to a sketch of the project by its name; a recipe that has none of
+//! them is still written as version 1, so a project without extrusions or pockets opens in the
+//! programs that only know version 1. The sketches are not in this domain: they have their own
+//! domain, `sketch` (see [`crate::sketch::domain`]).
 
 use std::collections::BTreeSet;
 use std::str::FromStr;
@@ -30,15 +36,20 @@ use crate::enclosure::{Edging, EnclosureParams, Face, Hole, HoleStyle, Id, Opera
 use crate::expr::{Constants, ExprLimits};
 use crate::mount::{Base, BoardHole, BoardInterface, BoreKind, Lid, LidFixing, Lip, Post};
 use crate::parametric::ParamModel;
+use crate::profile::ProfileLimits;
 use crate::project::{parameters_from_bytes, parameters_to_bytes, Document, PARAMETERS_DOMAIN};
+use crate::sketch::{check_sketch_name, Sketch};
 use crate::vars::{Param, Variables};
 use crate::{CadError, Length};
 
 /// The name of the domain.
 pub const MECHANICAL_DOMAIN: &str = "mechanical";
 
-/// The version of the text of the domain that this program writes and reads.
-pub const DOMAIN_VERSION: u32 = 1;
+/// The newest version of the text of the domain that this program writes and reads.
+pub const DOMAIN_VERSION: u32 = 2;
+
+/// The version of a recipe that has no extrusion and no pocket.
+pub const FIRST_VERSION: u32 = 1;
 
 /// The recipe of an enclosure as the project file keeps it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +64,10 @@ pub struct Mechanical {
     pub tip: usize,
     /// What the board tool told: the outline, the mounting holes and the sizes of the board.
     pub board: Option<BoardInterface>,
+    /// The sketches of the project, which the extrusions and pockets are made from. They are not
+    /// part of the text of this domain: the domain `sketch` keeps them. They are here so that one
+    /// history goes back and forward over the steps and the sketches together.
+    pub sketches: Vec<Sketch>,
 }
 
 fn bad(why: &str) -> CadError {
@@ -423,8 +438,39 @@ fn operation_words(op: &Operation, limits: &MechanicalLimits) -> Result<Vec<Stri
             words.push("set-lid".to_string());
             words.extend(lid_words(lid, limits)?);
         }
+        Operation::Extrude { id, sketch, height } => {
+            words.push("extrude".to_string());
+            words.push(id.to_string());
+            words.push(sketch.clone());
+            words.push(height.get().to_string());
+        }
+        Operation::Pocket { id, sketch, depth } => {
+            words.push("pocket".to_string());
+            words.push(id.to_string());
+            words.push(sketch.clone());
+            words.push(depth.map_or("through".to_string(), |d| d.get().to_string()));
+        }
+        Operation::RemoveFeature { id } => {
+            words.push("remove-feature".to_string());
+            words.push(id.to_string());
+        }
     }
     Ok(words)
+}
+
+/// Whether a step needs version 2 of the domain.
+fn needs_version_two(op: &Operation) -> bool {
+    matches!(
+        op,
+        Operation::Extrude { .. } | Operation::Pocket { .. } | Operation::RemoveFeature { .. }
+    )
+}
+
+/// The name of a sketch as a word of a step: the same letters, digits, `_` and `-` as a sketch
+/// name, so nothing has to be escaped.
+fn sketch_word(word: &str) -> Result<String, CadError> {
+    check_sketch_name(word).map_err(|_| bad("the name of a sketch is not valid"))?;
+    Ok(word.to_string())
 }
 
 fn params_of(words: &[&str]) -> Result<EnclosureParams, CadError> {
@@ -484,6 +530,21 @@ fn operation_of(words: &[&str], limits: &MechanicalLimits) -> Result<Operation, 
         }),
         ["set-lid", "none"] => Ok(Operation::SetLid(None)),
         ["set-lid", rest @ ..] => Ok(Operation::SetLid(Some(lid_of(rest, limits)?))),
+        ["extrude", id, sketch, height] => Ok(Operation::Extrude {
+            id: id_of(id)?,
+            sketch: sketch_word(sketch)?,
+            height: length_of(height, "height of an extrusion")?,
+        }),
+        ["pocket", id, sketch, depth] => Ok(Operation::Pocket {
+            id: id_of(id)?,
+            sketch: sketch_word(sketch)?,
+            depth: if *depth == "through" {
+                None
+            } else {
+                Some(length_of(depth, "depth of a pocket")?)
+            },
+        }),
+        ["remove-feature", id] => Ok(Operation::RemoveFeature { id: id_of(id)? }),
         _ => Err(bad("a step is not understood")),
     }
 }
@@ -662,7 +723,31 @@ impl Mechanical {
             steps: Vec::new(),
             tip: 0,
             board: None,
+            sketches: Vec::new(),
         }
+    }
+
+    /// The version of the text this recipe is written in: 2 when a step is an extrusion, a pocket
+    /// or the removal of one, else 1.
+    pub fn version(&self) -> u32 {
+        if self.steps.iter().any(|s| needs_version_two(&s.op)) {
+            DOMAIN_VERSION
+        } else {
+            FIRST_VERSION
+        }
+    }
+
+    /// Puts a sketch in the project, replacing the one of the same name.
+    pub fn put_sketch(&mut self, sketch: Sketch) {
+        match self.sketches.iter_mut().find(|s| s.name() == sketch.name()) {
+            Some(slot) => *slot = sketch,
+            None => self.sketches.push(sketch),
+        }
+    }
+
+    /// The sketch of a name.
+    pub fn sketch(&self, name: &str) -> Option<&Sketch> {
+        self.sketches.iter().find(|s| s.name() == name)
     }
 
     /// The body of the recipe: the parameters calculated, then the steps and the tip as stored.
@@ -673,7 +758,19 @@ impl Mechanical {
 
     /// Builds the enclosure from the recipe: the final state is derived, never stored.
     pub fn build(&self, constants: &Constants, limits: &ExprLimits) -> Result<Built, CadError> {
-        self.body(constants, limits)?.build()
+        self.build_with(constants, limits, None)
+    }
+
+    /// Like [`Mechanical::build`], with the limits of the profiles of the sketches (the shipped
+    /// ones when there are none).
+    pub fn build_with(
+        &self,
+        constants: &Constants,
+        limits: &ExprLimits,
+        profiles: Option<ProfileLimits>,
+    ) -> Result<Built, CadError> {
+        self.body(constants, limits)?
+            .build_with(&self.sketches, profiles)
     }
 
     /// Takes the steps and the tip of a body that was edited (its base comes from the parameters).
@@ -692,7 +789,7 @@ impl Mechanical {
         }
         let parameters = String::from_utf8(parameters_to_bytes(&self.model, &self.vars))
             .map_err(|_| bad("the parameters are not text"))?;
-        let mut out = format!("mechanical {DOMAIN_VERSION}\n[parameters]\n{parameters}");
+        let mut out = format!("mechanical {}\n[parameters]\n{parameters}", self.version());
         out.push_str(&format!("[steps]\ntip {}\n", self.tip));
         for step in &self.steps {
             out.push_str(&step_line(step, limits)?);
@@ -775,12 +872,22 @@ impl Mechanical {
         } else {
             None
         };
+        let uses_two = recipe.iter().any(|s| needs_version_two(&s.op));
+        if uses_two && version < DOMAIN_VERSION {
+            return Err(bad("a step of version 2 is in a domain of version 1"));
+        }
+        if !uses_two && version > FIRST_VERSION {
+            return Err(bad(
+                "the domain says version 2 and has no step that needs it",
+            ));
+        }
         Ok(Mechanical {
             model,
             vars,
             steps: recipe,
             tip,
             board,
+            sketches: Vec::new(),
         })
     }
 }
@@ -1901,7 +2008,7 @@ hole 018bcfe5-6800-7004-8000-000000000004 H4 55000000 35000000 3200000\n";
             "the older domain is replaced"
         );
         assert!(d.get(MECHANICAL_DOMAIN).unwrap().critical);
-        assert_eq!(d.mechanical_version().unwrap(), Some(DOMAIN_VERSION));
+        assert_eq!(d.mechanical_version().unwrap(), Some(FIRST_VERSION));
         let bytes = d.to_bytes();
         let read = Document::from_bytes(&bytes, 1 << 24).unwrap();
         assert_eq!(
@@ -1951,11 +2058,11 @@ hole 018bcfe5-6800-7004-8000-000000000004 H4 55000000 35000000 3200000\n";
     #[test]
     fn a_domain_of_a_newer_version_is_neither_read_nor_overwritten() {
         let s = settings();
-        let future = b"mechanical 2\nwhatever \xff comes next\n".to_vec();
+        let future = b"mechanical 3\nwhatever \xff comes next\n".to_vec();
         let mut d = Document::new();
         d.set(MECHANICAL_DOMAIN, true, future.clone()).unwrap();
         d.set("notes", false, b"x".to_vec()).unwrap();
-        assert_eq!(d.mechanical_version().unwrap(), Some(2));
+        assert_eq!(d.mechanical_version().unwrap(), Some(3));
         let err = d.mechanical(&s.expr, &s.mechanical).unwrap_err();
         assert_eq!(err.code(), "PHOENIX-CAD-018");
         assert!(err.to_string().contains("newer version"), "{err}");
@@ -2064,5 +2171,234 @@ hole 018bcfe5-6800-7004-8000-000000000004 H4 55000000 35000000 3200000\n";
                 "seed {seed}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod feature_tests {
+    use super::*;
+    use crate::body::StepState;
+    use crate::config::Settings;
+    use crate::enclosure::Face;
+    use crate::sketch::SketchPlane;
+
+    fn mm(v: i64) -> Length {
+        Length::from_mm(v).unwrap()
+    }
+
+    fn id(n: u64) -> Id {
+        ObjectId::from_parts(1_700_000_000_000, n as u16, n).unwrap()
+    }
+
+    fn base() -> EnclosureParams {
+        EnclosureParams {
+            inner_length: mm(100),
+            inner_width: mm(60),
+            inner_height: mm(30),
+            wall: mm(2),
+            floor: mm(2),
+            lid: mm(3),
+            edge_margin: mm(3),
+            min_web: mm(2),
+        }
+    }
+
+    fn plate() -> Sketch {
+        let plane = SketchPlane {
+            face: Face::Top,
+            u0: mm(10),
+            v0: mm(10),
+            offset: Length::ZERO,
+        };
+        let mut k = Sketch::new("plate", plane).unwrap();
+        k.add_rectangle((mm(0), mm(0)), (mm(40), mm(25))).unwrap();
+        let c = k.add_point(mm(20), mm(12)).unwrap();
+        k.add_circle(c, mm(3)).unwrap();
+        k
+    }
+
+    fn step(name: &str, op: Operation) -> Step {
+        Step {
+            name: name.into(),
+            op,
+            suppressed: false,
+        }
+    }
+
+    fn with_features() -> Mechanical {
+        let mut m = Mechanical::new(ParamModel::new(base()).unwrap(), Variables::new());
+        m.sketches.push(plate());
+        m.steps.push(step(
+            "boss",
+            Operation::Extrude {
+                id: id(1),
+                sketch: "plate".into(),
+                height: mm(10),
+            },
+        ));
+        m.steps.push(step(
+            "window",
+            Operation::Pocket {
+                id: id(2),
+                sketch: "plate".into(),
+                depth: None,
+            },
+        ));
+        m.steps.push(step(
+            "shallow",
+            Operation::Pocket {
+                id: id(3),
+                sketch: "plate".into(),
+                depth: Some(mm(1)),
+            },
+        ));
+        m.steps
+            .push(step("gone", Operation::RemoveFeature { id: id(3) }));
+        m.tip = m.steps.len();
+        m
+    }
+
+    #[test]
+    fn extrusions_and_pockets_are_steps_of_version_two_with_a_golden_text() {
+        let s = Settings::defaults();
+        let m = with_features();
+        assert_eq!(m.version(), 2);
+        let text = String::from_utf8(m.to_bytes(&s.mechanical).unwrap()).unwrap();
+        assert!(text.starts_with("mechanical 2\n[parameters]\n"));
+        let steps = text.split("[steps]\n").nth(1).unwrap();
+        let ids: Vec<String> = (1..=3).map(|n| id(n).to_string()).collect();
+        let expect = format!(
+            "tip 4\nstep 0 boss extrude {} plate 10000000\nstep 0 window pocket {} plate through\n\
+             step 0 shallow pocket {} plate 1000000\nstep 0 gone remove-feature {}\n",
+            ids[0], ids[1], ids[2], ids[2]
+        );
+        assert_eq!(steps, expect);
+        let mut read = Mechanical::from_bytes(text.as_bytes(), &s.expr, &s.mechanical).unwrap();
+        assert!(
+            read.sketches.is_empty(),
+            "the sketches are in their own domain"
+        );
+        read.sketches = m.sketches.clone();
+        assert_eq!(read, m);
+        assert_eq!(read.to_bytes(&s.mechanical).unwrap(), text.as_bytes());
+    }
+
+    #[test]
+    fn a_recipe_without_them_is_still_version_one_and_the_text_does_not_change() {
+        let s = Settings::defaults();
+        let mut m = with_features();
+        m.steps.truncate(0);
+        m.tip = 0;
+        assert_eq!(m.version(), 1);
+        let text = String::from_utf8(m.to_bytes(&s.mechanical).unwrap()).unwrap();
+        assert!(text.starts_with("mechanical 1\n"));
+        assert!(
+            !text.contains("sketch"),
+            "the sketches are not in this domain"
+        );
+    }
+
+    #[test]
+    fn the_version_and_the_steps_have_to_agree() {
+        let s = Settings::defaults();
+        let m = with_features();
+        let two = String::from_utf8(m.to_bytes(&s.mechanical).unwrap()).unwrap();
+        let parse = |t: &str| Mechanical::from_bytes(t.as_bytes(), &s.expr, &s.mechanical);
+        // a step of version 2 in a header of version 1
+        let e = parse(&two.replacen("mechanical 2", "mechanical 1", 1)).unwrap_err();
+        assert_eq!(e.code(), "PHOENIX-CAD-018");
+        // a header of version 2 with nothing that needs it
+        let mut plain = with_features();
+        plain.steps.clear();
+        plain.tip = 0;
+        let one = String::from_utf8(plain.to_bytes(&s.mechanical).unwrap()).unwrap();
+        let e = parse(&one.replacen("mechanical 1", "mechanical 2", 1)).unwrap_err();
+        assert!(e.to_string().contains("no step that needs it"), "{e}");
+        // words of the steps that are not understood
+        for bad in [
+            "extrude X plate 10",
+            "pocket {} plate",
+            "pocket {} plate 0x10",
+            "pocket {} plate -",
+            "extrude {} plate 010000000",
+            "extrude {} pl@te 10000000",
+            "remove-feature",
+        ] {
+            let line = bad.replace("{}", &id(1).to_string());
+            let text = two.replace(&format!("extrude {} plate 10000000", id(1)), &line);
+            assert!(parse(&text).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_future_version_is_neither_read_nor_overwritten() {
+        let s = Settings::defaults();
+        let mut d = Document::new();
+        let future = b"mechanical 3\nwhatever\n".to_vec();
+        d.set(MECHANICAL_DOMAIN, true, future.clone()).unwrap();
+        assert_eq!(d.mechanical_version().unwrap(), Some(3));
+        assert!(d.mechanical(&s.expr, &s.mechanical).is_err());
+        assert!(d.set_mechanical(&with_features(), &s.mechanical).is_err());
+        assert_eq!(d.get(MECHANICAL_DOMAIN).unwrap().data, future);
+    }
+
+    #[test]
+    fn the_steps_build_the_features_from_the_sketches_of_the_recipe() {
+        let s = Settings::defaults();
+        let m = with_features();
+        let built = m.build(&s.constants, &s.expr).unwrap();
+        assert!(
+            built.states.iter().all(|st| *st == StepState::Valid),
+            "{:?}",
+            built.states
+        );
+        // the boss and the window remain; the shallow pocket was removed by the last step
+        let e = &built.enclosure;
+        assert_eq!(e.features().len(), 2);
+        let (added, removed) = e.features_volume_nm3();
+        assert!(added > 0 && removed > 0);
+        // without the sketch the steps fail with their code and the rest goes on
+        let mut lost = m.clone();
+        lost.sketches.clear();
+        let built = lost.build(&s.constants, &s.expr).unwrap();
+        for st in &built.states[..3] {
+            match st {
+                StepState::Failed(e) => assert_eq!(e.code(), "PHOENIX-CAD-037"),
+                other => panic!("{other:?}"),
+            }
+        }
+        assert!(built.enclosure.features().is_empty());
+    }
+
+    #[test]
+    fn a_project_with_sketches_goes_to_the_file_and_back_and_an_old_one_opens_as_before() {
+        let s = Settings::defaults();
+        let k = crate::sketch::settings::SketchSettings::defaults();
+        let m = with_features();
+        let mut d = Document::new();
+        d.set("from-another-tool", false, vec![9, 8, 255]).unwrap();
+        d.set_mechanical(&m, &s.mechanical).unwrap();
+        d.set_sketches(&m.sketches, &k).unwrap();
+        let bytes = d.to_bytes();
+        let read = Document::from_bytes(&bytes, 1 << 24).unwrap();
+        let mut back = read.mechanical(&s.expr, &s.mechanical).unwrap().unwrap();
+        back.sketches = read.sketches(&k).unwrap();
+        assert_eq!(back, m);
+        assert_eq!(read.get("from-another-tool").unwrap().data, vec![9, 8, 255]);
+        assert_eq!(read.to_bytes(), bytes);
+        // a project written before the sketches existed has no such domain
+        let mut old = Document::new();
+        let plain = Mechanical::new(ParamModel::new(base()).unwrap(), Variables::new());
+        old.set_mechanical(&plain, &s.mechanical).unwrap();
+        let old_bytes = old.to_bytes();
+        let opened = Document::open(&old_bytes, 1 << 24, &[MECHANICAL_DOMAIN]).unwrap();
+        assert!(!opened.read_only);
+        assert!(opened.document.sketches(&k).unwrap().is_empty());
+        assert_eq!(opened.document.mechanical_version().unwrap(), Some(1));
+        // writing it again, with no sketch, gives the same bytes
+        let mut again = opened.document;
+        again.set_mechanical(&plain, &s.mechanical).unwrap();
+        again.set_sketches(&[], &k).unwrap();
+        assert_eq!(again.to_bytes(), old_bytes);
     }
 }

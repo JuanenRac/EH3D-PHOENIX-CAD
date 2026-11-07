@@ -244,14 +244,17 @@ impl Enclosure {
     }
 
     /// The volume of material: the outer box, minus the inner space, minus the treatment of the
-    /// edges, minus the holes. The posts, the centring lip and the holes of the lid fixing are
-    /// not counted, and a model that has any of them says it is not exact.
+    /// edges, minus the holes, plus the extrusions and minus the pockets. The posts, the centring
+    /// lip and the holes of the lid fixing are not counted, and a model that has any of them says
+    /// it is not exact; neither is one with an extrusion or a pocket, whose volume comes from the
+    /// area of an outline that may have arcs (a rounded figure).
     pub fn material_volume_with_holes(&self) -> Result<Volume, CadError> {
         let holes = self.holes_volume()?;
         let edges = self.edging_volume()?;
+        let (added, removed) = self.features_volume_nm3();
         Ok(Volume {
-            nm3: self.material_volume_nm3() - edges.nm3 - holes.nm3,
-            exact: holes.exact && edges.exact && !self.has_mounting(),
+            nm3: self.material_volume_nm3() - edges.nm3 - holes.nm3 + added - removed,
+            exact: holes.exact && edges.exact && !self.has_mounting() && self.features().is_empty(),
         })
     }
 }

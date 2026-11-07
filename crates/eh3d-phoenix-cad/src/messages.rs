@@ -467,6 +467,32 @@ const TEXTS: &[Row] = &[
             "Ficheiro do esboço inválido",
         ],
     ),
+    (
+        "PHOENIX-CAD-036",
+        [
+            "Profile of the sketch not valid",
+            "Perfil del croquis no válido",
+            "Profil der Skizze ungültig",
+            "Profil de l'esquisse non valide",
+            "Profilo dello schizzo non valido",
+            "スケッチのプロファイルが無効です",
+            "草图轮廓无效",
+            "Perfil do esboço inválido",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-037",
+        [
+            "Extrusion or pocket not valid",
+            "Extrusión o vaciado no válido",
+            "Extrusion oder Tasche ungültig",
+            "Extrusion ou poche non valide",
+            "Estrusione o tasca non valida",
+            "押し出しまたはポケットが無効です",
+            "拉伸或切除无效",
+            "Extrusão ou cavidade inválida",
+        ],
+    ),
 ];
 
 /// The text of a diagnostic in a language (`en`, `es`, `de`, `fr`, `it`, `ja`, `zh` or `pt`), or

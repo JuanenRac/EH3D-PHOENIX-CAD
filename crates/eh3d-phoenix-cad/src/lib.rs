@@ -78,6 +78,7 @@ pub mod names;
 pub mod parametric;
 pub mod pattern;
 pub mod printer;
+pub mod profile;
 pub mod project;
 pub mod scad;
 pub mod scene;
@@ -92,7 +93,8 @@ pub mod vars;
 pub mod window;
 
 pub use enclosure::{
-    Edging, Enclosure, EnclosureParams, Face, Hole, HoleStyle, Id, Operation, Treatment,
+    Edging, Enclosure, EnclosureParams, Face, Feature, FeatureKind, Hole, HoleStyle, Id, Operation,
+    Treatment,
 };
 pub use fit::{check_fit, Envelope, FitReport};
 pub use mount::{Lid, LidFixing, Post};
@@ -246,6 +248,10 @@ pub enum CadError {
     SketchNoConvergence(String),
     /// A sketch file that is not valid.
     SketchFile(String),
+    /// A profile that cannot be taken from a sketch: not closed, crossing itself, too small.
+    Profile(String),
+    /// An extrusion or a pocket that does not fit the box.
+    Feature(String),
 }
 
 impl CadError {
@@ -287,6 +293,8 @@ impl CadError {
             CadError::SketchOverConstrained(_) => "PHOENIX-CAD-033",
             CadError::SketchNoConvergence(_) => "PHOENIX-CAD-034",
             CadError::SketchFile(_) => "PHOENIX-CAD-035",
+            CadError::Profile(_) => "PHOENIX-CAD-036",
+            CadError::Feature(_) => "PHOENIX-CAD-037",
         }
     }
 }
@@ -335,7 +343,9 @@ impl fmt::Display for CadError {
             | CadError::SketchConstraint(why)
             | CadError::SketchOverConstrained(why)
             | CadError::SketchNoConvergence(why)
-            | CadError::SketchFile(why) => write!(f, "{title}: {why}"),
+            | CadError::SketchFile(why)
+            | CadError::Profile(why)
+            | CadError::Feature(why) => write!(f, "{title}: {why}"),
         }
     }
 }
@@ -382,6 +392,8 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-033", "Sketch over-constrained"),
     ("PHOENIX-CAD-034", "Sketch solver did not converge"),
     ("PHOENIX-CAD-035", "Sketch file not valid"),
+    ("PHOENIX-CAD-036", "Profile of the sketch not valid"),
+    ("PHOENIX-CAD-037", "Extrusion or pocket not valid"),
 ];
 
 #[cfg(test)]
@@ -570,6 +582,8 @@ mod tests {
             CadError::SketchOverConstrained("c1 c2".into()),
             CadError::SketchNoConvergence("100 steps".into()),
             CadError::SketchFile("line 3".into()),
+            CadError::Profile("open".into()),
+            CadError::Feature("depth".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));

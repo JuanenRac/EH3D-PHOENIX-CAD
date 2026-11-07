@@ -9,12 +9,19 @@
 //! its [`HoleStyle`] says otherwise (countersunk, counterbored, rectangular or oval). A hole must
 //! lie inside its face at least `edge_margin` from every edge and at least `min_web` from the other
 //! holes of the face. A refused operation leaves the model exactly as it was.
+//!
+//! A sketch of the project can be raised from a face (`Extrude`, which adds material) or cut into
+//! it (`Pocket`, which takes it away to a depth or through the whole face). The enclosure keeps
+//! only what is asked (the sketch by its name and the height or depth); the outline is taken from
+//! the sketch every time the enclosure is built, so a change of the sketch changes the feature.
 
 use std::collections::BTreeMap;
 
 use eh3d_container::ObjectId;
 
 use crate::mount::{lid_holes_of, Lid, Post};
+use crate::profile::{Profile, ProfileLimits};
+use crate::sketch::Sketch;
 use crate::units::isqrt_u128;
 use crate::{CadError, Length};
 
@@ -495,6 +502,76 @@ pub enum Operation {
     },
     /// Sets how the lid is fixed, or takes the fixing away (`None`).
     SetLid(Option<Lid>),
+    /// Raises the outline of a sketch from the face of its plane, outwards, by `height`: adds
+    /// material.
+    Extrude {
+        /// The id of the new feature.
+        id: Id,
+        /// The name of the sketch.
+        sketch: String,
+        /// How far it is raised.
+        height: Length,
+    },
+    /// Cuts the outline of a sketch into the face of its plane, inwards, down to `depth` or, when
+    /// there is none, through the whole thickness of the face.
+    Pocket {
+        /// The id of the new feature.
+        id: Id,
+        /// The name of the sketch.
+        sketch: String,
+        /// How deep it is cut; `None` goes through.
+        depth: Option<Length>,
+    },
+    /// Removes an extrusion or a pocket.
+    RemoveFeature {
+        /// The id of the feature.
+        id: Id,
+    },
+}
+
+/// What a feature does to the box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeatureKind {
+    /// Adds material outside the face.
+    Extrude,
+    /// Takes material away inside the face.
+    Pocket,
+}
+
+/// An extrusion or a pocket, with the outline it was made from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Feature {
+    /// What it does.
+    pub kind: FeatureKind,
+    /// The name of the sketch it comes from.
+    pub sketch: String,
+    /// The face of the plane of the sketch.
+    pub face: Face,
+    /// The origin of the plane along `u` of the face.
+    pub u0: Length,
+    /// The origin of the plane along `v` of the face.
+    pub v0: Length,
+    /// The outline.
+    pub profile: Profile,
+    /// The height of an extrusion or the depth of a pocket; `None` for a pocket through the face.
+    pub depth: Option<Length>,
+}
+
+impl Feature {
+    /// The height or depth, which for a pocket through is the thickness of the face.
+    pub fn depth_in(&self, params: &EnclosureParams) -> Length {
+        self.depth
+            .unwrap_or_else(|| thickness_of(params, self.face))
+    }
+
+    /// The volume of material it adds or takes away, in cubic nanometres, rounded.
+    pub fn volume_nm3(&self, params: &EnclosureParams) -> i128 {
+        self.profile.volume_nm3(self.depth_in(params).get())
+    }
+}
+
+fn feature_error(why: impl Into<String>) -> CadError {
+    CadError::Feature(why.into())
 }
 
 /// The enclosure: its parameters, its holes by id, its posts by id and the fixing of its lid.
@@ -505,6 +582,9 @@ pub struct Enclosure {
     holes: BTreeMap<Id, Hole>,
     posts: BTreeMap<Id, Post>,
     lid: Option<Lid>,
+    features: BTreeMap<Id, Feature>,
+    sketches: Vec<Sketch>,
+    limits: Option<ProfileLimits>,
 }
 
 impl Enclosure {
@@ -517,7 +597,109 @@ impl Enclosure {
             holes: BTreeMap::new(),
             posts: BTreeMap::new(),
             lid: None,
+            features: BTreeMap::new(),
+            sketches: Vec::new(),
+            limits: None,
         })
+    }
+
+    /// Gives the enclosure the sketches that its extrusions and pockets are made from and the
+    /// limits of their profiles (the shipped ones when there are none). The sketches are not
+    /// part of the operations: they are the context the operations are applied in.
+    pub fn set_sketches(&mut self, sketches: Vec<Sketch>, limits: Option<ProfileLimits>) {
+        self.sketches = sketches;
+        self.limits = limits;
+    }
+
+    /// The extrusions and pockets by id (ordered by id).
+    pub fn features(&self) -> &BTreeMap<Id, Feature> {
+        &self.features
+    }
+
+    /// The volume added by the extrusions and the volume taken away by the pockets, in cubic
+    /// nanometres. Where a pocket meets a hole of the same face the volume of both is counted.
+    pub fn features_volume_nm3(&self) -> (i128, i128) {
+        let (mut added, mut removed) = (0i128, 0i128);
+        for f in self.features.values() {
+            let v = f.volume_nm3(&self.params);
+            match f.kind {
+                FeatureKind::Extrude => added += v,
+                FeatureKind::Pocket => removed += v,
+            }
+        }
+        (added, removed)
+    }
+
+    /// The feature of a sketch, with its outline taken now.
+    fn make_feature(
+        &self,
+        kind: FeatureKind,
+        sketch: &str,
+        depth: Option<Length>,
+    ) -> Result<Feature, CadError> {
+        let found = self
+            .sketches
+            .iter()
+            .find(|s| s.name() == sketch)
+            .ok_or_else(|| feature_error(format!("the sketch {sketch} does not exist")))?;
+        let plane = found.plane();
+        if plane.offset != Length::ZERO {
+            return Err(feature_error(format!(
+                "the plane of the sketch {sketch} is off its face"
+            )));
+        }
+        let limits = self.limits.unwrap_or_else(ProfileLimits::shipped);
+        let profile = Profile::from_sketch(found, &limits)?;
+        if let Some(d) = depth {
+            if d.get() <= 0 {
+                return Err(feature_error("the height or depth is not positive"));
+            }
+        }
+        let feature = Feature {
+            kind,
+            sketch: sketch.to_string(),
+            face: plane.face,
+            u0: plane.u0,
+            v0: plane.v0,
+            profile,
+            depth,
+        };
+        Self::check_feature(&self.params, &feature)?;
+        Ok(feature)
+    }
+
+    /// Whether a feature fits the box with these parameters: its outline inside the face (inside
+    /// the margin of the edges for a pocket) and a pocket no deeper than the material.
+    fn check_feature(params: &EnclosureParams, feature: &Feature) -> Result<(), CadError> {
+        let (w, h) = face_size_of(params, feature.face);
+        let margin = match feature.kind {
+            FeatureKind::Extrude => 0,
+            FeatureKind::Pocket => i128::from(params.edge_margin.get()),
+        };
+        let (lo, hi) = feature.profile.bounds();
+        let u0 = i128::from(feature.u0.get());
+        let v0 = i128::from(feature.v0.get());
+        let inside = u0 + i128::from(lo.0) >= margin
+            && v0 + i128::from(lo.1) >= margin
+            && u0 + i128::from(hi.0) <= i128::from(w.get()) - margin
+            && v0 + i128::from(hi.1) <= i128::from(h.get()) - margin;
+        if !inside {
+            return Err(feature_error(format!(
+                "the outline of the sketch {} does not lie inside the face {}",
+                feature.sketch,
+                feature.face.name()
+            )));
+        }
+        if let (FeatureKind::Pocket, Some(d)) = (feature.kind, feature.depth) {
+            if d > thickness_of(params, feature.face) {
+                return Err(feature_error(format!(
+                    "the pocket of the sketch {} is deeper than the material of the face {}",
+                    feature.sketch,
+                    feature.face.name()
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// The parameters.
@@ -910,6 +1092,9 @@ impl Enclosure {
                 self.edging.check(&params)?;
                 // every hole must still be valid against the new parameters, one after the other
                 self.check_all(&params, &self.edging)?;
+                for feature in self.features.values() {
+                    Self::check_feature(&params, feature)?;
+                }
                 let old = self.params;
                 self.params = params;
                 Ok(Operation::SetParams(old))
@@ -950,6 +1135,37 @@ impl Enclosure {
                 self.check_posts_and_lid(&self.posts, lid.as_ref())?;
                 let old = std::mem::replace(&mut self.lid, lid);
                 Ok(Operation::SetLid(old))
+            }
+            Operation::Extrude { id, sketch, height } => {
+                if self.features.contains_key(&id) {
+                    return Err(CadError::HoleId(id));
+                }
+                let feature = self.make_feature(FeatureKind::Extrude, &sketch, Some(height))?;
+                self.features.insert(id, feature);
+                Ok(Operation::RemoveFeature { id })
+            }
+            Operation::Pocket { id, sketch, depth } => {
+                if self.features.contains_key(&id) {
+                    return Err(CadError::HoleId(id));
+                }
+                let feature = self.make_feature(FeatureKind::Pocket, &sketch, depth)?;
+                self.features.insert(id, feature);
+                Ok(Operation::RemoveFeature { id })
+            }
+            Operation::RemoveFeature { id } => {
+                let feature = self.features.remove(&id).ok_or(CadError::HoleId(id))?;
+                Ok(match feature.kind {
+                    FeatureKind::Extrude => Operation::Extrude {
+                        id,
+                        sketch: feature.sketch,
+                        height: feature.depth.unwrap_or(Length::ZERO),
+                    },
+                    FeatureKind::Pocket => Operation::Pocket {
+                        id,
+                        sketch: feature.sketch,
+                        depth: feature.depth,
+                    },
+                })
             }
         }
     }
@@ -1518,5 +1734,240 @@ mod tests {
         }
         .grown(by)
         .is_err());
+    }
+}
+
+#[cfg(test)]
+mod feature_tests {
+    use super::*;
+    use crate::sketch::SketchPlane;
+
+    fn mm(v: i64) -> Length {
+        Length::from_mm(v).unwrap()
+    }
+
+    fn params() -> EnclosureParams {
+        EnclosureParams {
+            inner_length: mm(100),
+            inner_width: mm(60),
+            inner_height: mm(30),
+            wall: mm(2),
+            floor: mm(2),
+            lid: mm(3),
+            edge_margin: mm(3),
+            min_web: mm(2),
+        }
+    }
+
+    fn id(n: u64) -> Id {
+        ObjectId::from_parts(1_700_000_000_000, n as u16, n).unwrap()
+    }
+
+    /// A sketch on the top face with the origin at (10, 10) mm: a rectangle of 40 by 25 mm and a
+    /// circle of diameter 6 mm in it.
+    fn plate(name: &str, u0: i64) -> Sketch {
+        let plane = SketchPlane {
+            face: Face::Top,
+            u0: mm(u0),
+            v0: mm(10),
+            offset: Length::ZERO,
+        };
+        let mut k = Sketch::new(name, plane).unwrap();
+        k.add_rectangle((mm(0), mm(0)), (mm(40), mm(25))).unwrap();
+        let c = k.add_point(mm(20), mm(12)).unwrap();
+        k.add_circle(c, mm(3)).unwrap();
+        k
+    }
+
+    fn with_plate() -> Enclosure {
+        let mut e = Enclosure::new(params()).unwrap();
+        e.set_sketches(vec![plate("plate", 10)], None);
+        e
+    }
+
+    fn extrude(n: u64, height: i64) -> Operation {
+        Operation::Extrude {
+            id: id(n),
+            sketch: "plate".into(),
+            height: mm(height),
+        }
+    }
+
+    fn code<T>(r: Result<T, CadError>) -> &'static str {
+        r.err().expect("it is refused").code()
+    }
+
+    #[test]
+    fn an_extrusion_adds_the_volume_worked_out_by_hand_and_is_undone_exactly() {
+        // 40 * 25 * 10 - pi * 3^2 * 10 = 9717.2566 mm3 (python: 9717.256661176918...)
+        let mut e = with_plate();
+        let before = e.clone();
+        let undo = e.apply(extrude(1, 10)).unwrap();
+        assert_eq!(undo, Operation::RemoveFeature { id: id(1) });
+        let (added, removed) = e.features_volume_nm3();
+        assert_eq!(removed, 0);
+        assert!(
+            (added - 9_717_256_661_176_918_608_538i128).abs() < 10_000_000,
+            "{added}"
+        );
+        let again = e.apply(undo).unwrap();
+        assert_eq!(e, before);
+        // removing gives back the operation that makes it again
+        assert_eq!(again, extrude(1, 10));
+        e.apply(again).unwrap();
+        assert_eq!(e.features().len(), 1);
+        assert_eq!(e.features()[&id(1)].kind, FeatureKind::Extrude);
+    }
+
+    #[test]
+    fn a_pocket_to_a_depth_and_a_pocket_through_take_away_their_volume() {
+        let mut e = with_plate();
+        e.apply(Operation::Pocket {
+            id: id(1),
+            sketch: "plate".into(),
+            depth: Some(mm(2)),
+        })
+        .unwrap();
+        // 971.7256661176918 mm2 * 2 mm
+        let (_, two) = e.features_volume_nm3();
+        assert!(
+            (two - 1_943_451_332_235_383_721i128 * 1_000).abs() < 10_000_000 * 1_000,
+            "{two}"
+        );
+        let mut through = with_plate();
+        through
+            .apply(Operation::Pocket {
+                id: id(2),
+                sketch: "plate".into(),
+                depth: None,
+            })
+            .unwrap();
+        // the lid is 3 mm thick: 971.7256661176918 * 3 = 2915.1769983530755 mm3
+        let (_, all) = through.features_volume_nm3();
+        assert!(
+            (all - 2_915_176_998_353_075_582_561i128).abs() < 100_000_000,
+            "{all}"
+        );
+        // the material of the model goes down by it
+        let v = through.material_volume_with_holes().unwrap();
+        assert!(!v.exact);
+        assert_eq!(v.nm3, through.material_volume_nm3() - all);
+    }
+
+    #[test]
+    fn what_does_not_fit_is_refused_and_leaves_the_model_as_it_was() {
+        let mut e = with_plate();
+        let before = e.clone();
+        // a pocket deeper than the lid
+        let deep = Operation::Pocket {
+            id: id(1),
+            sketch: "plate".into(),
+            depth: Some(mm(4)),
+        };
+        assert_eq!(code(e.apply(deep)), "PHOENIX-CAD-037");
+        // no height
+        assert_eq!(code(e.apply(extrude(1, 0))), "PHOENIX-CAD-037");
+        // a sketch that does not exist
+        let missing = Operation::Extrude {
+            id: id(1),
+            sketch: "nothing".into(),
+            height: mm(5),
+        };
+        assert_eq!(code(e.apply(missing)), "PHOENIX-CAD-037");
+        assert_eq!(e, before);
+        // out of the face (the lid is 104 mm long: 80 + 40 does not fit)
+        let mut wide = with_plate();
+        wide.set_sketches(vec![plate("plate", 80)], None);
+        assert_eq!(code(wide.apply(extrude(1, 5))), "PHOENIX-CAD-037");
+        // a pocket keeps the margin of the edges (3 mm): at 2 mm it is refused, at 3 mm it is not
+        let mut near = with_plate();
+        near.set_sketches(vec![plate("plate", 2)], None);
+        let pocket = |n| Operation::Pocket {
+            id: id(n),
+            sketch: "plate".into(),
+            depth: None,
+        };
+        assert_eq!(code(near.apply(pocket(1))), "PHOENIX-CAD-037");
+        assert!(near.apply(extrude(2, 5)).is_ok());
+        near.set_sketches(vec![plate("plate", 3)], None);
+        assert!(near.apply(pocket(3)).is_ok());
+        // an id used twice and an id that is not there
+        assert_eq!(code(near.apply(extrude(2, 5))), "PHOENIX-CAD-005");
+        assert_eq!(
+            code(near.apply(Operation::RemoveFeature { id: id(9) })),
+            "PHOENIX-CAD-005"
+        );
+    }
+
+    #[test]
+    fn a_sketch_with_a_plane_off_its_face_or_without_a_closed_outline_is_refused() {
+        let mut e = Enclosure::new(params()).unwrap();
+        let plane = SketchPlane {
+            face: Face::Top,
+            u0: mm(10),
+            v0: mm(10),
+            offset: mm(1),
+        };
+        let mut off = Sketch::new("plate", plane).unwrap();
+        off.add_rectangle((mm(0), mm(0)), (mm(10), mm(10))).unwrap();
+        e.set_sketches(vec![off], None);
+        assert_eq!(code(e.apply(extrude(1, 5))), "PHOENIX-CAD-037");
+        let mut open = Sketch::new("plate", SketchPlane::on_face(Face::Top)).unwrap();
+        let a = open.add_point(mm(10), mm(10)).unwrap();
+        let b = open.add_point(mm(20), mm(10)).unwrap();
+        open.add_line(a, b).unwrap();
+        e.set_sketches(vec![open], None);
+        assert_eq!(code(e.apply(extrude(1, 5))), "PHOENIX-CAD-036");
+        assert!(e.features().is_empty());
+    }
+
+    #[test]
+    fn the_features_are_checked_again_when_the_parameters_change() {
+        let mut e = with_plate();
+        e.apply(extrude(1, 5)).unwrap();
+        let before = e.clone();
+        // a lid 40 mm wide cannot hold a plate whose far edge is at 50 mm
+        let mut small = params();
+        small.inner_length = mm(40);
+        assert_eq!(
+            code(e.apply(Operation::SetParams(small))),
+            "PHOENIX-CAD-037"
+        );
+        assert_eq!(e, before);
+        let mut e2 = with_plate();
+        e2.apply(Operation::Pocket {
+            id: id(1),
+            sketch: "plate".into(),
+            depth: Some(mm(3)),
+        })
+        .unwrap();
+        // a thinner lid than the pocket is deep
+        let mut thin = params();
+        thin.lid = mm(2);
+        assert_eq!(
+            code(e2.apply(Operation::SetParams(thin))),
+            "PHOENIX-CAD-037"
+        );
+    }
+
+    #[test]
+    fn a_change_of_the_sketch_changes_the_feature_when_it_is_built_again() {
+        let mut e = with_plate();
+        e.apply(extrude(1, 10)).unwrap();
+        let first = e.features_volume_nm3().0;
+        let mut b = Enclosure::new(params()).unwrap();
+        let mut bigger = plate("plate", 10);
+        let c = bigger.add_point(mm(5), mm(5)).unwrap();
+        bigger.add_circle(c, mm(2)).unwrap();
+        b.set_sketches(vec![bigger], None);
+        b.apply(extrude(1, 10)).unwrap();
+        // one more hole of diameter 4 mm: pi * 2^2 * 10 = 125.6637 mm3 less
+        let second = b.features_volume_nm3().0;
+        let expect = 125.663_706_143_591_73 * 1e18;
+        assert!(
+            ((first - second) as f64 - expect).abs() < 1e7,
+            "{}",
+            first - second
+        );
     }
 }
