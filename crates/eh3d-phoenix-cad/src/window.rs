@@ -7,6 +7,7 @@
 //! transaction: the new recipe is built first and the change is kept only when the model accepts
 //! it, so a refused value leaves the project exactly as it was.
 
+use crate::assembly::{Dim, Edge, Mate, MateKind, Report};
 use crate::body::{Built, Step, StepState};
 use crate::catalog::{self, Axis, Kind as PartKind, Library, Orientation, PartInstance, Shape};
 use crate::config::Settings;
@@ -31,7 +32,7 @@ use crate::profile::ProfileLimits;
 use crate::project::{Document, PARAMETERS_DOMAIN};
 use crate::scad::mm_text;
 use crate::scene::{
-    face_plane, floor_plane, mm, outer_size, post_centre, project_with, references, scene_of,
+    face_plane, floor_plane, mm, outer_size, post_centre, project_with, references, scene_with,
     BoardBox, Camera, Fit, Frame, Highlight, Kind, Line2, Mapping, Point3, Segment,
 };
 use crate::sketch::file as sketch_file;
@@ -70,6 +71,8 @@ pub enum Selection {
     Fins(usize),
     /// A part of the catalog placed in the model: the index of its step.
     Part(usize),
+    /// A mate between two placed parts: the index of its step.
+    Mate(usize),
     /// A part of the open library, which is not in the model: its place in the library.
     CatalogPart(usize),
     /// A step that has no editor of its own: its index.
@@ -103,6 +106,8 @@ pub enum NewStep {
     Fins,
     /// The part of the open library that is chosen, placed in the model.
     Part,
+    /// A mate between the selected part and the one before it, of the kind the settings say.
+    Mate,
 }
 
 /// A row of the sheet of variables.
@@ -146,6 +151,7 @@ impl Selection {
             | Selection::Pattern(i)
             | Selection::Fins(i)
             | Selection::Part(i)
+            | Selection::Mate(i)
             | Selection::Other(i) => Some(i),
             Selection::Nothing
             | Selection::Body
@@ -262,6 +268,24 @@ pub enum Key {
     PartVolume,
     /// The mass of a part (read only).
     PartMass,
+    /// The part a mate is relative to (typed as its name).
+    MateA,
+    /// The part a mate places (typed as its name).
+    MateB,
+    /// The kind of a mate.
+    MateKind,
+    /// The side of the fixed part that a gap puts the placed part on.
+    MateDirection,
+    /// The air between the two faces of a gap.
+    MateDistance,
+    /// The axis across the plane of an alignment.
+    MateAxis,
+    /// The faces an alignment puts on one plane.
+    MateEdge,
+    /// Where a part really is once its mates are applied (read only).
+    PartPlaced,
+    /// The parts that share volume with a part (read only).
+    PartConflicts,
 }
 
 /// How a field is edited.
@@ -383,6 +407,8 @@ pub struct Info {
     pub fit: FitReport,
     /// Whether the envelope is the board of the project (otherwise it is the one typed).
     pub fit_from_board: bool,
+    /// Which placed parts share volume (`None` when the check could not be made).
+    pub interference: Option<Report>,
 }
 
 /// The two views.
@@ -666,6 +692,7 @@ fn the_selection_of(index: usize, step: &Step) -> Selection {
         Operation::AddPattern { .. } => Selection::Pattern(index),
         Operation::AddFins { .. } => Selection::Fins(index),
         Operation::AddPart { .. } => Selection::Part(index),
+        Operation::AddMate { .. } => Selection::Mate(index),
         _ => Selection::Other(index),
     }
 }
@@ -725,6 +752,7 @@ impl Window {
                     Length::ZERO,
                 ),
                 fit_from_board: false,
+                interference: None,
             },
             settings,
             ui,
@@ -858,6 +886,7 @@ impl Window {
         let mut patterns = Vec::new();
         let mut fins = Vec::new();
         let mut parts = Vec::new();
+        let mut mates = Vec::new();
         let mut edges = Vec::new();
         let mut lids = Vec::new();
         let mut features = Vec::new();
@@ -875,6 +904,7 @@ impl Window {
                 Selection::Pattern(_) => patterns.push(item),
                 Selection::Fins(_) => fins.push(item),
                 Selection::Part(_) => parts.push(item),
+                Selection::Mate(_) => mates.push(item),
                 Selection::Edging(_) => edges.push(item),
                 Selection::Lid(_) => lids.push(item),
                 Selection::Feature(_) => features.push(item),
@@ -930,6 +960,7 @@ impl Window {
             (Msg::GroupPatterns, patterns),
             (Msg::GroupFins, fins),
             (Msg::GroupParts, parts),
+            (Msg::GroupMates, mates),
             (Msg::GroupEdges, edges),
             (Msg::GroupLid, lids),
             (Msg::GroupScrews, screws),
@@ -963,6 +994,7 @@ impl Window {
             | Selection::Pattern(i)
             | Selection::Fins(i)
             | Selection::Part(i)
+            | Selection::Mate(i)
             | Selection::Other(i) => i < self.mech.steps.len(),
             Selection::CatalogPart(k) => k < self.library.as_ref().map_or(0, |l| l.parts.len()),
             Selection::Screw(k) => k < self.built.enclosure.lid_holes().len(),
@@ -985,6 +1017,7 @@ impl Window {
                 | Some(Operation::Pocket { id, .. })
                 | Some(Operation::AddFins { id, .. })
                 | Some(Operation::AddPart { id, .. }) => Highlight::Object(*id),
+                Some(Operation::AddMate { mate, .. }) => Highlight::Object(mate.b),
                 Some(Operation::AddPattern { id, .. }) => Highlight::Pattern(*id),
                 _ => Highlight::Nothing,
             }
@@ -995,7 +1028,8 @@ impl Window {
             | Selection::Feature(i)
             | Selection::Pattern(i)
             | Selection::Fins(i)
-            | Selection::Part(i) => id_of(i),
+            | Selection::Part(i)
+            | Selection::Mate(i) => id_of(i),
             Selection::Screw(k) => Highlight::Screw(k),
             _ => Highlight::Nothing,
         }
@@ -1158,8 +1192,11 @@ impl Window {
             (Selection::Fins(_), Some(Operation::AddFins { fins, .. })) => {
                 self.fins_fields(fins, writable)
             }
-            (Selection::Part(_), Some(Operation::AddPart { part, .. })) => {
-                self.part_fields(part, writable)
+            (Selection::Part(_), Some(Operation::AddPart { id, part })) => {
+                self.part_fields(*id, part, writable)
+            }
+            (Selection::Mate(_), Some(Operation::AddMate { mate, .. })) => {
+                self.mate_fields(mate, writable)
             }
             (Selection::CatalogPart(k), _) => self.catalog_fields(k),
             (Selection::Edging(_), Some(Operation::SetEdging(edging))) => {
@@ -1448,8 +1485,172 @@ impl Window {
         ]
     }
 
+    /// The name of a placed part, or its id when it is not in the model.
+    fn part_name(&self, id: &Id) -> String {
+        self.built
+            .enclosure
+            .parts()
+            .get(id)
+            .map_or_else(|| id.to_string(), |p| p.name.clone())
+    }
+
+    /// The placed part with a name, refused when there is none or more than one.
+    fn part_named(&self, name: &str) -> Result<Id, CadError> {
+        let name = name.trim();
+        let mut found = self
+            .built
+            .enclosure
+            .parts()
+            .iter()
+            .filter(|(_, p)| p.name == name)
+            .map(|(id, _)| *id);
+        match (found.next(), found.next()) {
+            (Some(id), None) => Ok(id),
+            (Some(_), Some(_)) => Err(CadError::Duplicate(name.to_string())),
+            _ => Err(CadError::UnknownName(name.to_string())),
+        }
+    }
+
+    /// A position as text, in the unit of the window.
+    fn position_text(&self, at: [Length; 3]) -> String {
+        at.map(|v| self.unit_text(v)).join(", ")
+    }
+
+    /// The names of the parts that share volume with a part.
+    fn partners_of(&self, id: Id) -> Vec<String> {
+        let Some(report) = &self.info.interference else {
+            return Vec::new();
+        };
+        report
+            .conflicts
+            .iter()
+            .filter_map(|c| {
+                if c.a == id {
+                    Some(self.part_name(&c.b))
+                } else if c.b == id {
+                    Some(self.part_name(&c.a))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// The fields of a mate: the two parts, the kind and the values of the kind, and where the
+    /// placed part is.
+    fn mate_fields(&self, mate: &Mate, writable: bool) -> Vec<Field> {
+        let text = |key: Key, label: Msg, text: String| Field {
+            key,
+            label,
+            text,
+            note: String::new(),
+            input: Input::Text,
+            editable: writable,
+        };
+        let choice = |key: Key, label: Msg, text: &str, list: Vec<(&'static str, Msg)>| Field {
+            key,
+            label,
+            text: text.to_string(),
+            note: String::new(),
+            input: Input::Choice(list),
+            editable: writable,
+        };
+        let mut out = vec![
+            text(Key::MateA, Msg::FieldMateA, self.part_name(&mate.a)),
+            text(Key::MateB, Msg::FieldMateB, self.part_name(&mate.b)),
+            choice(
+                Key::MateKind,
+                Msg::FieldMateKind,
+                mate.kind.name(),
+                vec![
+                    ("gap", Msg::MateGap),
+                    ("align", Msg::MateAlign),
+                    ("stack", Msg::MateStack),
+                ],
+            ),
+        ];
+        match mate.kind {
+            MateKind::Gap {
+                direction,
+                distance,
+            } => {
+                out.push(text(
+                    Key::MateDirection,
+                    Msg::FieldMateDirection,
+                    direction.name().to_string(),
+                ));
+                out.push(self.length_field(
+                    Key::MateDistance,
+                    Msg::FieldMateDistance,
+                    distance,
+                    writable,
+                ));
+            }
+            MateKind::Align { axis, edge } => {
+                out.push(text(
+                    Key::MateAxis,
+                    Msg::FieldMateAxis,
+                    axis.name().to_string(),
+                ));
+                out.push(choice(
+                    Key::MateEdge,
+                    Msg::FieldMateEdge,
+                    edge.name(),
+                    vec![
+                        ("min", Msg::MateEdgeMin),
+                        ("max", Msg::MateEdgeMax),
+                        ("center", Msg::MateEdgeCenter),
+                    ],
+                ));
+            }
+            MateKind::Stack => {}
+        }
+        if let Some(p) = self.built.enclosure.placed_parts().get(&mate.b) {
+            out.push(Self::info_field(
+                Key::PartPlaced,
+                Msg::FieldPartPlaced,
+                self.position_text(p.at),
+            ));
+        }
+        out
+    }
+
+    /// A mate after an edit of the field `key`.
+    fn edited_mate(&self, mate: &Mate, key: Key, text: &str) -> Result<Mate, CadError> {
+        let mut m = *mate;
+        let word = text.trim();
+        match (key, &mut m.kind) {
+            (Key::MateA, _) => m.a = self.part_named(text)?,
+            (Key::MateB, _) => m.b = self.part_named(text)?,
+            (Key::MateKind, kind) => {
+                *kind = self
+                    .ui
+                    .new_step
+                    .mate_of(word)
+                    .ok_or_else(|| CadError::Reference(word.to_string()))?;
+            }
+            (Key::MateDirection, MateKind::Gap { direction, .. }) => {
+                *direction =
+                    Axis::from_name(word).ok_or_else(|| CadError::Reference(word.to_string()))?;
+            }
+            (Key::MateDistance, MateKind::Gap { distance, .. }) => {
+                *distance = self.parse_text(text)?;
+            }
+            (Key::MateAxis, MateKind::Align { axis, .. }) => {
+                *axis =
+                    Dim::from_name(word).ok_or_else(|| CadError::Reference(word.to_string()))?;
+            }
+            (Key::MateEdge, MateKind::Align { edge, .. }) => {
+                *edge =
+                    Edge::from_name(word).ok_or_else(|| CadError::Reference(word.to_string()))?;
+            }
+            _ => return Err(refusal()),
+        }
+        Ok(m)
+    }
+
     /// The fields of a part placed in the model.
-    fn part_fields(&self, part: &PartInstance, writable: bool) -> Vec<Field> {
+    fn part_fields(&self, id: Id, part: &PartInstance, writable: bool) -> Vec<Field> {
         let lang = self.lang;
         let text = |key: Key, label: Msg, text: String| Field {
             key,
@@ -1498,6 +1699,23 @@ impl Window {
             Msg::FieldPartSize,
             self.size_text(part.extent().0),
         ));
+        // where the mates put it, when that is not where it was typed
+        let placed = self.built.enclosure.placed_parts();
+        if let Some(p) = placed.get(&id).filter(|p| p.at != part.at) {
+            out.push(Self::info_field(
+                Key::PartPlaced,
+                Msg::FieldPartPlaced,
+                self.position_text(p.at),
+            ));
+        }
+        let partners = self.partners_of(id);
+        if !partners.is_empty() {
+            out.push(Self::info_field(
+                Key::PartConflicts,
+                Msg::FieldPartConflicts,
+                partners.join(", "),
+            ));
+        }
         out.extend(self.material_fields(part.volume_nm3(), &part.part.material));
         out
     }
@@ -1710,6 +1928,10 @@ impl Window {
             Operation::AddPart { id, part } => Ok(Operation::AddPart {
                 id: *id,
                 part: self.edited_part(part, key, text)?,
+            }),
+            Operation::AddMate { id, mate } => Ok(Operation::AddMate {
+                id: *id,
+                mate: self.edited_mate(mate, key, text)?,
             }),
             Operation::SetEdging(edging) => {
                 Ok(Operation::SetEdging(self.edited_edging(edging, key, text)?))
@@ -2184,7 +2406,9 @@ impl Window {
                 | Operation::AddFins { id, .. }
                 | Operation::RemoveFins { id }
                 | Operation::AddPart { id, .. }
-                | Operation::RemovePart { id } => ids.push(*id),
+                | Operation::RemovePart { id }
+                | Operation::AddMate { id, .. }
+                | Operation::RemoveMate { id } => ids.push(*id),
                 Operation::AddPattern { id, pattern } => ids.extend(pattern.instance_ids(*id)),
                 Operation::AddPost { id, post } | Operation::ReplacePost { id, post } => {
                     ids.push(*id);
@@ -2403,6 +2627,58 @@ impl Window {
                     name,
                 ))
             }
+            NewStep::Mate => {
+                // the parts that are there, in the order of their steps
+                let parts = self.built.enclosure.parts();
+                let ids: Vec<Id> = self
+                    .mech
+                    .steps
+                    .iter()
+                    .take(self.mech.tip)
+                    .filter_map(|s| match &s.op {
+                        Operation::AddPart { id, .. } if parts.contains_key(id) => Some(*id),
+                        _ => None,
+                    })
+                    .collect();
+                let selected = match self.selection {
+                    Selection::Part(i) => match self.mech.steps.get(i).map(|s| &s.op) {
+                        Some(Operation::AddPart { id, .. }) => Some(*id),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let placed = selected
+                    .filter(|id| ids.contains(id))
+                    .or_else(|| ids.last().copied())
+                    .ok_or_else(|| CadError::Mate("the model has no part".to_string()))?;
+                let at = ids.iter().position(|id| *id == placed).unwrap_or(0);
+                let fixed = if at > 0 {
+                    ids[at - 1]
+                } else {
+                    *ids.get(1).ok_or_else(|| {
+                        CadError::Mate("a mate needs two parts in the model".to_string())
+                    })?
+                };
+                let kind = d.mate_of(&d.mate_kind).ok_or_else(refusal)?;
+                let count = self
+                    .mech
+                    .steps
+                    .iter()
+                    .filter(|s| matches!(s.op, Operation::AddMate { .. }))
+                    .count();
+                let name = fill(Msg::NameMate.tr(self.lang), &[&(count + 1).to_string()]);
+                Ok((
+                    Operation::AddMate {
+                        id: self.fresh_id()?,
+                        mate: Mate {
+                            a: fixed,
+                            b: placed,
+                            kind,
+                        },
+                    },
+                    name,
+                ))
+            }
             NewStep::Extrude | NewStep::Pocket => {
                 let sketch = self
                     .active_sketch
@@ -2473,7 +2749,7 @@ impl Window {
 
     fn step_addition(&mut self, kind: NewStep) -> Result<(), CadError> {
         let tries = match kind {
-            NewStep::Edging | NewStep::Extrude | NewStep::Pocket => 1,
+            NewStep::Edging | NewStep::Extrude | NewStep::Pocket | NewStep::Mate => 1,
             NewStep::Hole
             | NewStep::Post
             | NewStep::HolePattern
@@ -2836,6 +3112,7 @@ impl Window {
                 .count(),
             fit: check_fit(e, &envelope, self.settings.printer.fit_clearance),
             fit_from_board: from_board,
+            interference: e.interference().ok(),
         }
     }
 
@@ -2913,10 +3190,79 @@ impl Window {
             ));
         }
         lines.extend(self.parts_report_lines());
+        lines.extend(self.assembly_report_lines(false));
         lines.join(
             "
 ",
         )
+    }
+
+    /// The text of the check of the assembly, in the language of the window: how many mates there
+    /// are and which pairs of parts share volume. It is what the `interference` command prints.
+    pub fn assembly_text(&self) -> String {
+        self.assembly_report_lines(true).join("\n")
+    }
+
+    /// Whether no pair of placed parts shares volume.
+    pub fn assembly_clear(&self) -> bool {
+        self.info
+            .interference
+            .as_ref()
+            .is_some_and(|r| r.conflicts.is_empty())
+    }
+
+    /// The lines of the report about the assembly: how many mates there are and which pairs of
+    /// parts share volume (with the parts in the places the mates give them). The check is part of
+    /// the report when there are two parts or more, or when `always` asks for it.
+    fn assembly_report_lines(&self, always: bool) -> Vec<String> {
+        let lang = self.lang;
+        let mut lines = Vec::new();
+        let mates = self.built.enclosure.mates().len();
+        if mates > 0 {
+            lines.push(fill(Msg::ReportMates.tr(lang), &[&mates.to_string()]));
+        }
+        if self.built.enclosure.parts().len() < 2 && !always {
+            return lines;
+        }
+        let Some(report) = &self.info.interference else {
+            return lines;
+        };
+        if report.conflicts.is_empty() {
+            lines.push(fill(
+                Msg::ReportInterferenceNone.tr(lang),
+                &[
+                    &report.boxes_overlapping.to_string(),
+                    &report.passes.to_string(),
+                ],
+            ));
+            return lines;
+        }
+        lines.push(fill(
+            Msg::ReportInterference.tr(lang),
+            &[
+                &report.conflicts.len().to_string(),
+                &report.boxes_overlapping.to_string(),
+                &report.passes.to_string(),
+            ],
+        ));
+        let shown = self.settings.design.assembly.max_report_pairs;
+        for c in report.conflicts.iter().take(shown) {
+            lines.push(fill(
+                Msg::ReportConflict.tr(lang),
+                &[
+                    &self.part_name(&c.a),
+                    &self.part_name(&c.b),
+                    &catalog::volume_mm3_text(c.shared_nm3),
+                ],
+            ));
+        }
+        if report.conflicts.len() > shown {
+            lines.push(fill(
+                Msg::ReportConflictMore.tr(lang),
+                &[&(report.conflicts.len() - shown).to_string()],
+            ));
+        }
+        lines
     }
 
     /// The lines of the report about the parts placed in the model: the totals, a line for each
@@ -3084,11 +3430,18 @@ impl Window {
 
     /// The lines of the model (without the marks of the measurements).
     fn model_segments(&self) -> Vec<Segment> {
-        scene_of(
+        let conflicts = self
+            .info
+            .interference
+            .as_ref()
+            .map(Report::conflicting)
+            .unwrap_or_default();
+        scene_with(
             &self.built.enclosure,
             self.board_box(),
             self.highlight(),
             self.ui.circle_segments,
+            &conflicts,
         )
     }
 
@@ -6019,5 +6372,287 @@ mod tests {
         assert!(old.save_to(&plain));
         let plain_text = String::from_utf8(std::fs::read(&plain).unwrap()).unwrap();
         assert!(plain_text.contains("mechanical 1\n") && !plain_text.contains("add-part"));
+    }
+
+    fn assembly_path() -> PathBuf {
+        PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/examples/assembly.phoenixproj"
+        ))
+    }
+
+    /// Two tubes of 20 x 20 x 300 mm added from the library: the second lands at x = 24 mm, the
+    /// first place along that the tries find clear of the first one.
+    fn two_tubes_in_the_window() -> Window {
+        let mut w = with_library();
+        choose_part(&mut w, "tube-20x20");
+        w.add_step(NewStep::Part);
+        w.add_step(NewStep::Part);
+        assert!(!w.status.is_problem(), "{:?}", w.status);
+        assert_eq!(w.enclosure().parts().len(), 2);
+        assert_eq!(part_of(&w, 1).at, [mm_len(24), mm_len(0), mm_len(0)]);
+        w
+    }
+
+    /// Where a placed part really is, in whole millimetres, once the mates are applied.
+    fn placed_at(w: &Window, name: &str) -> [i64; 3] {
+        let placed = w.enclosure().placed_parts();
+        let p = placed.values().find(|p| p.name == name).unwrap();
+        p.at.map(|l| l.get() / 1_000_000)
+    }
+
+    fn conflict_lines(w: &Window) -> usize {
+        w.lines(ViewKind::Iso, (600.0, 400.0))
+            .iter()
+            .filter(|l| l.kind == Kind::Conflict)
+            .count()
+    }
+
+    #[test]
+    fn a_mate_is_added_from_the_window_and_its_fields_change_where_the_part_is() {
+        let mut w = two_tubes_in_the_window();
+        w.select(Selection::Part(1));
+        w.add_step(NewStep::Mate);
+        assert!(!w.status.is_problem(), "{:?}", w.status);
+        assert_eq!(w.selection, Selection::Mate(2));
+        assert_eq!(w.mech.steps[2].name, "Mate 1");
+        assert_eq!(w.mech.version(), 5);
+        // the settings start a mate as a stack, of the selected part on the one before it: the
+        // first tube is 300 mm tall, so the second stands at z = 300
+        assert_eq!(text_of(&w, Key::MateA), "Part 1");
+        assert_eq!(text_of(&w, Key::MateB), "Part 2");
+        assert_eq!(text_of(&w, Key::MateKind), "stack");
+        assert_eq!(
+            text_of(&w, Key::PartPlaced),
+            "24.000 mm, 0.000 mm, 300.000 mm"
+        );
+        let tree = w.tree();
+        let group = tree.iter().find(|g| g.title == Msg::GroupMates).unwrap();
+        assert_eq!(group.items.len(), 1);
+        assert_eq!(group.items[0].label, "Mate 1");
+        assert_eq!(group.items[0].selection, Selection::Mate(2));
+        // the part it places is the one drawn in the colour of the selection
+        assert!(matches!(w.highlight(), Highlight::Object(_)));
+        // a gap: the fields of the kind appear, 5 mm of air above the first tube
+        let kind = field(&w, Key::MateKind);
+        w.choose(kind, "gap");
+        assert!(!w.status.is_problem(), "{:?}", w.status);
+        assert_eq!(text_of(&w, Key::MateDirection), "+z");
+        assert_eq!(text_of(&w, Key::MateDistance), "0.000 mm");
+        set(&mut w, Key::MateDistance, "5 mm");
+        assert_eq!(
+            text_of(&w, Key::PartPlaced),
+            "24.000 mm, 0.000 mm, 305.000 mm"
+        );
+        // on the side of larger x it is at 0 + 20 + 5 and keeps the z it was typed with
+        set(&mut w, Key::MateDirection, "+x");
+        assert_eq!(
+            text_of(&w, Key::PartPlaced),
+            "25.000 mm, 0.000 mm, 0.000 mm"
+        );
+        // an alignment: the upper faces in x are both at 20 mm
+        let kind = field(&w, Key::MateKind);
+        w.choose(kind, "align");
+        set(&mut w, Key::MateAxis, "y");
+        let edge = field(&w, Key::MateEdge);
+        w.choose(edge, "max");
+        assert!(!w.status.is_problem(), "{:?}", w.status);
+        assert_eq!(text_of(&w, Key::MateEdge), "max");
+        assert_eq!(
+            text_of(&w, Key::PartPlaced),
+            "24.000 mm, 0.000 mm, 0.000 mm"
+        );
+        // refusals tell why and leave the mate as it was
+        set(&mut w, Key::MateAxis, "w");
+        assert!(w.status.is_problem());
+        assert_eq!(text_of(&w, Key::MateAxis), "y");
+        set(&mut w, Key::MateB, "Part 7");
+        assert!(
+            w.status.text(Lang::En).contains("PHOENIX-CAD-014"),
+            "{:?}",
+            w.status
+        );
+        set(&mut w, Key::MateA, "Part 2");
+        assert!(
+            w.status.text(Lang::En).contains("PHOENIX-CAD-046"),
+            "{:?}",
+            w.status
+        );
+        assert_eq!(text_of(&w, Key::MateA), "Part 1");
+        // every field change is an entry of the history
+        w.undo();
+        assert_eq!(text_of(&w, Key::MateEdge), "min");
+        w.undo();
+        w.undo();
+        assert_eq!(text_of(&w, Key::MateKind), "gap");
+        assert_eq!(text_of(&w, Key::MateDirection), "+x");
+        w.redo();
+        assert_eq!(text_of(&w, Key::MateKind), "align");
+    }
+
+    #[test]
+    fn a_mate_that_cannot_be_added_says_why_and_leaves_the_project_as_it_was() {
+        // no part at all, and only one
+        let mut w = with_library();
+        w.add_step(NewStep::Mate);
+        assert!(w.status.text(Lang::En).contains("PHOENIX-CAD-046"));
+        assert!(
+            w.status.text(Lang::En).contains("no part"),
+            "{:?}",
+            w.status
+        );
+        choose_part(&mut w, "tube-20x20");
+        w.add_step(NewStep::Part);
+        w.add_step(NewStep::Mate);
+        assert!(
+            w.status.text(Lang::En).contains("two parts"),
+            "{:?}",
+            w.status
+        );
+        assert_eq!(w.mech.steps.len(), 1);
+        // the same part placed twice along z
+        let mut w = two_tubes_in_the_window();
+        w.add_step(NewStep::Mate);
+        assert!(!w.status.is_problem(), "{:?}", w.status);
+        w.add_step(NewStep::Mate);
+        let text = w.status.text(Lang::En);
+        assert!(
+            text.contains("PHOENIX-CAD-046") && text.contains("two mates along z"),
+            "{text}"
+        );
+        assert_eq!(w.mech.steps.len(), 3);
+        assert_eq!(w.enclosure().mates().len(), 1);
+        // a part a mate uses cannot be removed from the tree
+        w.select(Selection::Part(0));
+        w.remove_step();
+        assert!(w.status.is_problem(), "{:?}", w.status);
+        assert_eq!(w.enclosure().parts().len(), 2);
+        // but the mate can, and the part goes back to where it was typed
+        w.select(Selection::Mate(2));
+        w.remove_step();
+        assert!(!w.status.is_problem(), "{:?}", w.status);
+        assert!(w.enclosure().mates().is_empty());
+        assert_eq!(placed_at(&w, "Part 2"), [24, 0, 0]);
+        w.undo();
+        assert_eq!(placed_at(&w, "Part 2"), [24, 0, 300]);
+        assert!(w.tree().iter().any(|g| g.title == Msg::GroupMates));
+    }
+
+    #[test]
+    fn parts_that_share_volume_are_told_in_the_report_the_fields_and_the_views() {
+        let mut w = two_tubes_in_the_window();
+        assert_eq!(conflict_lines(&w), 0);
+        assert!(w.info.interference.as_ref().unwrap().conflicts.is_empty());
+        assert!(w.assembly_clear());
+        assert!(w.report_text().contains(
+            "Interference: none (0 pairs with overlapping boxes looked at, 0 screws through holes)"
+        ));
+        // an alignment of the lower faces in x puts the second tube over the first one
+        w.select(Selection::Part(1));
+        w.add_step(NewStep::Mate);
+        let kind = field(&w, Key::MateKind);
+        w.choose(kind, "align");
+        set(&mut w, Key::MateAxis, "x");
+        assert!(!w.status.is_problem(), "{:?}", w.status);
+        assert!(!w.assembly_clear());
+        let report = w.info.interference.as_ref().unwrap();
+        assert_eq!(report.conflicts.len(), 1);
+        // 20 x 20 x 300 mm of bounding box shared
+        assert_eq!(
+            report.conflicts[0].shared_nm3,
+            120_000 * 1_000_000_000_000_000_000
+        );
+        let text = w.report_text();
+        assert!(text.contains("Mates: 1"), "{text}");
+        assert!(
+            text.contains("Interference: 1 pairs share volume (1 pairs with overlapping boxes looked at, 0 screws through holes)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("  Part 1 / Part 2: up to 120000.000 mm3 shared by the bounding boxes"),
+            "{text}"
+        );
+        assert_eq!(w.assembly_text().lines().count(), 3);
+        // the part says who it shares volume with, and the views draw it in the colour of a conflict
+        w.select(Selection::Part(1));
+        assert_eq!(text_of(&w, Key::PartConflicts), "Part 1");
+        assert_eq!(text_of(&w, Key::PartPlaced), "0.000 mm, 0.000 mm, 0.000 mm");
+        w.select(Selection::Part(0));
+        assert_eq!(text_of(&w, Key::PartConflicts), "Part 2");
+        w.select(Selection::Body);
+        assert!(conflict_lines(&w) > 0);
+        // the part that is selected keeps the colour of the selection
+        let before = conflict_lines(&w);
+        w.select(Selection::Part(1));
+        assert!(conflict_lines(&w) < before);
+        // a mate that takes them apart takes the conflict away
+        w.select(Selection::Mate(2));
+        let kind = field(&w, Key::MateKind);
+        w.choose(kind, "stack");
+        assert!(w.assembly_clear());
+        w.select(Selection::Body);
+        assert_eq!(conflict_lines(&w), 0);
+        // and the report in the language of the window
+        w.lang = Lang::Es;
+        assert!(w.report_text().contains("Interferencias: ninguna (0 pares"));
+        w.lang = Lang::Pt;
+        assert!(w.report_text().contains("Interferências: nenhuma (0 pares"));
+    }
+
+    #[test]
+    fn the_assembly_example_opens_with_every_mate_valid_and_no_interference() {
+        let mut w = fresh();
+        assert!(w.open(&assembly_path()), "{:?}", w.status);
+        assert_eq!(w.mech.version(), 5);
+        assert_eq!(w.info.failed, 0);
+        assert_eq!(w.enclosure().parts().len(), 6);
+        assert_eq!(w.enclosure().mates().len(), 11);
+        let tree = w.tree();
+        let group = tree.iter().find(|g| g.title == Msg::GroupMates).unwrap();
+        assert_eq!(group.items.len(), 11);
+        // the base rail is 300 x 40 x 20 mm; the posts stand on it, the left one flush with its
+        // end and both in the middle of its width, the top rail stands on the left post, and the
+        // bracket is against the post (x = 20) in the middle of its width, at the z it was typed
+        assert_eq!(placed_at(&w, "base rail"), [0, 0, 0]);
+        assert_eq!(placed_at(&w, "left post"), [0, 10, 20]);
+        assert_eq!(placed_at(&w, "right post"), [280, 10, 20]);
+        assert_eq!(placed_at(&w, "top rail"), [0, 0, 170]);
+        assert_eq!(placed_at(&w, "shelf bracket"), [20, 10, 100]);
+        // the bolt goes through the hole of the bracket: no conflict, one pass
+        assert!(w.assembly_clear());
+        let report = w.info.interference.as_ref().unwrap();
+        assert_eq!(
+            (report.boxes_overlapping, report.passes, report.clear),
+            (1, 1, 0)
+        );
+        // a clearance larger than the room in the hole turns the pass into a conflict
+        let mut tight = Settings::defaults();
+        tight.design.assembly.hole_clearance = Length::new(2_000_000).unwrap();
+        let mut w = Window::new(Lang::En, tight, UiSettings::defaults()).unwrap();
+        assert!(w.open(&assembly_path()), "{:?}", w.status);
+        assert!(!w.assembly_clear());
+        let text = w.report_text();
+        assert!(
+            text.contains(
+                "  shelf bracket / shelf bolt: up to 181.500 mm3 shared by the bounding boxes"
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_bolts_of_the_example_frame_go_through_the_holes_of_the_brackets() {
+        let mut w = fresh();
+        assert!(w.open(&frame_path()), "{:?}", w.status);
+        assert_eq!(w.mech.version(), 4);
+        assert!(w.assembly_clear());
+        let report = w.info.interference.as_ref().unwrap();
+        assert_eq!(
+            (report.boxes_overlapping, report.passes, report.clear),
+            (4, 4, 0)
+        );
+        assert!(w.report_text().contains(
+            "Interference: none (4 pairs with overlapping boxes looked at, 4 screws through holes)"
+        ));
     }
 }

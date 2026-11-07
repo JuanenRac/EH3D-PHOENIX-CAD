@@ -5,6 +5,7 @@
 //! They live in `phoenix-cad-window.default.cfg`, the same form as the settings of the library;
 //! the code holds none of the values. A user file only needs the keys it changes.
 
+use crate::assembly::{Dim, Edge, MateKind};
 use crate::catalog::Axis;
 use crate::config::Config;
 use crate::enclosure::{Enclosure, EnclosureParams, Face};
@@ -89,6 +90,34 @@ pub struct NewStepDefaults {
     pub part_axis: Axis,
     /// The roll of a new part about its length, in quarter turns (0 to 3).
     pub part_roll: u8,
+    /// The kind of a new mate: `gap`, `align` or `stack`.
+    pub mate_kind: String,
+    /// The side of the fixed part that the placed part goes on, for a new gap.
+    pub mate_direction: Axis,
+    /// The air between the two faces of a new gap.
+    pub mate_distance: Length,
+    /// The axis across the plane of a new alignment.
+    pub mate_axis: Dim,
+    /// The faces a new alignment puts on one plane.
+    pub mate_edge: Edge,
+}
+
+impl NewStepDefaults {
+    /// The mate of a kind (`gap`, `align` or `stack`) with the values of these defaults.
+    pub fn mate_of(&self, kind: &str) -> Option<MateKind> {
+        match kind {
+            "gap" => Some(MateKind::Gap {
+                direction: self.mate_direction,
+                distance: self.mate_distance,
+            }),
+            "align" => Some(MateKind::Align {
+                axis: self.mate_axis,
+                edge: self.mate_edge,
+            }),
+            "stack" => Some(MateKind::Stack),
+            _ => None,
+        }
+    }
 }
 
 /// How a hole or a post is dragged with the mouse in the views.
@@ -220,6 +249,21 @@ impl NewStepDefaults {
         let fin_along = word(c, "new_step.fin_along")?;
         let part_axis = word(c, "new_step.part_axis")?;
         let part_roll = count(c, "new_step.part_roll", 0, 270)?;
+        let mate_kind = word(c, "new_step.mate_kind")?;
+        if !["gap", "align", "stack"].contains(&mate_kind) {
+            return Err(CadError::Config(format!(
+                "new_step.mate_kind: {mate_kind} is not gap, align or stack"
+            )));
+        }
+        let mate_direction = word(c, "new_step.mate_direction")?;
+        let mate_axis = word(c, "new_step.mate_axis")?;
+        let mate_edge = word(c, "new_step.mate_edge")?;
+        let mate_distance = c.length("new_step.mate_distance")?;
+        if mate_distance.get() < 0 {
+            return Err(CadError::Config(
+                "new_step.mate_distance must not be negative".into(),
+            ));
+        }
         if part_roll % 90 != 0 {
             return Err(CadError::Config(
                 "new_step.part_roll must be 0, 90, 180 or 270".into(),
@@ -281,6 +325,21 @@ impl NewStepDefaults {
                 ))
             })?,
             part_roll: u8::try_from(part_roll / 90).unwrap_or(0),
+            mate_kind: mate_kind.to_string(),
+            mate_direction: Axis::from_name(mate_direction).ok_or_else(|| {
+                CadError::Config(format!(
+                    "new_step.mate_direction: {mate_direction} is not +x, -x, +y, -y, +z or -z"
+                ))
+            })?,
+            mate_distance,
+            mate_axis: Dim::from_name(mate_axis).ok_or_else(|| {
+                CadError::Config(format!("new_step.mate_axis: {mate_axis} is not x, y or z"))
+            })?,
+            mate_edge: Edge::from_name(mate_edge).ok_or_else(|| {
+                CadError::Config(format!(
+                    "new_step.mate_edge: {mate_edge} is not min, max or center"
+                ))
+            })?,
         })
     }
 }
@@ -460,6 +519,25 @@ mod tests {
         );
         assert_eq!((n.part_x, n.part_y, n.part_z), (mm(0), mm(0), mm(0)));
         assert_eq!((n.part_axis, n.part_roll), (Axis::PlusZ, 0));
+        assert_eq!(n.mate_kind, "stack");
+        assert_eq!((n.mate_direction, n.mate_distance), (Axis::PlusZ, mm(0)));
+        assert_eq!((n.mate_axis, n.mate_edge), (Dim::Z, Edge::Min));
+        assert_eq!(n.mate_of("stack"), Some(MateKind::Stack));
+        assert_eq!(
+            n.mate_of("gap"),
+            Some(MateKind::Gap {
+                direction: Axis::PlusZ,
+                distance: mm(0)
+            })
+        );
+        assert_eq!(
+            n.mate_of("align"),
+            Some(MateKind::Align {
+                axis: Dim::Z,
+                edge: Edge::Min
+            })
+        );
+        assert_eq!(n.mate_of("glue"), None);
     }
 
     #[test]
@@ -623,7 +701,32 @@ marker = big
             (s.new_step.part_axis, s.new_step.part_roll),
             (Axis::MinusY, 3)
         );
+        let s = UiSettings::with_user_config(
+            "[new_step]\nmate_kind = gap\nmate_direction = -y\nmate_distance = 2.5 mm\nmate_axis = x\nmate_edge = center\n",
+        )
+        .unwrap();
+        assert_eq!(s.new_step.mate_kind, "gap");
+        assert_eq!(
+            s.new_step.mate_of("gap"),
+            Some(MateKind::Gap {
+                direction: Axis::MinusY,
+                distance: Length::new(2_500_000).unwrap()
+            })
+        );
+        assert_eq!(
+            s.new_step.mate_of("align"),
+            Some(MateKind::Align {
+                axis: Dim::X,
+                edge: Edge::Center
+            })
+        );
         for text in [
+            "[new_step]\nmate_kind = glue\n",
+            "[new_step]\nmate_direction = up\n",
+            "[new_step]\nmate_axis = w\n",
+            "[new_step]\nmate_edge = middle\n",
+            "[new_step]\nmate_distance = -1 mm\n",
+            "[new_step]\nmate_distance = far\n",
             "[new_step]\nhole_face = side\n",
             "[new_step]\npost_kind = glue\n",
             "[new_step]\ntries = 0\n",
