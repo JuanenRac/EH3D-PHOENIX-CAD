@@ -2,15 +2,14 @@
 // Copyright (C) 2026 JuanenRac (Electro Hobby 3D). GPL-3.0-or-later.
 #![forbid(unsafe_code)]
 
-use eh3d_phoenix_cad::body::StepState;
 use eh3d_phoenix_cad::config::{Settings, DEFAULT_CONFIG};
-use eh3d_phoenix_cad::lang::{Lang, Msg};
+use eh3d_phoenix_cad::lang::Lang;
 use eh3d_phoenix_cad::shot;
 use eh3d_phoenix_cad::sketch::settings::SketchSettings;
 #[cfg(feature = "gui")]
 use eh3d_phoenix_cad::sketch_ui::SketchUiSettings;
 use eh3d_phoenix_cad::uiconfig::{default_file, UiSettings};
-use eh3d_phoenix_cad::window::{error_text, step_label, Window};
+use eh3d_phoenix_cad::window::{error_text, Window};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -102,19 +101,7 @@ fn run_check(args: &[String]) -> Result<bool, String> {
     if win.status.is_problem() {
         eprintln!("note: {}", win.status.text(lang));
     }
-    println!("{}", win.measures_text());
-    println!("{}", win.fit_text());
-    for (i, step) in win.mech.steps.iter().enumerate() {
-        let state = match win.states().get(i) {
-            Some(StepState::Valid) | None => Msg::StateValid.tr(lang).to_owned(),
-            Some(StepState::Suppressed) => Msg::StateSuppressed.tr(lang).to_owned(),
-            Some(StepState::AfterTip) => Msg::StateAfterTip.tr(lang).to_owned(),
-            Some(StepState::Failed(e)) => {
-                format!("{}: {}", Msg::StateFailed.tr(lang), error_text(e, lang))
-            }
-        };
-        println!("{:>3}  {}  {state}", i + 1, step_label(step));
-    }
+    println!("{}", win.report_text());
     Ok(win.info.failed == 0 && win.info.fit.fits)
 }
 

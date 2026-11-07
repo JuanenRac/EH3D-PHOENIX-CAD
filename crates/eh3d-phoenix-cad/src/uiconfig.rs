@@ -7,6 +7,7 @@
 
 use crate::config::Config;
 use crate::enclosure::{Enclosure, EnclosureParams, Face};
+use crate::export::Format;
 use crate::mount::BoreKind;
 use crate::units::Unit;
 use crate::{CadError, Length};
@@ -79,6 +80,18 @@ pub struct MeasureSettings {
     pub marker: Length,
 }
 
+/// How the files written from the window are made.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportSettings {
+    /// The format the export dialog starts with.
+    pub format: Format,
+    /// Whether the box to write over an existing file is ticked when the window opens; the
+    /// shipped value is no.
+    pub overwrite: bool,
+    /// The largest text written, in KiB.
+    pub max_kib: u32,
+}
+
 /// The settings of the window with their types.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UiSettings {
@@ -114,6 +127,8 @@ pub struct UiSettings {
     pub drag: DragSettings,
     /// How things are measured.
     pub measure: MeasureSettings,
+    /// How the files written from the window are made.
+    pub export: ExportSettings,
 }
 
 fn missing(key: &str) -> CadError {
@@ -214,6 +229,21 @@ impl MeasureSettings {
     }
 }
 
+impl ExportSettings {
+    fn from_config(c: &Config) -> Result<ExportSettings, CadError> {
+        let name = word(c, "export.format")?;
+        Ok(ExportSettings {
+            format: Format::from_name(name).ok_or_else(|| {
+                CadError::Config(format!(
+                    "export.format: {name} is not script, step or report"
+                ))
+            })?,
+            overwrite: count(c, "export.overwrite", 0, 1)? == 1,
+            max_kib: count(c, "export.max_kib", 1, 1_048_576)?,
+        })
+    }
+}
+
 impl UiSettings {
     /// The defaults that ship with the crate.
     pub fn defaults() -> UiSettings {
@@ -273,6 +303,7 @@ impl UiSettings {
             new_step: NewStepDefaults::from_config(c)?,
             drag: DragSettings::from_config(c)?,
             measure: MeasureSettings::from_config(c)?,
+            export: ExportSettings::from_config(c)?,
         })
     }
 }
@@ -318,6 +349,66 @@ mod tests {
         assert_eq!((s.measure.decimals, s.measure.angle_decimals), (3, 2));
         assert_eq!((s.measure.pick_radius, s.measure.keep), (10.0, 16));
         assert_eq!(s.measure.marker, Length::new(1_500_000).unwrap());
+        assert_eq!(s.export.format, Format::Script);
+        assert!(!s.export.overwrite);
+        assert_eq!(s.export.max_kib, 65_536);
+    }
+
+    #[test]
+    fn the_export_is_read_and_checked() {
+        let s = UiSettings::with_user_config(
+            "[export]
+format = step
+overwrite = 1
+max_kib = 512
+",
+        )
+        .unwrap();
+        assert_eq!(s.export.format, Format::Step);
+        assert!(s.export.overwrite);
+        assert_eq!(s.export.max_kib, 512);
+        let report = UiSettings::with_user_config(
+            "[export]
+format = report
+",
+        )
+        .unwrap();
+        assert_eq!(report.export.format, Format::Report);
+        // 1 KiB is the least and 1 048 576 KiB (1 GiB) the most
+        assert_eq!(
+            UiSettings::with_user_config(
+                "[export]
+max_kib = 1
+"
+            )
+            .unwrap()
+            .export
+            .max_kib,
+            1
+        );
+        for text in [
+            "[export]
+format = stl
+",
+            "[export]
+format = 
+",
+            "[export]
+overwrite = 2
+",
+            "[export]
+max_kib = 0
+",
+            "[export]
+max_kib = 1048577
+",
+            "[export]
+max_kib = big
+",
+        ] {
+            let error = UiSettings::with_user_config(text).unwrap_err();
+            assert_eq!(error.code(), "PHOENIX-CAD-011", "{text:?}: {error}");
+        }
     }
 
     #[test]

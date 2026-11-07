@@ -367,6 +367,17 @@ messages! {
     RefInnerCorner => ["inner corner ({0})", "esquina interior ({0})", "Innenecke ({0})", "coin intérieur ({0})", "angolo interno ({0})", "内側の角 ({0})", "内角 ({0})", "canto interior ({0})"],
     RefOuterEdge => ["outer edge ({0}) to ({1})", "arista exterior ({0}) a ({1})", "Außenkante ({0}) bis ({1})", "arête extérieure ({0}) à ({1})", "spigolo esterno ({0}) a ({1})", "外側の辺 ({0}) から ({1})", "外棱 ({0}) 至 ({1})", "aresta exterior ({0}) a ({1})"],
     RefInnerEdge => ["inner edge ({0}) to ({1})", "arista interior ({0}) a ({1})", "Innenkante ({0}) bis ({1})", "arête intérieure ({0}) à ({1})", "spigolo interno ({0}) a ({1})", "内側の辺 ({0}) から ({1})", "内棱 ({0}) 至 ({1})", "aresta interior ({0}) a ({1})"],
+    ExportMenu => ["Export", "Exportar", "Exportieren", "Exporter", "Esporta", "エクスポート", "导出", "Exportar"],
+    ExportScript => ["Script (.scad)", "Script (.scad)", "Skript (.scad)", "Script (.scad)", "Script (.scad)", "スクリプト (.scad)", "脚本 (.scad)", "Script (.scad)"],
+    ExportStep => ["STEP file (.step)", "Fichero STEP (.step)", "STEP-Datei (.step)", "Fichier STEP (.step)", "File STEP (.step)", "STEP ファイル (.step)", "STEP 文件 (.step)", "Ficheiro STEP (.step)"],
+    ExportReport => ["Fit report (.txt)", "Informe de ajuste (.txt)", "Passungsbericht (.txt)", "Rapport d'ajustement (.txt)", "Rapporto di adattamento (.txt)", "適合レポート (.txt)", "适配报告 (.txt)", "Relatório de ajuste (.txt)"],
+    ExportTitle => ["Export as", "Exportar como", "Exportieren als", "Exporter sous", "Esporta come", "名前を付けてエクスポート", "导出为", "Exportar como"],
+    ExportOverwrite => ["Write over the file if it exists", "Sobrescribir el fichero si existe", "Datei überschreiben, falls vorhanden", "Écraser le fichier s'il existe", "Sovrascrivi il file se esiste", "ファイルが存在する場合は上書きする", "若文件已存在则覆盖", "Substituir o ficheiro se existir"],
+    Exported => ["Exported {0} ({1} bytes)", "Exportado {0} ({1} bytes)", "{0} exportiert ({1} Byte)", "{0} exporté ({1} octets)", "Esportato {0} ({1} byte)", "{0} をエクスポートしました（{1} バイト）", "已导出 {0}（{1} 字节）", "Exportado {0} ({1} bytes)"],
+    ReportShow => ["Fit report...", "Informe de ajuste...", "Passungsbericht...", "Rapport d'ajustement...", "Rapporto di adattamento...", "適合レポート...", "适配报告...", "Relatório de ajuste..."],
+    ReportTitle => ["Fit report", "Informe de ajuste", "Passungsbericht", "Rapport d'ajustement", "Rapporto di adattamento", "適合レポート", "适配报告", "Relatório de ajuste"],
+    ReportCopy => ["Copy the report", "Copiar el informe", "Bericht kopieren", "Copier le rapport", "Copia il rapporto", "レポートをコピー", "复制报告", "Copiar o relatório"],
+    ReportCopied => ["Report copied to the clipboard", "Informe copiado al portapapeles", "Bericht in die Zwischenablage kopiert", "Rapport copié dans le presse-papiers", "Rapporto copiato negli appunti", "レポートをクリップボードにコピーしました", "报告已复制到剪贴板", "Relatório copiado para a área de transferência"],
 }
 
 impl Msg {

@@ -13,6 +13,7 @@ use crate::drag::{self, Drawn, Plane};
 use crate::enclosure::{
     Edging, Enclosure, EnclosureParams, Face, Hole, HoleStyle, Id, Operation, Treatment,
 };
+use crate::export::{self, Format};
 use crate::expr::{parse, Constants, Names, Value};
 use crate::fit::{check_fit, Envelope, FitReport};
 use crate::history::History;
@@ -454,6 +455,10 @@ pub struct Window {
     pub snap_to_grid: bool,
     /// The measurement tool that is on.
     pub measure_tool: MeasureTool,
+    /// The format the export dialog is on.
+    pub export_format: Format,
+    /// Whether the box to write over an existing file is ticked.
+    pub export_overwrite: bool,
     measurements: Vec<Measurement>,
     pending: Vec<Reference>,
     drag: Option<Drag>,
@@ -472,6 +477,15 @@ fn param_msg(param: Param) -> Msg {
         Param::Lid => Msg::FieldLid,
         Param::EdgeMargin => Msg::FieldEdgeMargin,
         Param::MinWeb => Msg::FieldMinWeb,
+    }
+}
+
+/// The words that name a format of export.
+pub fn format_msg(format: Format) -> Msg {
+    match format {
+        Format::Script => Msg::ExportScript,
+        Format::Step => Msg::ExportStep,
+        Format::Report => Msg::ExportReport,
     }
 }
 
@@ -586,6 +600,8 @@ impl Window {
             plan: ViewControl::new(Camera::TOP, ui.zoom_min, ui.zoom_max),
             snap_to_grid: ui.drag.snap,
             measure_tool: MeasureTool::Off,
+            export_format: ui.export.format,
+            export_overwrite: ui.export.overwrite,
             measurements: Vec::new(),
             pending: Vec::new(),
             drag: None,
@@ -2074,6 +2090,80 @@ impl Window {
                 &[&self.info.failed.to_string()],
             )
         })
+    }
+
+    /// The fit report as text that can be copied or written to a file: the measures, whether the
+    /// board fits and a line for each step with its state, in the language of the window. It is
+    /// what the `check` command prints.
+    pub fn report_text(&self) -> String {
+        let lang = self.lang;
+        let mut lines = vec![self.measures_text(), self.fit_text()];
+        for (i, step) in self.mech.steps.iter().enumerate() {
+            let state = match self.states().get(i) {
+                Some(StepState::Valid) | None => Msg::StateValid.tr(lang).to_owned(),
+                Some(StepState::Suppressed) => Msg::StateSuppressed.tr(lang).to_owned(),
+                Some(StepState::AfterTip) => Msg::StateAfterTip.tr(lang).to_owned(),
+                Some(StepState::Failed(e)) => {
+                    format!("{}: {}", Msg::StateFailed.tr(lang), error_text(e, lang))
+                }
+            };
+            lines.push(format!("{:>3}  {}  {state}", i + 1, step_label(step)));
+        }
+        lines.join(
+            "
+",
+        )
+    }
+
+    /// Says in the status bar that the report was put on the clipboard.
+    pub fn report_copied(&mut self) {
+        self.status = Status::Done(Msg::ReportCopied, Vec::new());
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Export
+    // -----------------------------------------------------------------------------------------
+
+    /// The text of a format for the model as it is now. The STEP file is refused with
+    /// `PHOENIX-CAD-022` when the model has a shape it does not draw (the extrusions and pockets
+    /// of the sketches among them).
+    pub fn export_text(&self, format: Format) -> Result<String, CadError> {
+        export::render(format, &self.built.enclosure, &self.report_text())
+    }
+
+    /// The name suggested for a file of a format, from the name of the project.
+    pub fn export_name(&self, format: Format) -> String {
+        export::suggested_name(self.path.as_deref(), format)
+    }
+
+    /// Writes the model in a format to `path`. Nothing is written over unless `overwrite` says
+    /// so, nor over the project that is open. The status bar says what was written, or the code
+    /// of the reason it was not; the project and its history are not touched. The answer is false
+    /// when nothing was written.
+    pub fn export_to(&mut self, format: Format, path: &Path, overwrite: bool) -> bool {
+        let written = self.export_text(format).and_then(|text| {
+            export::write_file(
+                path,
+                &text,
+                overwrite,
+                self.path.as_deref(),
+                self.ui.export.max_kib,
+            )
+        });
+        match written {
+            Ok(bytes) => {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                self.status = Status::Done(Msg::Exported, vec![name, bytes.to_string()]);
+                true
+            }
+            Err(e) => {
+                self.status = Status::Error(e);
+                false
+            }
+        }
     }
 
     // -----------------------------------------------------------------------------------------
@@ -3975,5 +4065,231 @@ mod tests {
         assert_eq!(w.picked(), 0);
         w.set_measure_tool(MeasureTool::Off);
         assert!(!w.measure_click(ViewKind::Plan, pane(), usb));
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // The fit report and the export
+    // -----------------------------------------------------------------------------------------
+
+    /// A window on a copy of the example in a fresh folder, the copy being named `name`.
+    fn example_copy(dir: &Scratch, name: &str) -> (Window, PathBuf) {
+        let copy = dir.0.join(name);
+        std::fs::copy(example_path(), &copy).unwrap();
+        let mut w = fresh();
+        assert!(w.open(&copy), "{:?}", w.status);
+        (w, copy)
+    }
+
+    #[test]
+    fn the_report_of_a_new_project_is_its_measures_and_its_fit() {
+        let mut w = fresh();
+        // 70 and 41 characters, joined by a line break
+        assert_eq!(
+            w.report_text(),
+            "Outside 104 x 64 x 35 mm - inside 100 x 60 x 30 mm - material 53.0 cm3\n\
+             It fits, with 9.6 / 9.6 / 9.6 mm to spare"
+        );
+        assert_eq!(w.report_text().len(), 112);
+        w.lang = Lang::Es;
+        assert_eq!(
+            w.report_text(),
+            "Exterior 104 x 64 x 35 mm - interior 100 x 60 x 30 mm - material 53.0 cm3\n\
+             Cabe, con 9.6 / 9.6 / 9.6 mm de sobra"
+        );
+        assert_eq!(w.report_text().len(), 111);
+    }
+
+    #[test]
+    fn the_report_has_a_line_for_each_step_with_its_state() {
+        let mut w = example();
+        let text = w.report_text();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2 + 8, "{text}");
+        assert_eq!(lines[1], "It fits, with 39.6 / 19.6 / 23 mm to spare");
+        assert_eq!(lines[2], "  1  usb port  valid");
+        assert_eq!(lines[9], "  8  lid  valid");
+        // a suppressed step says so, and nothing else in the report changes its place
+        w.select(Selection::Hole(0));
+        w.toggle_suppressed();
+        let text = w.report_text();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 10, "{text}");
+        assert_eq!(lines[2], "  1  usb port  suppressed");
+        assert_eq!(lines[3], "  2  vent  valid");
+    }
+
+    #[test]
+    fn the_report_is_made_of_the_measures_the_fit_and_the_steps() {
+        // the check command prints exactly this text
+        let w = example();
+        let text = w.report_text();
+        assert!(text.starts_with(&w.measures_text()));
+        assert!(text.contains(&w.fit_text()));
+        assert_eq!(text.lines().count(), 2 + w.mech.steps.len());
+    }
+
+    #[test]
+    fn the_export_starts_as_the_settings_say() {
+        let w = fresh();
+        assert_eq!(w.export_format, Format::Script);
+        assert!(!w.export_overwrite);
+        let ui =
+            UiSettings::with_user_config("[export]\nformat = report\noverwrite = 1\n").unwrap();
+        let w = Window::new(Lang::En, Settings::defaults(), ui).unwrap();
+        assert_eq!(w.export_format, Format::Report);
+        assert!(w.export_overwrite);
+    }
+
+    #[test]
+    fn the_names_suggested_follow_the_project() {
+        let dir = Scratch::new("names");
+        let (w, _) = example_copy(&dir, "mybox.phoenixproj");
+        assert_eq!(w.export_name(Format::Script), "mybox.scad");
+        assert_eq!(w.export_name(Format::Step), "mybox.step");
+        assert_eq!(w.export_name(Format::Report), "mybox.txt");
+        assert_eq!(fresh().export_name(Format::Step), "box.step");
+    }
+
+    #[test]
+    fn the_script_is_written_and_the_status_says_how_many_bytes() {
+        let dir = Scratch::new("script");
+        let mut w = fresh();
+        let target = dir.0.join("box.scad");
+        assert!(
+            w.export_to(Format::Script, &target, false),
+            "{:?}",
+            w.status
+        );
+        let text = std::fs::read_to_string(&target).unwrap();
+        assert_eq!(text, crate::scad::to_scad(w.enclosure()));
+        assert_eq!(
+            w.status,
+            Status::Done(
+                Msg::Exported,
+                vec!["box.scad".into(), text.len().to_string()]
+            )
+        );
+        assert!(w.status.text(Lang::En).starts_with("Exported box.scad ("));
+        // the project is not touched by an export
+        assert!(!w.dirty && !w.can_undo());
+    }
+
+    #[test]
+    fn the_report_is_written_in_the_language_of_the_window() {
+        let dir = Scratch::new("report");
+        let mut w = fresh();
+        let target = dir.0.join("fit.txt");
+        assert!(w.export_to(Format::Report, &target, false));
+        // 112 bytes in English: 70 + 1 + 41
+        assert_eq!(std::fs::read(&target).unwrap().len(), 112);
+        w.lang = Lang::Es;
+        assert!(w.export_to(Format::Report, &target, true));
+        let spanish = std::fs::read_to_string(&target).unwrap();
+        assert_eq!(spanish.len(), 111);
+        assert!(
+            spanish.starts_with("Exterior 104 x 64 x 35 mm"),
+            "{spanish}"
+        );
+        assert_eq!(spanish, w.report_text());
+    }
+
+    #[test]
+    fn a_new_box_is_written_as_a_step_file() {
+        let dir = Scratch::new("step");
+        let mut w = fresh();
+        let target = dir.0.join("box.step");
+        assert!(w.export_to(Format::Step, &target, false), "{:?}", w.status);
+        let text = std::fs::read_to_string(&target).unwrap();
+        assert!(text.starts_with("ISO-10303-21;"), "{text}");
+        assert_eq!(text, crate::step::to_step(w.enclosure()));
+    }
+
+    #[test]
+    fn a_shape_the_step_file_does_not_draw_gives_the_code_022_and_writes_nothing() {
+        let dir = Scratch::new("shape");
+        // the example has rounded corners and a lid with a lip
+        let mut w = example();
+        let target = dir.0.join("box.step");
+        assert!(!w.export_to(Format::Step, &target, true));
+        assert!(!target.exists());
+        assert!(w.status.is_problem());
+        let text = w.status.text(Lang::En);
+        assert!(
+            text.starts_with("PHOENIX-CAD-022 Shape not drawn by this export"),
+            "{text}"
+        );
+        // the script of the same model is written
+        assert!(w.export_to(Format::Script, &dir.0.join("box.scad"), false));
+    }
+
+    #[test]
+    fn a_file_that_exists_is_kept_until_the_box_to_write_over_it_is_ticked() {
+        let dir = Scratch::new("exists");
+        let mut w = fresh();
+        let target = dir.0.join("fit.txt");
+        std::fs::write(&target, "mine").unwrap();
+        assert!(!w.export_to(Format::Report, &target, false));
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "mine");
+        let text = w.status.text(Lang::En);
+        assert!(
+            text.starts_with("PHOENIX-CAD-040 File exists and was not written over (fit.txt)"),
+            "{text}"
+        );
+        let text = w.status.text(Lang::Pt);
+        assert!(
+            text.starts_with("PHOENIX-CAD-040 O ficheiro existe e não foi substituído"),
+            "{text}"
+        );
+        assert!(w.export_to(Format::Report, &target, true));
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), w.report_text());
+    }
+
+    #[test]
+    fn the_project_that_is_open_is_never_written_over() {
+        let dir = Scratch::new("project");
+        // a project opened from a file with an ordinary name
+        let (mut w, copy) = example_copy(&dir, "keep.dat");
+        let before = std::fs::read(&copy).unwrap();
+        assert!(!w.export_to(Format::Script, &copy, true));
+        assert_eq!(std::fs::read(&copy).unwrap(), before);
+        let text = w.status.text(Lang::En);
+        assert!(
+            text.starts_with("PHOENIX-CAD-041 Export not possible"),
+            "{text}"
+        );
+        assert!(text.contains("the project that is open"), "{text}");
+        // and a name that ends in the extension of a project is refused too
+        let other = dir.0.join("other.phoenixproj");
+        assert!(!w.export_to(Format::Script, &other, true));
+        assert!(!other.exists());
+        assert!(!w.dirty);
+    }
+
+    #[test]
+    fn a_text_larger_than_the_setting_is_refused_with_the_code_041() {
+        let dir = Scratch::new("large");
+        let ui = UiSettings::with_user_config("[export]\nmax_kib = 1\n").unwrap();
+        let mut w = Window::new(Lang::En, Settings::defaults(), ui).unwrap();
+        // the report is 112 bytes and fits in 1 KiB
+        assert!(w.export_to(Format::Report, &dir.0.join("fit.txt"), false));
+        // the script of the example is larger than 1024 bytes
+        assert!(w.open(&example_path()));
+        let big = crate::scad::to_scad(w.enclosure()).len();
+        assert!(big > 1024, "{big}");
+        assert!(!w.export_to(Format::Script, &dir.0.join("big.scad"), false));
+        assert!(!dir.0.join("big.scad").exists());
+        let text = w.status.text(Lang::En);
+        assert!(
+            text.contains("PHOENIX-CAD-041") && text.contains(&format!("{big} bytes")),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_report_is_marked_as_copied() {
+        let mut w = fresh();
+        w.report_copied();
+        assert_eq!(w.status.text(Lang::En), "Report copied to the clipboard");
+        assert!(!w.status.is_problem());
     }
 }
