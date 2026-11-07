@@ -1,5 +1,6 @@
-//! The settings of the window: the size it opens at, how the views turn and zoom, the box a new
-//! project starts with and the envelope checked when a project has no board.
+//! The settings of the window: the size it opens at, how the views turn and zoom, how a hole or a
+//! post is dragged, how things are measured, the box a new project starts with and the envelope
+//! checked when a project has no board.
 //!
 //! They live in `phoenix-cad-window.default.cfg`, the same form as the settings of the library;
 //! the code holds none of the values. A user file only needs the keys it changes.
@@ -7,6 +8,7 @@
 use crate::config::Config;
 use crate::enclosure::{Enclosure, EnclosureParams, Face};
 use crate::mount::BoreKind;
+use crate::units::Unit;
 use crate::{CadError, Length};
 
 /// The shipped settings of the window, as text.
@@ -49,6 +51,34 @@ pub struct NewStepDefaults {
     pub pocket_depth: Length,
 }
 
+/// How a hole or a post is dragged with the mouse in the views.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DragSettings {
+    /// Whether a dragged centre snaps to the grid when the window opens.
+    pub snap: bool,
+    /// The grid a dragged centre snaps to; zero means no grid.
+    pub grid: Length,
+    /// How near to the drawn centre, in pixels, a press has to be to pick the hole or the post.
+    pub hit_radius: f64,
+}
+
+/// How the measurement tools of the views read and keep what they measure.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeasureSettings {
+    /// The unit of a length; `None` is the unit shown everywhere else (`units.display`).
+    pub unit: Option<Unit>,
+    /// The decimals of a length.
+    pub decimals: u32,
+    /// The decimals of an angle, in degrees.
+    pub angle_decimals: u32,
+    /// How near to a drawn point or edge, in pixels, a click has to be to pick it.
+    pub pick_radius: f64,
+    /// How many readings are kept; the oldest is dropped.
+    pub keep: u32,
+    /// The size of the cross drawn on a point that is picked or measured.
+    pub marker: Length,
+}
+
 /// The settings of the window with their types.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UiSettings {
@@ -80,6 +110,10 @@ pub struct UiSettings {
     pub edge_size: Length,
     /// What a step added from the window starts with.
     pub new_step: NewStepDefaults,
+    /// How a hole or a post is dragged.
+    pub drag: DragSettings,
+    /// How things are measured.
+    pub measure: MeasureSettings,
 }
 
 fn missing(key: &str) -> CadError {
@@ -145,6 +179,41 @@ impl NewStepDefaults {
     }
 }
 
+impl DragSettings {
+    fn from_config(c: &Config) -> Result<DragSettings, CadError> {
+        let grid = c.length("drag.grid")?;
+        if grid.get() < 0 || grid.get() > 1_000_000_000 {
+            return Err(CadError::Config(
+                "drag.grid must be from 0 mm to 1000 mm".into(),
+            ));
+        }
+        Ok(DragSettings {
+            snap: count(c, "drag.snap", 0, 1)? == 1,
+            grid,
+            hit_radius: real(c, "drag.hit_radius", 1.0, 200.0)?,
+        })
+    }
+}
+
+impl MeasureSettings {
+    fn from_config(c: &Config) -> Result<MeasureSettings, CadError> {
+        let unit = match word(c, "measure.unit")? {
+            "display" => None,
+            other => Some(Unit::from_suffix(other).ok_or_else(|| {
+                CadError::Config(format!("measure.unit: {other} is not a unit or display"))
+            })?),
+        };
+        Ok(MeasureSettings {
+            unit,
+            decimals: count(c, "measure.decimals", 0, 12)?,
+            angle_decimals: count(c, "measure.angle_decimals", 0, 9)?,
+            pick_radius: real(c, "measure.pick_radius", 1.0, 200.0)?,
+            keep: count(c, "measure.keep", 1, 1000)?,
+            marker: c.length("measure.marker")?,
+        })
+    }
+}
+
 impl UiSettings {
     /// The defaults that ship with the crate.
     pub fn defaults() -> UiSettings {
@@ -202,6 +271,8 @@ impl UiSettings {
             ],
             edge_size: c.length("edges.size")?,
             new_step: NewStepDefaults::from_config(c)?,
+            drag: DragSettings::from_config(c)?,
+            measure: MeasureSettings::from_config(c)?,
         })
     }
 }
@@ -240,6 +311,79 @@ mod tests {
         );
         assert_eq!(n.post_kind, BoreKind::Insert);
         assert_eq!(n.post_bore_diameter, Length::new(4_200_000).unwrap());
+        assert!(s.drag.snap);
+        assert_eq!(s.drag.grid, Length::new(500_000).unwrap());
+        assert_eq!(s.drag.hit_radius, 12.0);
+        assert_eq!(s.measure.unit, None);
+        assert_eq!((s.measure.decimals, s.measure.angle_decimals), (3, 2));
+        assert_eq!((s.measure.pick_radius, s.measure.keep), (10.0, 16));
+        assert_eq!(s.measure.marker, Length::new(1_500_000).unwrap());
+    }
+
+    #[test]
+    fn the_dragging_and_the_measuring_are_read_and_checked() {
+        let s = UiSettings::with_user_config(
+            "[drag]
+snap = 0
+grid = 1/16 in
+hit_radius = 20
+[measure]
+unit = in
+decimals = 4
+keep = 3
+",
+        )
+        .unwrap();
+        assert!(!s.drag.snap);
+        assert_eq!(s.drag.grid, Length::new(1_587_500).unwrap());
+        assert_eq!(s.drag.hit_radius, 20.0);
+        assert_eq!(s.measure.unit, Some(Unit::Inch));
+        assert_eq!((s.measure.decimals, s.measure.keep), (4, 3));
+        let none = UiSettings::with_user_config(
+            "[drag]
+grid = 0 mm
+",
+        )
+        .unwrap();
+        assert_eq!(none.drag.grid, Length::ZERO);
+        for text in [
+            "[drag]
+grid = -1 mm
+",
+            "[drag]
+grid = 2 m
+",
+            "[drag]
+snap = 2
+",
+            "[drag]
+hit_radius = 0
+",
+            "[drag]
+hit_radius = near
+",
+            "[measure]
+unit = furlong
+",
+            "[measure]
+decimals = 13
+",
+            "[measure]
+angle_decimals = 10
+",
+            "[measure]
+pick_radius = 500
+",
+            "[measure]
+keep = 0
+",
+            "[measure]
+marker = big
+",
+        ] {
+            let error = UiSettings::with_user_config(text).unwrap_err();
+            assert_eq!(error.code(), "PHOENIX-CAD-011", "{text:?}: {error}");
+        }
     }
 
     #[test]

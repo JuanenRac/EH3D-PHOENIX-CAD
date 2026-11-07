@@ -9,6 +9,7 @@
 
 use crate::body::{Built, Step, StepState};
 use crate::config::Settings;
+use crate::drag::{self, Drawn, Plane};
 use crate::enclosure::{
     Edging, Enclosure, EnclosureParams, Face, Hole, HoleStyle, Id, Operation, Treatment,
 };
@@ -16,6 +17,7 @@ use crate::expr::{parse, Constants, Names, Value};
 use crate::fit::{check_fit, Envelope, FitReport};
 use crate::history::History;
 use crate::lang::{fill, Lang, Msg};
+use crate::measure::{self, Geometry, Label, Measurement, Quantity, Reference};
 use crate::mechanical::{Mechanical, MECHANICAL_DOMAIN};
 use crate::messages;
 use crate::mount::{Lid, Post};
@@ -24,7 +26,8 @@ use crate::profile::ProfileLimits;
 use crate::project::{Document, PARAMETERS_DOMAIN};
 use crate::scad::mm_text;
 use crate::scene::{
-    mm, outer_size, project, scene_of, BoardBox, Camera, Fit, Frame, Highlight, Line2,
+    face_plane, floor_plane, mm, outer_size, post_centre, project_with, references, scene_of,
+    BoardBox, Camera, Fit, Frame, Highlight, Kind, Line2, Mapping, Point3, Segment,
 };
 use crate::sketch::file as sketch_file;
 use crate::sketch::settings::SketchSettings;
@@ -360,6 +363,58 @@ impl ViewControl {
     }
 }
 
+/// What a click in the views does besides turning and moving them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeasureTool {
+    /// Nothing is measured: a press on a hole or a post drags it.
+    Off,
+    /// The distance between two points or edges.
+    Distance,
+    /// The angle between two edges or between three points.
+    Angle,
+}
+
+/// What a pick may be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Want {
+    Any,
+    Points,
+    Edges,
+}
+
+/// A hole or a post that is being dragged.
+#[derive(Debug, Clone)]
+struct Drag {
+    /// The view the pointer is in.
+    view: ViewKind,
+    /// The index of its step.
+    step: usize,
+    /// Its name.
+    name: String,
+    /// The recipe when the drag started, which a cancel goes back to.
+    before: Mechanical,
+    /// Whether the project had unsaved changes when the drag started.
+    was_dirty: bool,
+    /// The plane its position is a point of.
+    plane: Plane,
+    /// How far its centre was from the pointer when it was picked, on the plane.
+    offset: (f64, f64),
+    /// Whether it has moved from where it was picked.
+    moved: bool,
+}
+
+/// A hole or a post that can be picked.
+struct Candidate {
+    step: usize,
+    name: String,
+    plane: Plane,
+    /// The position on the plane.
+    centre: (f64, f64),
+    /// Where its centre is drawn.
+    at: Point3,
+    is_hole: bool,
+}
+
 /// The window: the project and everything the person sees of it.
 #[derive(Debug, Clone)]
 pub struct Window {
@@ -395,6 +450,13 @@ pub struct Window {
     pub sketch_settings: SketchSettings,
     /// The sketch the next extrusion or pocket is made from (the first one when it is none).
     pub active_sketch: Option<String>,
+    /// Whether a dragged hole or post snaps to the grid of the settings.
+    pub snap_to_grid: bool,
+    /// The measurement tool that is on.
+    pub measure_tool: MeasureTool,
+    measurements: Vec<Measurement>,
+    pending: Vec<Reference>,
+    drag: Option<Drag>,
     document: Document,
     history: History<Mechanical>,
     built: Built,
@@ -522,6 +584,11 @@ impl Window {
                 ui.zoom_max,
             ),
             plan: ViewControl::new(Camera::TOP, ui.zoom_min, ui.zoom_max),
+            snap_to_grid: ui.drag.snap,
+            measure_tool: MeasureTool::Off,
+            measurements: Vec::new(),
+            pending: Vec::new(),
+            drag: None,
             history: History::new(settings.undo_depth),
             info: Info {
                 outer: [Length::ZERO; 3],
@@ -1773,6 +1840,9 @@ impl Window {
 
     /// Goes back one change.
     pub fn undo(&mut self) {
+        if self.drag.is_some() {
+            return;
+        }
         match self.history.undo(self.mech.clone()) {
             Some((name, previous)) => self.restore(previous, Msg::Undone, name),
             None => self.status = Status::Done(Msg::NothingToUndo, Vec::new()),
@@ -1781,6 +1851,9 @@ impl Window {
 
     /// Goes forward one change that was undone.
     pub fn redo(&mut self) {
+        if self.drag.is_some() {
+            return;
+        }
         match self.history.redo(self.mech.clone()) {
             Some((name, next)) => self.restore(next, Msg::Redone, name),
             None => self.status = Status::Done(Msg::NothingToRedo, Vec::new()),
@@ -2044,30 +2117,52 @@ impl Window {
         })
     }
 
-    /// The lines of a view put on a pane of `pane` pixels.
-    pub fn lines(&self, view: ViewKind, pane: (f64, f64)) -> Vec<Line2> {
-        let segments = scene_of(
-            &self.built.enclosure,
-            self.board_box(),
-            self.highlight(),
-            self.ui.circle_segments,
-        );
+    /// How a view puts the model on a pane of `pane` pixels.
+    fn frame_of(&self, view: ViewKind, pane: (f64, f64)) -> Frame {
         let (control, fit) = match view {
             ViewKind::Iso => (&self.view3d, Fit::Sphere),
             ViewKind::Plan => (&self.plan, Fit::Bounds),
         };
-        project(
+        Frame {
+            camera: control.camera,
+            zoom: control.zoom,
+            pan: control.pan,
+            pane,
+            margin: self.ui.margin,
+            fit,
+        }
+    }
+
+    /// The lines of the model (without the marks of the measurements).
+    fn model_segments(&self) -> Vec<Segment> {
+        scene_of(
+            &self.built.enclosure,
+            self.board_box(),
+            self.highlight(),
+            self.ui.circle_segments,
+        )
+    }
+
+    /// How a view puts the model on a pane, which is also the way back from a point of the pane.
+    pub fn view_mapping(&self, view: ViewKind, pane: (f64, f64)) -> Mapping {
+        Mapping::of(
+            &self.model_segments(),
+            outer_size(&self.built.enclosure),
+            &self.frame_of(view, pane),
+        )
+    }
+
+    /// The lines of a view put on a pane of `pane` pixels: the model and the marks of the
+    /// measurements. The size of the drawing depends on the model only.
+    pub fn lines(&self, view: ViewKind, pane: (f64, f64)) -> Vec<Line2> {
+        let mut segments = self.model_segments();
+        let mapping = Mapping::of(
             &segments,
             outer_size(&self.built.enclosure),
-            &Frame {
-                camera: control.camera,
-                zoom: control.zoom,
-                pan: control.pan,
-                pane,
-                margin: self.ui.margin,
-                fit,
-            },
-        )
+            &self.frame_of(view, pane),
+        );
+        segments.extend(self.measure_segments());
+        project_with(&mapping, &segments)
     }
 
     /// The control of a view.
@@ -2088,6 +2183,460 @@ impl Window {
     pub fn rotate_3d(&mut self, dx: f64, dy: f64) {
         let speed = self.ui.rotate_speed;
         self.view3d.rotate(dx, dy, speed);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Dragging and measuring in the views
+// ---------------------------------------------------------------------------------------------
+
+/// The reference under a point of the pane: a point within `radius` pixels (the nearest to the
+/// pointer, and of two at the same distance the nearer to the viewer) or, when `want` allows
+/// edges and there is no point, the edge nearest to it.
+fn pick_reference(
+    refs: &[Reference],
+    mapping: &Mapping,
+    px: (f64, f64),
+    radius: f64,
+    want: Want,
+) -> Option<usize> {
+    if want != Want::Edges {
+        let mut indexes = Vec::new();
+        let mut drawn: Vec<Drawn> = Vec::new();
+        for (k, r) in refs.iter().enumerate() {
+            if let Geometry::Point(p) = r.geometry {
+                indexes.push(k);
+                drawn.push(mapping.to_pane(p));
+            }
+        }
+        if let Some(i) = drag::nearest(px, &drawn, radius) {
+            return indexes.get(i).copied();
+        }
+    }
+    if want == Want::Points {
+        return None;
+    }
+    let mut best: Option<(usize, f64)> = None;
+    for (k, r) in refs.iter().enumerate() {
+        if let Geometry::Edge(a, b) = r.geometry {
+            let d = drag::distance_to_segment(px, mapping.to_pane(a).0, mapping.to_pane(b).0);
+            if d <= radius && best.is_none_or(|(_, bd)| d < bd - 1e-9) {
+                best = Some((k, d));
+            }
+        }
+    }
+    best.map(|(k, _)| k)
+}
+
+/// The refusal that is told when a view shows the plane of the object edge on.
+fn edge_on() -> CadError {
+    CadError::Drag("this view shows the plane of the object edge on".into())
+}
+
+impl Window {
+    /// Whether a hole or a post is being dragged.
+    pub fn dragging(&self) -> bool {
+        self.drag.is_some()
+    }
+
+    /// The holes and the posts that were applied, with where each is on its plane and drawn.
+    fn candidates(&self) -> Vec<Candidate> {
+        let enclosure = &self.built.enclosure;
+        let mut out = Vec::new();
+        for (i, step) in self.mech.steps.iter().enumerate() {
+            if !matches!(self.built.states.get(i), Some(StepState::Valid)) {
+                continue;
+            }
+            match &step.op {
+                Operation::AddHole { id, hole } if enclosure.holes().contains_key(id) => {
+                    let plane = face_plane(enclosure, hole.face);
+                    let centre = (mm(hole.u.get()), mm(hole.v.get()));
+                    out.push(Candidate {
+                        step: i,
+                        name: hole.name.clone(),
+                        plane,
+                        centre,
+                        at: plane.at(centre.0, centre.1),
+                        is_hole: true,
+                    });
+                }
+                Operation::AddPost { id, post } if enclosure.posts().contains_key(id) => {
+                    out.push(Candidate {
+                        step: i,
+                        name: post.name.clone(),
+                        plane: floor_plane(enclosure.params()),
+                        centre: (mm(post.x.get()), mm(post.y.get())),
+                        at: post_centre(enclosure.params(), post),
+                        is_hole: false,
+                    });
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// Picks the hole or the post drawn within the radius of the settings of the point `px` of a
+    /// view and starts dragging it; the thing is selected in the tree. False when there is none
+    /// (the view is turned or moved instead), when the project is read-only, a tool of
+    /// measurement is on, or the view does not show where on the plane of the thing the pointer is
+    /// (a face seen edge on), which the status bar says.
+    pub fn drag_begin(&mut self, view: ViewKind, pane: (f64, f64), px: (f64, f64)) -> bool {
+        if self.read_only || self.drag.is_some() || self.measure_tool != MeasureTool::Off {
+            return false;
+        }
+        let mapping = self.view_mapping(view, pane);
+        let candidates = self.candidates();
+        let drawn: Vec<Drawn> = candidates.iter().map(|c| mapping.to_pane(c.at)).collect();
+        let Some(c) =
+            drag::nearest(px, &drawn, self.ui.drag.hit_radius).and_then(|k| candidates.get(k))
+        else {
+            return false;
+        };
+        let Some(pointer) = mapping.on_plane(px, c.plane.origin, c.plane.a, c.plane.b) else {
+            self.status = Status::Error(edge_on());
+            return false;
+        };
+        self.select(if c.is_hole {
+            Selection::Hole(c.step)
+        } else {
+            Selection::Post(c.step)
+        });
+        self.drag = Some(Drag {
+            view,
+            step: c.step,
+            name: c.name.clone(),
+            before: self.mech.clone(),
+            was_dirty: self.dirty,
+            plane: c.plane,
+            offset: drag::grab_offset(c.centre, pointer),
+            moved: false,
+        });
+        true
+    }
+
+    /// Moves the thing that is dragged to where the pointer `px` is, snapped to the grid when
+    /// that is on. The new position is kept only when the model accepts it (the margins, the
+    /// distances to the other holes and posts, the lid and every other check of the model): a
+    /// refusal is told in the status bar and the thing stays where it last was accepted. Nothing
+    /// is recorded in the history until [`Window::drag_end`].
+    pub fn drag_move(&mut self, pane: (f64, f64), px: (f64, f64)) {
+        let Some(drag) = self.drag.as_ref() else {
+            return;
+        };
+        let (view, plane, offset, step) = (drag.view, drag.plane, drag.offset, drag.step);
+        let name = drag.name.clone();
+        let mapping = self.view_mapping(view, pane);
+        let Some(pointer) = mapping.on_plane(px, plane.origin, plane.a, plane.b) else {
+            self.status = Status::Error(edge_on());
+            return;
+        };
+        let grid = if self.snap_to_grid {
+            self.ui.drag.grid.get()
+        } else {
+            0
+        };
+        let (un, vn) = drag::dragged(pointer, offset, grid);
+        let (u, v) = match (Length::new(un), Length::new(vn)) {
+            (Ok(u), Ok(v)) => (u, v),
+            (Err(e), _) | (_, Err(e)) => {
+                self.status = Status::Problem(Msg::Refused, vec![error_text(&e, self.lang)]);
+                return;
+            }
+        };
+        let mut next = self.mech.clone();
+        match next.steps.get_mut(step).map(|s| &mut s.op) {
+            Some(Operation::AddHole { hole, .. }) => {
+                hole.u = u;
+                hole.v = v;
+            }
+            Some(Operation::AddPost { post, .. }) => {
+                post.x = u;
+                post.y = v;
+            }
+            _ => return,
+        }
+        if next == self.mech {
+            return;
+        }
+        let built = match self.rebuild(&next) {
+            Ok(built) => built,
+            Err(e) => {
+                self.status = Status::Problem(Msg::Refused, vec![error_text(&e, self.lang)]);
+                return;
+            }
+        };
+        // the thing and every other step must be as valid as they were
+        for (k, state) in built.states.iter().enumerate() {
+            if let StepState::Failed(e) = state {
+                if !matches!(self.built.states.get(k), Some(StepState::Failed(_))) {
+                    self.status = Status::Problem(Msg::Refused, vec![error_text(e, self.lang)]);
+                    return;
+                }
+            }
+        }
+        if let Some(d) = self.drag.as_mut() {
+            d.moved = true;
+        }
+        self.status = Status::Done(
+            Msg::DragDone,
+            vec![name, self.unit_text(u), self.unit_text(v)],
+        );
+        self.mech = next;
+        self.built = built;
+        self.dirty = true;
+        self.refresh();
+    }
+
+    /// Lets go of what is dragged: if it moved, the move is one entry of the history, which undo
+    /// takes back to where it was picked.
+    pub fn drag_end(&mut self) {
+        let Some(drag) = self.drag.take() else {
+            return;
+        };
+        if !drag.moved || self.mech == drag.before {
+            self.dirty = drag.was_dirty;
+            return;
+        }
+        let name = fill(Msg::DragName.tr(self.lang), &[&drag.name]);
+        self.history.record(&name, drag.before);
+        self.dirty = true;
+    }
+
+    /// Gives up the drag: what was dragged goes back to where it was picked and nothing is
+    /// recorded.
+    pub fn drag_cancel(&mut self) {
+        let Some(drag) = self.drag.take() else {
+            return;
+        };
+        if drag.moved {
+            if let Ok(built) = self.rebuild(&drag.before) {
+                self.mech = drag.before;
+                self.built = built;
+            }
+            self.dirty = drag.was_dirty;
+            self.refresh();
+        }
+        self.status = Status::Done(Msg::DragCancelled, Vec::new());
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Measurements
+    // -----------------------------------------------------------------------------------------
+
+    /// Turns a measurement tool on or off; what was half picked is forgotten.
+    pub fn set_measure_tool(&mut self, tool: MeasureTool) {
+        self.pending.clear();
+        self.measure_tool = tool;
+        if tool != MeasureTool::Off {
+            self.status = Status::Done(Msg::MeasurePickFirst, Vec::new());
+        }
+    }
+
+    /// The readings kept, the oldest first.
+    pub fn measurements(&self) -> &[Measurement] {
+        &self.measurements
+    }
+
+    /// How many references of the measurement in progress are picked.
+    pub fn picked(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Forgets every reading and what was half picked.
+    pub fn clear_measurements(&mut self) {
+        self.measurements.clear();
+        self.pending.clear();
+    }
+
+    /// Forgets one reading.
+    pub fn remove_measurement(&mut self, index: usize) {
+        if index < self.measurements.len() {
+            self.measurements.remove(index);
+        }
+    }
+
+    /// What the next pick may be: a point, an edge or either.
+    fn wanted(&self) -> Want {
+        match (self.measure_tool, self.pending.first()) {
+            (MeasureTool::Angle, Some(first)) if first.is_point() => Want::Points,
+            (MeasureTool::Angle, Some(_)) => Want::Edges,
+            _ => Want::Any,
+        }
+    }
+
+    /// A click at the point `px` of a view while a measurement tool is on: the point or the edge
+    /// under it is picked (points first), and when the measurement has all it needs the reading
+    /// is kept and told in the status bar. True when a tool is on, so the click is not for the
+    /// view.
+    pub fn measure_click(&mut self, view: ViewKind, pane: (f64, f64), px: (f64, f64)) -> bool {
+        if self.measure_tool == MeasureTool::Off {
+            return false;
+        }
+        let mapping = self.view_mapping(view, pane);
+        let refs = references(&self.built.enclosure);
+        let radius = self.ui.measure.pick_radius;
+        let Some(picked) =
+            pick_reference(&refs, &mapping, px, radius, self.wanted()).and_then(|k| refs.get(k))
+        else {
+            return true;
+        };
+        self.pending.push(picked.clone());
+        let needed = match (self.measure_tool, self.pending.first()) {
+            (MeasureTool::Angle, Some(first)) => measure::angle_needs(first),
+            _ => 2,
+        };
+        if self.pending.len() < needed {
+            self.status = Status::Done(
+                Msg::MeasurePickNext,
+                vec![(self.pending.len() + 1).to_string(), needed.to_string()],
+            );
+            return true;
+        }
+        let picks = std::mem::take(&mut self.pending);
+        let result = match (self.measure_tool, picks.as_slice()) {
+            (MeasureTool::Distance, [a, b]) => Ok(measure::distance(a, b)),
+            _ => measure::angle(&picks),
+        };
+        match result {
+            Ok(reading) => {
+                self.status = Status::Done(Msg::Measured, vec![self.value_text(&reading)]);
+                self.measurements.push(reading);
+                let keep = self.ui.measure.keep as usize;
+                if self.measurements.len() > keep {
+                    let extra = self.measurements.len() - keep;
+                    self.measurements.drain(..extra);
+                }
+            }
+            Err(e) => self.status = Status::Error(e),
+        }
+        true
+    }
+
+    /// A length in millimetres as text, in the unit of the measurements.
+    fn length_text(&self, millimetres: f64) -> String {
+        let unit = self.ui.measure.unit.unwrap_or(self.settings.unit);
+        match Length::new(drag::mm_to_nm(millimetres)) {
+            Ok(length) => format_length(length, unit, self.ui.measure.decimals),
+            Err(_) => format!("{millimetres} mm"),
+        }
+    }
+
+    /// An angle in degrees as text.
+    fn angle_text(&self, degrees: f64) -> String {
+        format!(
+            "{:.*}\u{b0}",
+            self.ui.measure.angle_decimals as usize, degrees
+        )
+    }
+
+    fn point_text(&self, p: Point3) -> String {
+        format!(
+            "{}, {}, {}",
+            self.length_text(p[0]),
+            self.length_text(p[1]),
+            self.length_text(p[2])
+        )
+    }
+
+    /// What a reference is, in words.
+    pub fn reference_text(&self, reference: &Reference) -> String {
+        let lang = self.lang;
+        match (&reference.label, reference.geometry) {
+            (Label::Hole(name), _) => fill(Msg::RefHole.tr(lang), &[name]),
+            (Label::Post(name), _) => fill(Msg::RefPost.tr(lang), &[name]),
+            (Label::OuterCorner, Geometry::Point(p)) => {
+                fill(Msg::RefOuterCorner.tr(lang), &[&self.point_text(p)])
+            }
+            (Label::InnerCorner, Geometry::Point(p)) => {
+                fill(Msg::RefInnerCorner.tr(lang), &[&self.point_text(p)])
+            }
+            (Label::OuterEdge, Geometry::Edge(a, b)) => fill(
+                Msg::RefOuterEdge.tr(lang),
+                &[&self.point_text(a), &self.point_text(b)],
+            ),
+            (Label::InnerEdge, Geometry::Edge(a, b)) => fill(
+                Msg::RefInnerEdge.tr(lang),
+                &[&self.point_text(a), &self.point_text(b)],
+            ),
+            _ => String::new(),
+        }
+    }
+
+    /// The value of a reading with its unit.
+    pub fn value_text(&self, reading: &Measurement) -> String {
+        match reading.quantity {
+            Quantity::Distance => self.length_text(reading.value),
+            Quantity::Angle => self.angle_text(reading.value),
+        }
+    }
+
+    /// A reading as a sentence for the panel.
+    pub fn reading_text(&self, reading: &Measurement) -> String {
+        let lang = self.lang;
+        let names: Vec<String> = reading
+            .refs
+            .iter()
+            .map(|r| self.reference_text(r))
+            .collect();
+        let value = self.value_text(reading);
+        match (reading.quantity, names.as_slice()) {
+            (Quantity::Distance, [a, b]) => {
+                let [dx, dy, dz] = reading.delta;
+                fill(
+                    Msg::ReadDistance.tr(lang),
+                    &[
+                        a,
+                        b,
+                        &value,
+                        &self.length_text(dx),
+                        &self.length_text(dy),
+                        &self.length_text(dz),
+                    ],
+                )
+            }
+            (Quantity::Angle, [a, b]) => fill(Msg::ReadAngleEdges.tr(lang), &[a, b, &value]),
+            (Quantity::Angle, [a, v, b]) => fill(Msg::ReadAngle.tr(lang), &[a, v, b, &value]),
+            _ => value,
+        }
+    }
+
+    /// The marks the measurements add to the drawing: the lines of the readings, the references
+    /// picked so far, and a small cross on each point.
+    fn measure_segments(&self) -> Vec<Segment> {
+        let half = mm(self.ui.measure.marker.get()) / 2.0;
+        let cross = |out: &mut Vec<Segment>, p: Point3| {
+            for d in [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]] {
+                out.push(Segment {
+                    a: [p[0] - half * d[0], p[1] - half * d[1], p[2] - half * d[2]],
+                    b: [p[0] + half * d[0], p[1] + half * d[1], p[2] + half * d[2]],
+                    kind: Kind::Measure,
+                });
+            }
+        };
+        let mut out = Vec::new();
+        for reading in &self.measurements {
+            for (a, b) in &reading.lines {
+                out.push(Segment {
+                    a: *a,
+                    b: *b,
+                    kind: Kind::Measure,
+                });
+                cross(&mut out, *a);
+                cross(&mut out, *b);
+            }
+        }
+        for picked in &self.pending {
+            match picked.geometry {
+                Geometry::Point(p) => cross(&mut out, p),
+                Geometry::Edge(a, b) => out.push(Segment {
+                    a,
+                    b,
+                    kind: Kind::Measure,
+                }),
+            }
+        }
+        out
     }
 }
 
@@ -3129,5 +3678,302 @@ mod tests {
         assert!(!third.import_sketch_file(&dir.0.join("bad.phoenixsketch")));
         assert!(third.mech.sketches.is_empty() && !third.dirty);
         assert!(!third.import_sketch_file(&dir.0.join("missing.phoenixsketch")));
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Dragging and measuring
+    // ---------------------------------------------------------------------------------------------
+
+    fn pane() -> (f64, f64) {
+        (800.0, 600.0)
+    }
+
+    /// Where a point of the model is drawn in a view of the example.
+    fn drawn(w: &Window, view: ViewKind, p: Point3) -> (f64, f64) {
+        w.view_mapping(view, pane()).to_pane(p).0
+    }
+
+    /// The position of the post of a step, in millimetres.
+    fn post_at(w: &Window, step: usize) -> (f64, f64) {
+        match &w.mech.steps[step].op {
+            Operation::AddPost { post, .. } => (mm(post.x.get()), mm(post.y.get())),
+            other => panic!("not a post: {other:?}"),
+        }
+    }
+
+    /// The position of the hole of a step, in millimetres.
+    fn hole_at(w: &Window, step: usize) -> (f64, f64) {
+        match &w.mech.steps[step].op {
+            Operation::AddHole { hole, .. } => (mm(hole.u.get()), mm(hole.v.get())),
+            other => panic!("not a hole: {other:?}"),
+        }
+    }
+
+    /// The top centre of the post of a step, as drawn in a view.
+    fn post_px(w: &Window, view: ViewKind, step: usize) -> (f64, f64) {
+        match &w.mech.steps[step].op {
+            Operation::AddPost { post, .. } => {
+                drawn(w, view, post_centre(w.enclosure().params(), post))
+            }
+            other => panic!("not a post: {other:?}"),
+        }
+    }
+
+    // the steps of the example: 0 and 1 are the holes, 2 the edges, 3 to 6 the posts H1 to H4, 7 the lid
+
+    #[test]
+    fn a_post_dragged_in_the_plan_lands_on_the_grid_and_is_one_entry_of_the_history() {
+        let mut w = example();
+        assert_eq!(post_at(&w, 3), (25.0, 15.0));
+        let start = post_px(&w, ViewKind::Plan, 3);
+        assert!(w.drag_begin(ViewKind::Plan, pane(), start));
+        assert!(w.dragging());
+        assert_eq!(w.selection, Selection::Post(3));
+        // the pointer goes to 30.3 and 19.8 mm from the inner corner: the floor is at 2 mm
+        // and so are the walls, so the point of the model is (32.3, 21.8)
+        let to = drawn(&w, ViewKind::Plan, [32.3, 21.8, 2.0]);
+        w.drag_move(pane(), to);
+        // on the grid of 0.5 mm: 30.3 goes up to 30.5 and 19.8 up to 20
+        assert_eq!(post_at(&w, 3), (30.5, 20.0));
+        assert_eq!(
+            w.status,
+            Status::Done(
+                Msg::DragDone,
+                vec![
+                    "post H1".to_string(),
+                    "30.500 mm".to_string(),
+                    "20.000 mm".to_string()
+                ]
+            )
+        );
+        // nothing is in the history while the pointer is down
+        assert!(!w.can_undo());
+        assert!(w.states().iter().all(|s| *s == StepState::Valid));
+        w.drag_end();
+        assert!(!w.dragging());
+        assert!(w.dirty);
+        assert_eq!(w.undo_names(), ["Move post H1"]);
+        w.undo();
+        assert_eq!(post_at(&w, 3), (25.0, 15.0));
+        w.redo();
+        assert_eq!(post_at(&w, 3), (30.5, 20.0));
+    }
+
+    #[test]
+    fn without_the_grid_a_drag_is_exact_to_the_nanometre() {
+        let mut w = example();
+        w.snap_to_grid = false;
+        let start = post_px(&w, ViewKind::Plan, 3);
+        assert!(w.drag_begin(ViewKind::Plan, pane(), start));
+        w.drag_move(pane(), drawn(&w, ViewKind::Plan, [32.3, 21.8, 2.0]));
+        match &w.mech.steps[3].op {
+            Operation::AddPost { post, .. } => {
+                assert_eq!(post.x.get(), 30_300_000);
+                assert_eq!(post.y.get(), 19_800_000);
+            }
+            other => panic!("{other:?}"),
+        }
+        w.drag_end();
+    }
+
+    #[test]
+    fn a_post_keeps_its_place_under_the_pointer_when_it_is_picked_off_centre() {
+        let mut w = example();
+        w.snap_to_grid = false;
+        // picked 1 mm to the right and half a millimetre up of the centre of the post (27, 17)
+        let start = drawn(&w, ViewKind::Plan, [28.0, 17.5, 2.0]);
+        assert!(w.drag_begin(ViewKind::Plan, pane(), start));
+        // the pointer goes 10 mm to the right and 5 mm up: so does the post
+        w.drag_move(pane(), drawn(&w, ViewKind::Plan, [38.0, 22.5, 2.0]));
+        let (x, y) = post_at(&w, 3);
+        assert!(
+            (x - 35.0).abs() < 1e-6 && (y - 20.0).abs() < 1e-6,
+            "{x} {y}"
+        );
+        w.drag_end();
+    }
+
+    #[test]
+    fn a_position_the_model_refuses_is_told_and_the_post_stays_where_it_was_accepted() {
+        let mut w = example();
+        let start = post_px(&w, ViewKind::Plan, 3);
+        assert!(w.drag_begin(ViewKind::Plan, pane(), start));
+        w.drag_move(pane(), drawn(&w, ViewKind::Plan, [32.3, 21.8, 2.0]));
+        assert_eq!(post_at(&w, 3), (30.5, 20.0));
+        // on top of the post H2 (at 75, 15 from the inner corner)
+        w.drag_move(pane(), drawn(&w, ViewKind::Plan, [77.0, 17.0, 2.0]));
+        assert!(w.status.is_problem(), "{:?}", w.status);
+        assert!(w.status.text(Lang::En).contains("PHOENIX-CAD-028"));
+        assert_eq!(post_at(&w, 3), (30.5, 20.0));
+        // outside the walls
+        w.drag_move(pane(), drawn(&w, ViewKind::Plan, [-20.0, 17.0, 2.0]));
+        assert!(w.status.is_problem(), "{:?}", w.status);
+        assert_eq!(post_at(&w, 3), (30.5, 20.0));
+        assert!(w.states().iter().all(|s| *s == StepState::Valid));
+        w.drag_end();
+        assert_eq!(w.undo_names(), ["Move post H1"]);
+    }
+
+    #[test]
+    fn a_drag_that_is_cancelled_or_never_moved_leaves_nothing_behind() {
+        let mut w = example();
+        let start = post_px(&w, ViewKind::Plan, 3);
+        assert!(w.drag_begin(ViewKind::Plan, pane(), start));
+        w.drag_move(pane(), drawn(&w, ViewKind::Plan, [32.3, 21.8, 2.0]));
+        assert!(w.dirty);
+        w.drag_cancel();
+        assert!(!w.dragging() && !w.dirty && !w.can_undo());
+        assert_eq!(post_at(&w, 3), (25.0, 15.0));
+        assert_eq!(w.status, Status::Done(Msg::DragCancelled, Vec::new()));
+        // a press and a release without a move
+        assert!(w.drag_begin(ViewKind::Plan, pane(), start));
+        w.drag_end();
+        assert!(!w.dirty && !w.can_undo());
+        // undo is not taken while the pointer is down
+        assert!(w.drag_begin(ViewKind::Plan, pane(), start));
+        w.drag_move(pane(), drawn(&w, ViewKind::Plan, [32.3, 21.8, 2.0]));
+        w.undo();
+        assert_eq!(post_at(&w, 3), (30.5, 20.0));
+        w.drag_end();
+    }
+
+    #[test]
+    fn a_hole_is_dragged_over_its_face_in_the_3d_view_but_not_in_the_plan() {
+        let mut w = example();
+        assert_eq!(hole_at(&w, 0), (30.0, 17.0));
+        // the front face is seen edge on from above: the status bar says so
+        let in_plan = drawn(&w, ViewKind::Plan, [30.0, 0.0, 17.0]);
+        assert!(!w.drag_begin(ViewKind::Plan, pane(), in_plan));
+        assert!(w.status.text(Lang::En).contains("PHOENIX-CAD-039"));
+        // in the 3D view u runs along the length and v up: (40.3, 17.2) lands on (40.5, 17)
+        let start = drawn(&w, ViewKind::Iso, [30.0, 0.0, 17.0]);
+        assert!(w.drag_begin(ViewKind::Iso, pane(), start));
+        assert_eq!(w.selection, Selection::Hole(0));
+        w.drag_move(pane(), drawn(&w, ViewKind::Iso, [40.3, 0.0, 17.2]));
+        assert_eq!(hole_at(&w, 0), (40.5, 17.0));
+        w.drag_end();
+        assert_eq!(w.undo_names(), ["Move usb"]);
+    }
+
+    #[test]
+    fn nothing_is_dragged_when_the_project_is_read_only_or_a_tool_of_measurement_is_on() {
+        let mut w = example();
+        let start = post_px(&w, ViewKind::Plan, 3);
+        // far from every hole and post
+        assert!(!w.drag_begin(ViewKind::Plan, pane(), (5.0, 5.0)));
+        w.read_only = true;
+        assert!(!w.drag_begin(ViewKind::Plan, pane(), start));
+        w.read_only = false;
+        w.set_measure_tool(MeasureTool::Distance);
+        assert!(!w.drag_begin(ViewKind::Plan, pane(), start));
+        w.set_measure_tool(MeasureTool::Off);
+        assert!(w.drag_begin(ViewKind::Plan, pane(), start));
+        w.drag_cancel();
+    }
+
+    #[test]
+    fn the_distance_between_two_holes_is_read_in_the_unit_of_the_measurements() {
+        let mut w = example();
+        assert!(!w.measure_click(ViewKind::Plan, pane(), (0.0, 0.0)));
+        w.set_measure_tool(MeasureTool::Distance);
+        assert_eq!(w.status, Status::Done(Msg::MeasurePickFirst, Vec::new()));
+        // the hole usb is at (30, 0, 17) and the hole vent, on the back, at (52, 64, 17)
+        let usb = drawn(&w, ViewKind::Plan, [30.0, 0.0, 17.0]);
+        let vent = drawn(&w, ViewKind::Plan, [52.0, 64.0, 17.0]);
+        assert!(w.measure_click(ViewKind::Plan, pane(), usb));
+        assert_eq!(w.picked(), 1);
+        assert_eq!(
+            w.status,
+            Status::Done(Msg::MeasurePickNext, vec!["2".to_string(), "2".to_string()])
+        );
+        assert!(w.measure_click(ViewKind::Plan, pane(), vent));
+        assert_eq!(w.picked(), 0);
+        let reading = w.measurements()[0].clone();
+        // sqrt(22^2 + 64^2 + 0^2) = sqrt(4580)
+        assert!((reading.value - 4580f64.sqrt()).abs() < 1e-9);
+        assert_eq!(w.value_text(&reading), "67.676 mm");
+        assert_eq!(
+            w.reading_text(&reading),
+            "Distance from hole usb to hole vent: 67.676 mm (x 22.000 mm, y 64.000 mm, z 0.000 mm)"
+        );
+        assert_eq!(
+            w.status,
+            Status::Done(Msg::Measured, vec!["67.676 mm".to_string()])
+        );
+        // the line and a cross at each end are drawn: 1 line and 6 lines of crosses
+        let marks = w
+            .lines(ViewKind::Plan, pane())
+            .iter()
+            .filter(|l| l.kind == Kind::Measure)
+            .count();
+        assert_eq!(marks, 7);
+        // in inches, with four decimals: 67.6757 mm is 2.6644 in
+        w.ui.measure.unit = Some(crate::units::Unit::Inch);
+        w.ui.measure.decimals = 4;
+        assert_eq!(w.value_text(&reading), "2.6644 in");
+    }
+
+    #[test]
+    fn the_angle_at_a_post_is_read_between_the_lines_to_two_others() {
+        let mut w = example();
+        w.set_measure_tool(MeasureTool::Angle);
+        // the posts H2, H1 and H3 at (77, 17), (27, 17) and (27, 47), 8 mm up: the lines to
+        // the other two run along x and along y from H1, a right angle
+        for p in [[77.0, 17.0, 8.0], [27.0, 17.0, 8.0], [27.0, 47.0, 8.0]] {
+            let px = drawn(&w, ViewKind::Plan, p);
+            assert!(w.measure_click(ViewKind::Plan, pane(), px));
+        }
+        let reading = w.measurements()[0].clone();
+        assert!((reading.value - 90.0).abs() < 1e-9);
+        assert_eq!(
+            w.reading_text(&reading),
+            "Angle at post post H1 between post post H2 and post post H3: 90.00\u{b0}"
+        );
+    }
+
+    #[test]
+    fn the_angle_between_two_edges_is_read_when_the_first_pick_is_an_edge() {
+        let mut w = example();
+        w.set_measure_tool(MeasureTool::Angle);
+        // the middle of the front edge of the outer box and of its left edge
+        for p in [[52.0, 0.0, 0.0], [0.0, 32.0, 0.0]] {
+            let px = drawn(&w, ViewKind::Plan, p);
+            assert!(w.measure_click(ViewKind::Plan, pane(), px));
+        }
+        let reading = w.measurements()[0].clone();
+        assert!((reading.value - 90.0).abs() < 1e-9);
+        assert_eq!(
+            w.reading_text(&reading),
+            "Angle between outer edge (0.000 mm, 0.000 mm, 0.000 mm) to (104.000 mm, 0.000 mm, 0.000 mm) and outer edge (0.000 mm, 0.000 mm, 0.000 mm) to (0.000 mm, 64.000 mm, 0.000 mm): 90.00\u{b0}"
+        );
+    }
+
+    #[test]
+    fn the_readings_kept_are_the_newest_and_can_be_cleared() {
+        let mut w = example();
+        w.ui.measure.keep = 2;
+        w.set_measure_tool(MeasureTool::Distance);
+        let usb = drawn(&w, ViewKind::Plan, [30.0, 0.0, 17.0]);
+        let vent = drawn(&w, ViewKind::Plan, [52.0, 64.0, 17.0]);
+        let h1 = post_px(&w, ViewKind::Plan, 3);
+        for (a, b) in [(usb, vent), (usb, h1), (vent, h1)] {
+            w.measure_click(ViewKind::Plan, pane(), a);
+            w.measure_click(ViewKind::Plan, pane(), b);
+        }
+        assert_eq!(w.measurements().len(), 2);
+        // the first one kept is usb to the post H1: (27, 17, 8) from (30, 0, 17) is 3, 17, -9
+        let first = &w.measurements()[0];
+        assert_eq!(first.delta, [-3.0, 17.0, -9.0]);
+        w.remove_measurement(0);
+        assert_eq!(w.measurements().len(), 1);
+        w.measure_click(ViewKind::Plan, pane(), usb);
+        assert_eq!(w.picked(), 1);
+        w.clear_measurements();
+        assert!(w.measurements().is_empty() && w.picked() == 0);
+        // a click on nothing picks nothing
+        assert!(w.measure_click(ViewKind::Plan, pane(), (1.0, 1.0)));
+        assert_eq!(w.picked(), 0);
+        w.set_measure_tool(MeasureTool::Off);
+        assert!(!w.measure_click(ViewKind::Plan, pane(), usb));
     }
 }
