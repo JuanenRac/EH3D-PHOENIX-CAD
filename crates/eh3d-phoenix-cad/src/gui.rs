@@ -5,6 +5,7 @@
 use crate::body::StepState;
 use crate::browse::{self, Browser};
 use crate::config::Settings;
+use crate::export::Format;
 use crate::lang::{Lang, Msg};
 use crate::scene::{Kind, Line2};
 use crate::shot::{ShotRequest, ShotTheme, StartView, PATIENCE_FRAMES};
@@ -16,7 +17,8 @@ use crate::sketch_ui::{
 };
 use crate::uiconfig::UiSettings;
 use crate::window::{
-    error_text, Input, Mark, MeasureTool, NewStep, Selection, ViewKind, Window, PROJECT_EXTENSIONS,
+    error_text, format_msg, Input, Mark, MeasureTool, NewStep, Selection, ViewKind, Window,
+    PROJECT_EXTENSIONS,
 };
 use eframe::egui::{
     self, Color32, FontData, FontDefinitions, FontFamily, Pos2, Rect, Stroke, Vec2,
@@ -56,6 +58,10 @@ struct Dialog {
     save: Option<String>,
     /// Whether the files are sketches (otherwise they are projects).
     sketch: bool,
+    /// The format of the file being exported, when the window asks for a file to export.
+    export: Option<Format>,
+    /// Whether the file is written over when it exists (the box of the export window).
+    overwrite: bool,
 }
 
 struct App {
@@ -80,6 +86,8 @@ struct App {
     /// True from the moment a drag of a hole or a post is cancelled with Esc until the button
     /// is let go, so that the rest of that drag does not turn or move the view.
     ignore_drag: bool,
+    /// Whether the window with the text of the fit report is open.
+    report_open: bool,
 }
 
 impl App {
@@ -96,6 +104,7 @@ impl App {
             new_name: String::new(),
             new_value: String::new(),
             ignore_drag: false,
+            report_open: false,
         }
     }
 
@@ -113,6 +122,21 @@ impl App {
             browser: Browser::new(self.folder(), &PROJECT_EXTENSIONS),
             save: None,
             sketch: false,
+            export: None,
+            overwrite: false,
+        });
+    }
+
+    /// Asks where to write the model in a format. The box to write over a file that exists
+    /// starts as the settings say, and the name suggested follows the project.
+    fn export_dialog(&mut self, format: Format) {
+        self.win.export_format = format;
+        self.dialog = Some(Dialog {
+            browser: Browser::new(self.folder(), &[format.extension()]),
+            save: Some(self.win.export_name(format)),
+            sketch: false,
+            export: Some(format),
+            overwrite: self.win.export_overwrite,
         });
     }
 
@@ -127,6 +151,8 @@ impl App {
             browser: Browser::new(self.folder(), &PROJECT_EXTENSIONS),
             save: Some(name),
             sketch: false,
+            export: None,
+            overwrite: false,
         });
     }
 
@@ -178,6 +204,19 @@ impl App {
                 {
                     self.save_dialog();
                 }
+                ui.menu_button(Msg::ExportMenu.tr(lang), |ui| {
+                    for format in Format::ALL {
+                        if ui.button(format_msg(format).tr(lang)).clicked() {
+                            self.export_dialog(format);
+                            ui.close();
+                        }
+                    }
+                    ui.separator();
+                    if ui.button(Msg::ReportShow.tr(lang)).clicked() {
+                        self.report_open = true;
+                        ui.close();
+                    }
+                });
                 ui.separator();
                 if ui
                     .add_enabled(self.win.can_undo(), egui::Button::new(Msg::Undo.tr(lang)))
@@ -710,6 +749,48 @@ impl App {
         }
     }
 
+    /// The window with the text of the fit report, which can be selected and copied, or put in a
+    /// file from the same window.
+    fn report_window(&mut self, ctx: &egui::Context) {
+        if !self.report_open {
+            return;
+        }
+        let lang = self.win.lang;
+        let text = self.win.report_text();
+        let mut open = true;
+        let mut copy = false;
+        let mut write = false;
+        egui::Window::new(Msg::ReportTitle.tr(lang))
+            .open(&mut open)
+            .default_size([620.0, 320.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button(Msg::ReportCopy.tr(lang)).clicked() {
+                        copy = true;
+                    }
+                    if ui.button(Msg::ExportReport.tr(lang)).clicked() {
+                        write = true;
+                    }
+                });
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    // a text that is shown and can be selected but not changed
+                    let mut shown: &str = text.as_str();
+                    ui.add(
+                        egui::TextEdit::multiline(&mut shown)
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(f32::INFINITY),
+                    );
+                });
+            });
+        if copy {
+            ctx.copy_text(text);
+            self.win.report_copied();
+        } else if write {
+            self.export_dialog(Format::Report);
+        }
+        self.report_open = open;
+    }
+
     fn dialog_window(&mut self, ctx: &egui::Context) {
         let Some(mut dialog) = self.dialog.take() else {
             return;
@@ -718,14 +799,20 @@ impl App {
             None => self.dialog = Some(dialog),
             Some(Outcome::Cancel) => {}
             Some(Outcome::Pick(path)) => {
-                let done = match (dialog.sketch, dialog.save.is_some()) {
-                    (false, true) => self.win.save_to(&path),
-                    (false, false) => self.win.open(&path),
-                    (true, true) => self.sketch.save_to(&path),
-                    (true, false) => {
-                        let opened = self.sketch.open_file(&path);
-                        self.fit_next = opened;
-                        opened
+                // the box to write over a file that exists is ticked again only by the settings
+                // or by the person: an order to write over is for one file
+                let done = if let Some(format) = dialog.export {
+                    self.win.export_to(format, &path, dialog.overwrite)
+                } else {
+                    match (dialog.sketch, dialog.save.is_some()) {
+                        (false, true) => self.win.save_to(&path),
+                        (false, false) => self.win.open(&path),
+                        (true, true) => self.sketch.save_to(&path),
+                        (true, false) => {
+                            let opened = self.sketch.open_file(&path);
+                            self.fit_next = opened;
+                            opened
+                        }
                     }
                 };
                 if !done {
@@ -773,12 +860,17 @@ fn show_dialog(ctx: &egui::Context, d: &mut Dialog, lang: Lang) -> Option<Outcom
     let mut outcome = None;
     let mut open = true;
     let title = match (d.sketch, d.save.is_some()) {
+        _ if d.export.is_some() => Msg::ExportTitle,
         (false, true) => Msg::SaveTitle,
         (false, false) => Msg::OpenTitle,
         (true, true) => Msg::SaveSketchTitle,
         (true, false) => Msg::OpenSketchTitle,
     };
-    let extensions: &[&str] = if d.sketch {
+    let export_extension = d.export.map(Format::extension);
+    let export_extensions: Vec<&str> = export_extension.into_iter().collect();
+    let extensions: &[&str] = if d.export.is_some() {
+        &export_extensions
+    } else if d.sketch {
         &SKETCH_EXTENSIONS
     } else {
         &PROJECT_EXTENSIONS
@@ -837,6 +929,9 @@ fn show_dialog(ctx: &egui::Context, d: &mut Dialog, lang: Lang) -> Option<Outcom
                     }
                 });
             ui.separator();
+            if d.export.is_some() {
+                ui.checkbox(&mut d.overwrite, Msg::ExportOverwrite.tr(lang));
+            }
             ui.horizontal(|ui| {
                 if let Some(name) = d.save.as_mut() {
                     ui.label(Msg::FileName.tr(lang));
@@ -987,6 +1082,8 @@ impl App {
             browser: Browser::new(self.sketch_folder(), &SKETCH_EXTENSIONS),
             save: None,
             sketch: true,
+            export: None,
+            overwrite: false,
         });
     }
 
@@ -1002,6 +1099,8 @@ impl App {
             browser: Browser::new(self.sketch_folder(), &SKETCH_EXTENSIONS),
             save: Some(name),
             sketch: true,
+            export: None,
+            overwrite: false,
         });
     }
 
@@ -1719,6 +1818,7 @@ impl eframe::App for App {
                 self.sketch_canvas(ui);
             }
         }
+        self.report_window(&ctx);
         self.dialog_window(&ctx);
         self.shot_tick(&ctx);
     }
