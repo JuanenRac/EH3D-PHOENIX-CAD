@@ -16,6 +16,7 @@
 //! * [`mass`]: the volume of the material and of the holes, the mass for a density, the centre of mass and the moments of inertia, in integers (pi as a ratio of twelve decimals);
 //! * [`mount`]: posts that rise from the floor (made from the mounting holes of a board, with a bore for an insert or a self-tapping screw and an optional foot) and a lid that is screwed onto them, with the checks of collisions and heights;
 //! * [`pattern`]: rows, grids and circles of holes with exact positions, batches of operations that apply all or nothing, and the pattern as one step of the history (a hole or a post repeated along a line or round a centre, each position checked like a hole or a post of its own);
+//! * [`catalog`]: libraries of parts in a plain text file (profiles cut to a length, screws and angle brackets, with a material each), parts placed in the model by their position, orientation on the axes and cut, the bill of materials with the volume and the mass for the density of the material, and the cut list;
 //! * [`fins`]: sets of cooling fins that rise from a face (how many, how thick, how tall, how far apart, where they start and how long they run), checked against the limits of the settings, the edges and the holes of the face and the other sets, and an estimate, marked as one, of the heat they give to still air from a coefficient of the settings;
 //! * [`graph`]: the graph of dependencies between objects, with a deterministic order of calculation, refused cycles, a recalculation that reuses what did not change, and a Graphviz dump;
 //! * [`vars`]: named variables for the master dimensions, the binding of the parameters of an enclosure to them, and families of variants (small, medium, large);
@@ -64,6 +65,7 @@
 
 pub mod body;
 pub mod browse;
+pub mod catalog;
 pub mod config;
 pub mod datum;
 pub mod drag;
@@ -281,6 +283,13 @@ pub enum CadError {
     /// A set of cooling fins that does not fit: too many, too thin, too tall for their thickness,
     /// too close together, outside the face, in the way of a hole or of another set.
     Fins(String),
+    /// A library file of parts that is not valid: not a library, of a newer version, a line that
+    /// is not understood, a part that does not hold together, too large.
+    Library(String),
+    /// A part placed in the model that is not valid: a cut outside the bar, a cut on a part that is
+    /// not a profile, too far away, sharing volume with another profile, a material that has no
+    /// density, or more parts than the settings allow.
+    Part(String),
 }
 
 impl CadError {
@@ -330,6 +339,8 @@ impl CadError {
             CadError::Export(_) => "PHOENIX-CAD-041",
             CadError::Pattern(_) => "PHOENIX-CAD-042",
             CadError::Fins(_) => "PHOENIX-CAD-043",
+            CadError::Library(_) => "PHOENIX-CAD-044",
+            CadError::Part(_) => "PHOENIX-CAD-045",
         }
     }
 }
@@ -386,7 +397,9 @@ impl fmt::Display for CadError {
             | CadError::ExportExists(why)
             | CadError::Export(why)
             | CadError::Pattern(why)
-            | CadError::Fins(why) => write!(f, "{title}: {why}"),
+            | CadError::Fins(why)
+            | CadError::Library(why)
+            | CadError::Part(why) => write!(f, "{title}: {why}"),
         }
     }
 }
@@ -441,6 +454,8 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-041", "Export not possible"),
     ("PHOENIX-CAD-042", "Pattern not valid"),
     ("PHOENIX-CAD-043", "Cooling fins not valid"),
+    ("PHOENIX-CAD-044", "Library of parts not valid"),
+    ("PHOENIX-CAD-045", "Part not valid"),
 ];
 
 #[cfg(test)]
@@ -637,6 +652,8 @@ mod tests {
             CadError::Export("folder".into()),
             CadError::Pattern("count".into()),
             CadError::Fins("thickness".into()),
+            CadError::Library("line 2".into()),
+            CadError::Part("cut".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));

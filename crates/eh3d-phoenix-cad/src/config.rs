@@ -12,6 +12,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::catalog::CatalogLimits;
 use crate::enclosure::{Face, Hole, HoleStyle};
 use crate::expr::{parse, Constants, ExprLimits, Value};
 use crate::printer::PrinterProfile;
@@ -94,6 +95,8 @@ pub struct DesignLimits {
     pub fin_min_gap: Length,
     /// The tallest fin, as a multiple of its thickness.
     pub fin_max_ratio: u32,
+    /// The limits of the catalog of parts and of the instances placed in a model.
+    pub catalog: CatalogLimits,
 }
 
 impl DesignLimits {
@@ -150,6 +153,7 @@ impl DesignLimits {
             fin_min_thickness,
             fin_min_gap,
             fin_max_ratio,
+            catalog: CatalogLimits::from_config(c)?,
         })
     }
 }

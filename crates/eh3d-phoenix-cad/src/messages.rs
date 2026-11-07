@@ -571,6 +571,32 @@ const TEXTS: &[Row] = &[
             "Alhetas de arrefecimento inválidas",
         ],
     ),
+    (
+        "PHOENIX-CAD-044",
+        [
+            "Library of parts not valid",
+            "Biblioteca de piezas no válida",
+            "Teilebibliothek ungültig",
+            "Bibliothèque de pièces non valide",
+            "Libreria di parti non valida",
+            "部品ライブラリが無効です",
+            "零件库无效",
+            "Biblioteca de peças inválida",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-045",
+        [
+            "Part not valid",
+            "Pieza no válida",
+            "Teil ungültig",
+            "Pièce non valide",
+            "Parte non valida",
+            "部品が無効です",
+            "零件无效",
+            "Peça inválida",
+        ],
+    ),
 ];
 
 /// The text of a diagnostic in a language (`en`, `es`, `de`, `fr`, `it`, `ja`, `zh` or `pt`), or
