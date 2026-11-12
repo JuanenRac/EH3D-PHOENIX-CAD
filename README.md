@@ -58,6 +58,11 @@ Each line is one part of this repository and the light says how far it is today.
 
 EH3D-PHOENIX-CAD is part of the PHOENIX family of the EH3D Fabrication Suite. What it will do, what it will not do yet, its requirements and its relations with other repositories are written in the `docs/` folder.
 
+<p align="center">
+  <img src="images/screens/en/phoenix-cad-01-box.png" alt="EH3D-PHOENIX-CAD window" width="49%">
+  <img src="images/screens/en/phoenix-cad-02-sketch.png" alt="EH3D-PHOENIX-CAD sketch" width="49%">
+</p>
+
 ## 🏛️ Architecture
 
 <p align="center">

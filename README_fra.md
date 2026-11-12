@@ -58,6 +58,11 @@ Chaque ligne est une partie de ce dépôt et le feu dit où elle en est aujourd'
 
 EH3D-PHOENIX-CAD fait partie de la famille PHOENIX de l'EH3D Fabrication Suite. Ce qu'il fera, ce qu'il ne fera pas encore, ses exigences et ses relations avec d'autres dépôts sont décrits dans le dossier `docs/`.
 
+<p align="center">
+  <img src="images/screens/fr/phoenix-cad-01-box.png" alt="EH3D-PHOENIX-CAD window" width="49%">
+  <img src="images/screens/fr/phoenix-cad-02-sketch.png" alt="EH3D-PHOENIX-CAD sketch" width="49%">
+</p>
+
 ## 🏛️ Architecture
 
 <p align="center">
