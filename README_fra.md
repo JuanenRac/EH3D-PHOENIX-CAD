@@ -133,6 +133,7 @@ EH3D-PHOENIX-CAD/
 │   ├── EXPORT.md                                les exports : solide STL, dessins DXF et SVG
 │   └── adr/                                     les décisions acceptées
 ├── Cargo.toml Cargo.lock                        l'espace de travail Rust et ses dépendances verrouillées
+├── rust-toolchain.toml                          la toolchain Rust épinglée
 ├── crates/                                      modèle mécanique : boîtier, motifs, ailettes, pièces, assemblages, esquisses, script, fenêtre
 ├── AGENTS.md                                    règles pour quiconque modifie le dépôt
 ├── tools/                                       le contrôle du dépôt, ses tests et les outils des images

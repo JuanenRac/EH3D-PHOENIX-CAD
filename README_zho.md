@@ -133,6 +133,7 @@ EH3D-PHOENIX-CAD/
 │   ├── EXPORT.md                                导出：STL 实体、DXF 与 SVG 图纸
 │   └── adr/                                     已接受的决策记录
 ├── Cargo.toml Cargo.lock                        Rust 工作区及其锁定的依赖
+├── rust-toolchain.toml                          固定的 Rust 工具链
 ├── crates/                                      机械模型：外壳、阵列、散热片、零件、装配、草图、脚本、窗口
 ├── AGENTS.md                                    修改仓库的人需遵守的规则
 ├── tools/                                       仓库检查、其测试以及图片工具

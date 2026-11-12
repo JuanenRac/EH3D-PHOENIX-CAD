@@ -4,6 +4,7 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **The Rust toolchain is pinned:** `rust-toolchain.toml` fixes the version of Rust (the same one in every repository of the suite) with `rustfmt` and `clippy`, the workflows install that version and not `stable`, so a new release of Rust cannot turn the CI red by itself.
 ## [0.0.6] - Simple assemblies, mates and interference checks
 
 - Add simple assemblies (`eh3d_phoenix_cad::assembly`): a mate places one part of the catalog relative to another along one axis, in whole nanometres, and takes away that one coordinate of the part and no other. There are three kinds: `gap` (the part lies on the side of the other that a direction names, `+x` to `-z`, with a distance of air between the faces), `align` (the lower faces, the upper faces or the middles of the two bounding boxes on one plane; the middles are refused when they differ by half a nanometre) and `stack` (the part stands on the other). The position typed for a part stays in the model and `Enclosure::placed_parts` applies the mates on top of it, so taking a mate away puts the part back; a chain of mates is solved from its free end whatever the order of the ids, and a part placed twice along one axis, a cycle, a part that is not in the model, a part joined to itself and a position outside the range of lengths are refused.

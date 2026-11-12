@@ -133,6 +133,7 @@ EH3D-PHOENIX-CAD/
 │   ├── EXPORT.md                                エクスポート：STL ソリッド、DXF と SVG の図面
 │   └── adr/                                     承認された決定の記録
 ├── Cargo.toml Cargo.lock                        Rust ワークスペースと固定された依存関係
+├── rust-toolchain.toml                          固定されたRustツールチェーン
 ├── crates/                                      機械モデル：筐体、パターン、冷却フィン、部品、アセンブリ、スケッチ、スクリプト、ウィンドウ
 ├── AGENTS.md                                    リポジトリを変更する人のための規則
 ├── tools/                                       リポジトリ チェック、そのテスト、画像のツール

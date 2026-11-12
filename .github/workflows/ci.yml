@@ -54,7 +54,9 @@ jobs:
             echo "$name at $ref"
           done
       - name: Rust toolchain
-        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+        shell: bash
+        working-directory: EH3D-PHOENIX-CAD
+        run: rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component rustfmt,clippy
       - name: Libraries of the window
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev
