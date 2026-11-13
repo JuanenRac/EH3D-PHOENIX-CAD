@@ -1,0 +1,41 @@
+name: Count the tests
+
+on:
+  push:
+    branches: [tmp-count]
+
+permissions:
+  contents: read
+
+jobs:
+  count:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          path: EH3D-PHOENIX-CAD
+          persist-credentials: false
+      - name: Check out the sibling repository named in SIBLING_REFS
+        shell: bash
+        run: |
+          for pair in $SIBLING_REFS; do
+            name="${pair%%=*}"
+            ref="${pair#*=}"
+            git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$ref" "https://github.com/${GITHUB_REPOSITORY_OWNER}/${name}.git" "$name"
+            echo "$name at $ref"
+          done
+      - name: Rust toolchain
+        shell: bash
+        working-directory: EH3D-PHOENIX-CAD
+        run: rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component rustfmt,clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: EH3D-PHOENIX-CAD
+      - name: Libraries of the window
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev
+      - name: Count the tests of cargo test --workspace
+        run: |
+          cargo test --workspace 2>&1 | tee /tmp/t.log || true
+          awk '/test result: ok/ {s += $4} END {print "TESTCOUNT=" s}' /tmp/t.log
+        working-directory: EH3D-PHOENIX-CAD
