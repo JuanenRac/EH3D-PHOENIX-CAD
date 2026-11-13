@@ -1,0 +1,70 @@
+name: EH3D Rust CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "images/**"
+  pull_request:
+    paths-ignore:
+      - "**.md"
+      - "images/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The tag of each sibling repository this one is built against (name=tag, separated by spaces).
+  SIBLING_REFS: "EH3D-COMMON=v0.1.9"
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          path: EH3D-PHOENIX-CAD
+          persist-credentials: false
+      - name: Check out the sibling repository named in SIBLING_REFS
+        shell: bash
+        run: |
+          for pair in $SIBLING_REFS; do
+            name="${pair%%=*}"
+            ref="${pair#*=}"
+            git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$ref" "https://github.com/${GITHUB_REPOSITORY_OWNER}/${name}.git" "$name"
+            echo "$name at $ref"
+          done
+      - name: Rust toolchain
+        shell: bash
+        working-directory: EH3D-PHOENIX-CAD
+        run: rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal --component rustfmt,clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: EH3D-PHOENIX-CAD
+      - name: Libraries of the window
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev
+      - name: Format
+        run: cargo fmt --check
+        working-directory: EH3D-PHOENIX-CAD
+      - name: Lints
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: EH3D-PHOENIX-CAD
+      - name: Lints of the window
+        run: cargo clippy --all-targets --features gui -- -D warnings
+        working-directory: EH3D-PHOENIX-CAD
+      - name: Tests
+        run: cargo test --all-targets
+        working-directory: EH3D-PHOENIX-CAD
