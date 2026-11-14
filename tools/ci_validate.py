@@ -4,7 +4,7 @@
 # Copyright (C) 2026 JuanenRac (Electro Hobby 3D) <electrohobby3d@gmail.com>
 # GPL-3.0-or-later - see LICENSE
 # =============================================================================
-# canonical: EH3D-DOCS tools 4
+# canonical: EH3D-DOCS tools 6
 """The repository checks that CI runs besides cargo: manifest, versions, licence, changelog, the eight README files
 and the words that must never appear in public files. Prints CI_VALIDATION=PASS or FAIL with the reasons."""
 from __future__ import annotations
@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-TOOLS_VERSION = "4"  # raise it with every change of this file; the header of every copy says which one it holds
+TOOLS_VERSION = "6"  # raise it with every change of this file; the header of every copy says which one it holds
 DEFAULT_SKIP_DIRS = {"target", ".git"}  # folders the scan for forbidden words never enters; a repository adds its own in tools/ci_config.json
 MANIFEST_NAMES = ("eh3d.project.json", "electro-hobby-3d.project.json")  # the second one belongs to the updater of the whole family
 REQUIRED = ["schema_version", "ecosystem", "name", "version", "role", "stack", "technologies", "deployment_target",
@@ -205,9 +205,20 @@ def _status_lights_ci(root: Path) -> list[str]:
     return _run_check(root, "status_lights", "status lights")
 
 
+def _structure_ci(root: Path) -> list[str]:
+    """The tree of files of every README and the Repository Structure picture agree with docs/structure.json and the disk; see tools/make_structure.py."""
+    return _run_check(root, "make_structure", "file tree")
+
+
 def _banner_ci(root: Path) -> list[str]:
     """The text of the banner agrees with the manifest (role, name, technologies); see tools/banner_check.py."""
     return _run_check(root, "banner_check", "banner")
+
+
+def _hygiene_ci(root: Path) -> list[str]:
+    """The workflows and the lessons of past CI failures, only for a repository that opted in with tools/hygiene_config.json (or a baseline); only findings
+    that are not in the baseline fail. See tools/workflow_hygiene.py and tools/lessons_lint.py."""
+    return _run_check(root, "workflow_hygiene", "workflow hygiene") + _run_check(root, "lessons_lint", "lessons lint")
 
 
 def scan_files() -> list[Path]:
@@ -389,6 +400,8 @@ def _main() -> int:
     problems.extend(_universal_readme_ci(ROOT))
     problems.extend(_status_lights_ci(ROOT))
     problems.extend(_banner_ci(ROOT))
+    problems.extend(_structure_ci(ROOT))
+    problems.extend(_hygiene_ci(ROOT))
     problems.extend(_depends_on_problems(ROOT, manifest))
     if problems:
         for problem in problems:
