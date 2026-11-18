@@ -87,6 +87,7 @@ pub fn drawing_of(profile: &Profile) -> Drawing {
         entities,
         notes: Vec::new(),
         extent: (mm(hi.0 - lo.0), mm(hi.1 - lo.1)),
+        dxf_dimensions: false,
     }
 }
 

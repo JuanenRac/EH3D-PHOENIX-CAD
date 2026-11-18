@@ -222,6 +222,7 @@ pub fn drawing_of(section: &Section) -> Drawing {
         entities,
         notes: Vec::new(),
         extent: (0.0, 0.0),
+        dxf_dimensions: false,
     };
     if !drawing.entities.is_empty() {
         let (lo, hi) = drawing.bounds();

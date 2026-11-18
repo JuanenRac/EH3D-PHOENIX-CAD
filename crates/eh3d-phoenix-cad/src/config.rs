@@ -337,11 +337,23 @@ pub struct DrawingSettings {
     pub dimensions: bool,
     /// How far the centre lines go past what they mark.
     pub axis_overshoot: Length,
+    /// Whether the DXF drawing of a view has the dimensions too, on the layer `COTAS` (1), or only
+    /// the outline, the openings and the centre lines (0). The SVG drawing has them when
+    /// `dimensions` is 1.
+    pub dxf_dimensions: bool,
+    /// Whether the positions of the holes of the face that a view looks at are dimensioned from
+    /// the lower left corner of the box (1) or only the size of the box is (0).
+    pub hole_dimensions: bool,
+    /// The most dimensions of the positions of the holes in one view; more is refused.
+    pub max_dimensions: u32,
 }
 
 impl DrawingSettings {
     /// The most entities that can be asked for.
     pub const ENTITIES_CAP: u32 = 5_000_000;
+
+    /// The most dimensions of positions that can be asked for.
+    pub const DIMENSIONS_CAP: u32 = 1000;
 
     fn from_config(c: &Config) -> Result<DrawingSettings, CadError> {
         let max_entities = c.number("drawing.max_entities")?;
@@ -368,11 +380,28 @@ impl DrawingSettings {
                 "drawing.axis_overshoot must be from 0 mm to 1000 mm".into(),
             ));
         }
+        let flag = |key: &str| -> Result<bool, CadError> {
+            match c.number(key)? {
+                0 => Ok(false),
+                1 => Ok(true),
+                _ => Err(CadError::Config(format!("{key} must be 0 or 1"))),
+            }
+        };
+        let max_dimensions = c.number("drawing.max_dimensions")?;
+        if !(1..=Self::DIMENSIONS_CAP).contains(&max_dimensions) {
+            return Err(CadError::Config(format!(
+                "drawing.max_dimensions must be from 1 to {}",
+                Self::DIMENSIONS_CAP
+            )));
+        }
         Ok(DrawingSettings {
             max_entities,
             svg_width,
             dimensions,
             axis_overshoot,
+            dxf_dimensions: flag("drawing.dxf_dimensions")?,
+            hole_dimensions: flag("drawing.hole_dimensions")?,
+            max_dimensions,
         })
     }
 }
@@ -1457,12 +1486,17 @@ markup_percent = 1000
                 svg_width: Length::new(200_000_000).unwrap(),
                 dimensions: true,
                 axis_overshoot: Length::new(3_000_000).unwrap(),
+                dxf_dimensions: true,
+                hole_dimensions: true,
+                max_dimensions: 40,
             }
         );
         let own = Settings::with_user_config(
-            "[mesh]\ncircle_segments = 720\nmax_triangles = 12\nstl_binary = 0\nvolume_tolerance_ppm = 100000\n[drawing]\nmax_entities = 8\nsvg_width = 10 mm\ndimensions = 0\naxis_overshoot = 0 mm\n",
+            "[mesh]\ncircle_segments = 720\nmax_triangles = 12\nstl_binary = 0\nvolume_tolerance_ppm = 100000\n[drawing]\nmax_entities = 8\nsvg_width = 10 mm\ndimensions = 0\naxis_overshoot = 0 mm\ndxf_dimensions = 0\nhole_dimensions = 0\nmax_dimensions = 1\n",
         )
         .unwrap();
+        assert!(!own.drawing.dxf_dimensions && !own.drawing.hole_dimensions);
+        assert_eq!(own.drawing.max_dimensions, 1);
         assert_eq!(own.mesh.circle_segments, 720);
         assert!(!own.mesh.binary);
         assert_eq!(own.mesh.max_triangles, 12);
@@ -1487,6 +1521,10 @@ markup_percent = 1000
             "[drawing]\nsvg_width = 9 mm\n",
             "[drawing]\nsvg_width = 10001 mm\n",
             "[drawing]\ndimensions = 2\n",
+            "[drawing]\ndxf_dimensions = 2\n",
+            "[drawing]\nhole_dimensions = yes\n",
+            "[drawing]\nmax_dimensions = 0\n",
+            "[drawing]\nmax_dimensions = 1001\n",
             "[drawing]\naxis_overshoot = -1 mm\n",
             "[drawing]\naxis_overshoot = 1001 mm\n",
             "[drawing]\nsvg_width = wide\n",

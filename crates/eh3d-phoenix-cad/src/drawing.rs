@@ -10,9 +10,12 @@
 //! are not drawn: they cannot be seen from outside.
 //!
 //! The same list gives the DXF file (R12 text: `LINE`, `CIRCLE` and `ARC` entities and the three
-//! layers) and the SVG file (scaled to the width of the page of the settings, with the size of the
-//! box and of the holes as dimensions when the settings ask for them). Both are text that is the
-//! same for the same model. Neither has been opened in a CAD program or a drawing program.
+//! layers, and a fourth `COTAS` with the dimensions) and the SVG file (scaled to the width of the
+//! page of the settings, with the dimensions when the settings ask for them). The dimensions are
+//! the width and the height of the box and the position of every hole of the face the view looks
+//! at, measured from the lower left corner and stacked outwards with the whole box outermost. Both
+//! are text that is the same for the same model. Neither has been opened in a CAD program or a
+//! drawing program.
 
 use crate::config::DrawingSettings;
 use crate::enclosure::{Enclosure, Face, FeatureKind, Hole, HoleStyle, Treatment};
@@ -122,7 +125,19 @@ pub enum Entity {
     Arc((f64, f64), f64, f64, f64),
 }
 
-/// A dimension or a label of the SVG drawing.
+/// The room between the line a dimension measures and its dimension line, in millimetres.
+const DIM_OFFSET: f64 = 8.0;
+
+/// The room between two dimension lines one above the other, in millimetres.
+const DIM_STEP: f64 = 6.0;
+
+/// The height of the text of a dimension in the DXF file, in millimetres.
+const DIM_TEXT: f64 = 2.5;
+
+/// The layer of the dimensions in the DXF file.
+pub const DIMENSION_LAYER: &str = "COTAS";
+
+/// A dimension or a label of the drawing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Note {
     /// Where the text goes.
@@ -131,6 +146,8 @@ pub struct Note {
     pub text: String,
     /// The line it measures, when it is a dimension: the two ends.
     pub measures: Option<((f64, f64), (f64, f64))>,
+    /// How many dimension lines lie between the measured line and this one (0 is the nearest).
+    pub level: u32,
 }
 
 /// A drawing of a view.
@@ -144,6 +161,8 @@ pub struct Drawing {
     pub notes: Vec<Note>,
     /// The size of the box in the view, in millimetres.
     pub extent: (f64, f64),
+    /// Whether the DXF file has the dimensions of `notes` (on the layer `COTAS`).
+    pub dxf_dimensions: bool,
 }
 
 fn mm(nm: i64) -> f64 {
@@ -342,6 +361,28 @@ impl Drawing {
         }
         // the openings of the face that the view looks at, and the centre lines
         let over = mm(settings.axis_overshoot.get());
+        // the positions of the holes of this face, each once, to dimension from the lower left
+        // corner: the nearest dimension line is the nearest hole and the whole box is the last
+        let (mut across, mut up): (Vec<i64>, Vec<i64>) = (Vec::new(), Vec::new());
+        if settings.hole_dimensions {
+            for hole in enclosure.all_holes() {
+                if hole.face == near {
+                    across.push(hole.u.get());
+                    up.push(hole.v.get());
+                }
+            }
+            for list in [&mut across, &mut up] {
+                list.sort_unstable();
+                list.dedup();
+            }
+            if across.len() + up.len() > settings.max_dimensions as usize {
+                return Err(CadError::ExportLimit(format!(
+                    "the drawing has {} dimensions of positions and the settings allow {}",
+                    across.len() + up.len(),
+                    settings.max_dimensions
+                )));
+            }
+        }
         let mut axes: Vec<(Layer, Entity)> = Vec::new();
         for hole in enclosure.all_holes() {
             if hole.face != near {
@@ -364,6 +405,7 @@ impl Drawing {
                 at: (u + ru + over / 2.0, v + rv + over / 2.0),
                 text: label,
                 measures: None,
+                level: 0,
             });
         }
         axes.push((
@@ -375,6 +417,22 @@ impl Drawing {
             Entity::Line((w / 2.0, -over), (w / 2.0, h + over)),
         ));
         entities.extend(axes);
+        for (i, u) in across.iter().enumerate() {
+            notes.push(Note {
+                at: (mm(*u) / 2.0, 0.0),
+                text: mm_text(*u),
+                measures: Some(((0.0, 0.0), (mm(*u), 0.0))),
+                level: i as u32,
+            });
+        }
+        for (i, v) in up.iter().enumerate() {
+            notes.push(Note {
+                at: (0.0, mm(*v) / 2.0),
+                text: mm_text(*v),
+                measures: Some(((0.0, 0.0), (0.0, mm(*v)))),
+                level: i as u32,
+            });
+        }
         notes.push(Note {
             at: (w / 2.0, 0.0),
             text: mm_text(match view {
@@ -382,6 +440,7 @@ impl Drawing {
                 View::Side => y.get(),
             }),
             measures: Some(((0.0, 0.0), (w, 0.0))),
+            level: across.len() as u32,
         });
         notes.push(Note {
             at: (0.0, h / 2.0),
@@ -390,6 +449,7 @@ impl Drawing {
                 View::Front | View::Side => z.get(),
             }),
             measures: Some(((0.0, 0.0), (0.0, h))),
+            level: up.len() as u32,
         });
         if entities.len() > settings.max_entities as usize {
             return Err(CadError::ExportLimit(format!(
@@ -403,7 +463,28 @@ impl Drawing {
             entities,
             notes,
             extent: (w, h),
+            dxf_dimensions: settings.dxf_dimensions,
         })
+    }
+
+    /// The most dimension lines that lie one above the other.
+    fn levels(&self) -> u32 {
+        self.notes
+            .iter()
+            .filter(|n| n.measures.is_some())
+            .map(|n| n.level)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// How much room the dimensions of the DXF file take under the drawing, in millimetres (zero
+    /// without them): the gap to leave before a title block so that it does not lie on them.
+    pub fn dimension_reach(&self) -> f64 {
+        if self.dxf_dimensions && self.notes.iter().any(|n| n.measures.is_some()) {
+            DIM_OFFSET + DIM_STEP * f64::from(self.levels()) + 2.0 * DIM_TEXT
+        } else {
+            0.0
+        }
     }
 
     /// The smallest and the largest corner of everything drawn.
@@ -492,12 +573,21 @@ impl Drawing {
         put(0, "ENDTAB");
         put(0, "TABLE");
         put(2, "LAYER");
-        put(70, if block.is_some() { "4" } else { "3" });
+        let dimensioned = self.dxf_dimensions && !self.notes.is_empty();
+        let layers = 3 + usize::from(block.is_some()) + usize::from(dimensioned);
+        put(70, &layers.to_string());
         for layer in [Layer::Outline, Layer::Holes, Layer::Axes] {
             put(0, "LAYER");
             put(2, layer.name());
             put(70, "0");
             put(62, &layer.dxf_colour().to_string());
+            put(6, "CONTINUOUS");
+        }
+        if dimensioned {
+            put(0, "LAYER");
+            put(2, DIMENSION_LAYER);
+            put(70, "0");
+            put(62, "3");
             put(6, "CONTINUOUS");
         }
         if block.is_some() {
@@ -540,6 +630,56 @@ impl Drawing {
                     put(40, &n(r));
                     put(50, &n(a0.rem_euclid(360.0)));
                     put(51, &n(a1.rem_euclid(360.0)));
+                }
+            }
+        }
+        if dimensioned {
+            for note in &self.notes {
+                let mut line = |a: (f64, f64), b: (f64, f64)| {
+                    put(0, "LINE");
+                    put(8, DIMENSION_LAYER);
+                    put(10, &n(a.0));
+                    put(20, &n(a.1));
+                    put(30, "0.0");
+                    put(11, &n(b.0));
+                    put(21, &n(b.1));
+                    put(31, "0.0");
+                };
+                let (at, rotation) = match note.measures {
+                    Some((a, b)) => {
+                        let off = DIM_OFFSET + DIM_STEP * f64::from(note.level);
+                        if a.1 == b.1 {
+                            let y = a.1 - off;
+                            line((a.0, y), (b.0, y));
+                            line((a.0, a.1), (a.0, y));
+                            line((b.0, b.1), (b.0, y));
+                            (((a.0 + b.0) / 2.0, y + 1.0), 0.0)
+                        } else {
+                            let x = a.0 - off;
+                            line((x, a.1), (x, b.1));
+                            line((a.0, a.1), (x, a.1));
+                            line((b.0, b.1), (x, b.1));
+                            ((x - 1.0, (a.1 + b.1) / 2.0), 90.0)
+                        }
+                    }
+                    None => (note.at, 0.0),
+                };
+                put(0, "TEXT");
+                put(8, DIMENSION_LAYER);
+                put(10, &n(at.0));
+                put(20, &n(at.1));
+                put(30, "0.0");
+                put(40, &n(DIM_TEXT));
+                put(1, &titleblock::dxf_text(&note.text));
+                if rotation != 0.0 {
+                    put(50, &n(rotation));
+                }
+                if note.measures.is_some() {
+                    // the text is centred on the point
+                    put(72, "1");
+                    put(11, &n(at.0));
+                    put(21, &n(at.1));
+                    put(31, "0.0");
                 }
             }
         }
@@ -587,13 +727,22 @@ impl Drawing {
         title: Option<(&TitleBlockSettings, &str, Lang)>,
     ) -> String {
         let (mut lo, mut hi) = self.bounds();
-        let gap = if settings.dimensions { 16.0 } else { 6.0 };
+        let stack = DIM_STEP * f64::from(self.levels());
+        let gap = if settings.dimensions {
+            16.0 + stack
+        } else {
+            6.0
+        };
         if let Some((tb, fallback, lang)) = title {
             let shape = self.title_block(tb, fallback, "", gap, lang);
             lo = (lo.0.min(shape.lo.0), lo.1.min(shape.lo.1));
             hi = (hi.0.max(shape.hi.0), hi.1.max(shape.hi.1));
         }
-        let margin = if settings.dimensions { 14.0 } else { 4.0 };
+        let margin = if settings.dimensions {
+            14.0 + stack
+        } else {
+            4.0
+        };
         let (width, height) = (hi.0 - lo.0 + 2.0 * margin, hi.1 - lo.1 + 2.0 * margin);
         let page = mm(settings.svg_width.get());
         let scale = page / width;
@@ -700,7 +849,7 @@ impl Drawing {
                 match note.measures {
                     Some((a, b)) => {
                         let horizontal = a.1 == b.1;
-                        let off = 8.0;
+                        let off = DIM_OFFSET + DIM_STEP * f64::from(note.level);
                         let (p0, p1, label_at, rotate) = if horizontal {
                             let y = py(a.1) + off;
                             (
@@ -870,6 +1019,14 @@ mod tests {
         crate::config::Settings::defaults().drawing
     }
 
+    /// The settings without the dimensions in the DXF file.
+    fn bare() -> DrawingSettings {
+        DrawingSettings {
+            dxf_dimensions: false,
+            ..settings()
+        }
+    }
+
     #[test]
     fn the_plan_of_a_plain_box_is_a_rectangle_of_104_by_64_with_two_centre_lines() {
         let d = Drawing::of(&model(), View::Top, &settings()).unwrap();
@@ -1005,7 +1162,7 @@ mod tests {
     fn the_dxf_file_has_the_three_layers_and_the_entities_in_millimetres() {
         let mut e = model();
         hole(&mut e, 1, Face::Front, 30, 17, 6, HoleStyle::Plain);
-        let d = Drawing::of(&e, View::Front, &settings()).unwrap();
+        let d = Drawing::of(&e, View::Front, &bare()).unwrap();
         let dxf = d.to_dxf();
         assert!(dxf.starts_with("0\nSECTION\n2\nHEADER\n"));
         assert!(dxf.ends_with("0\nENDSEC\n0\nEOF\n"));
@@ -1022,6 +1179,130 @@ mod tests {
         assert_eq!(dxf.lines().count() % 2, 0);
     }
 
+    /// The dimensions of a drawing as (text, level, horizontal).
+    fn dimensions(d: &Drawing) -> Vec<(String, u32, bool)> {
+        d.notes
+            .iter()
+            .filter_map(|n| {
+                n.measures
+                    .map(|(a, b)| (n.text.clone(), n.level, a.1 == b.1))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_positions_of_the_holes_are_dimensioned_from_the_corner_with_the_whole_box_outermost() {
+        let mut e = model();
+        hole(&mut e, 1, Face::Front, 60, 17, 6, HoleStyle::Plain);
+        hole(&mut e, 2, Face::Front, 30, 17, 4, HoleStyle::Plain);
+        // a hole of another face is not in this view
+        hole(&mut e, 3, Face::Top, 10, 10, 3, HoleStyle::Plain);
+        let d = Drawing::of(&e, View::Front, &settings()).unwrap();
+        // two positions across (30 and 60, nearest first), one up (17, shared by both holes),
+        // then the box: 104 across at level 2 and 35 up at level 1
+        assert_eq!(
+            dimensions(&d),
+            vec![
+                ("30".to_owned(), 0, true),
+                ("60".to_owned(), 1, true),
+                ("17".to_owned(), 0, false),
+                ("104".to_owned(), 2, true),
+                ("35".to_owned(), 1, false),
+            ]
+        );
+        assert!(d.notes.iter().any(|n| n.text == "\u{2300}6"));
+        // the top view has its own hole only
+        let top = Drawing::of(&e, View::Top, &settings()).unwrap();
+        assert_eq!(
+            dimensions(&top),
+            vec![
+                ("10".to_owned(), 0, true),
+                ("10".to_owned(), 0, false),
+                ("104".to_owned(), 1, true),
+                ("64".to_owned(), 1, false),
+            ]
+        );
+        // the setting that leaves them out gives back the dimensions of the box alone
+        let mut off = settings();
+        off.hole_dimensions = false;
+        let plain = Drawing::of(&e, View::Front, &off).unwrap();
+        assert_eq!(
+            dimensions(&plain),
+            vec![("104".to_owned(), 0, true), ("35".to_owned(), 0, false)]
+        );
+        // more positions than the settings allow are refused
+        let mut few = settings();
+        few.max_dimensions = 2;
+        let err = Drawing::of(&e, View::Front, &few).unwrap_err();
+        assert_eq!(err.code(), "PHOENIX-CAD-050");
+        few.max_dimensions = 3;
+        assert!(Drawing::of(&e, View::Front, &few).is_ok());
+    }
+
+    #[test]
+    fn the_dxf_file_has_the_dimensions_on_their_own_layer_when_the_settings_say_so() {
+        let d = Drawing::of(&model(), View::Top, &settings()).unwrap();
+        let dxf = d.to_dxf();
+        assert!(dxf.contains("2\nLAYER\n70\n4\n"));
+        assert!(dxf.contains("2\nCOTAS\n70\n0\n62\n3\n"));
+        // three lines and a text for each of the two dimensions of the box
+        assert_eq!(dxf.matches("8\nCOTAS\n").count(), 8);
+        // the width at 8 mm under the box, with its two extension lines, and its text
+        assert!(dxf.contains(
+            "8\nCOTAS\n10\n0.000000\n20\n-8.000000\n30\n0.0\n11\n104.000000\n21\n-8.000000\n31\n0.0\n"
+        ));
+        assert!(dxf.contains(
+            "8\nCOTAS\n10\n0.000000\n20\n0.000000\n30\n0.0\n11\n0.000000\n21\n-8.000000\n"
+        ));
+        assert!(dxf.contains("1\n104\n"));
+        // the height on the left, with the text turned a quarter and centred
+        assert!(dxf.contains(
+            "8\nCOTAS\n10\n-8.000000\n20\n0.000000\n30\n0.0\n11\n-8.000000\n21\n64.000000\n"
+        ));
+        assert!(dxf.contains("1\n64\n50\n90.000000\n72\n1\n"));
+        // every group is a code line and a value line, and the file ends as it did
+        assert_eq!(dxf.lines().count() % 2, 0);
+        assert!(dxf.ends_with("0\nENDSEC\n0\nEOF\n"));
+        // the label of a hole is a text on the layer, with the diameter sign escaped
+        let mut e = model();
+        hole(&mut e, 1, Face::Front, 30, 17, 6, HoleStyle::Plain);
+        let with_hole = Drawing::of(&e, View::Front, &settings()).unwrap().to_dxf();
+        assert!(with_hole.is_ascii());
+        // the dimension of the hole is at the first level and the box is outside it
+        assert!(with_hole.contains("20\n-8.000000\n30\n0.0\n11\n30.000000\n21\n-8.000000\n"));
+        assert!(with_hole.contains("20\n-14.000000\n30\n0.0\n11\n104.000000\n21\n-14.000000\n"));
+        // without the setting the file has no dimensions and the three layers it had
+        let none = Drawing::of(&model(), View::Top, &bare()).unwrap().to_dxf();
+        assert!(!none.contains("COTAS"));
+        assert!(none.contains("2\nLAYER\n70\n3\n"));
+    }
+
+    #[test]
+    fn the_title_block_leaves_room_for_the_dimensions_of_the_dxf_file() {
+        let mut e = model();
+        hole(&mut e, 1, Face::Front, 30, 17, 6, HoleStyle::Plain);
+        let d = Drawing::of(&e, View::Front, &settings()).unwrap();
+        // one level of dimensions under the box: 8 + 6 for the second line and 5 for the text
+        assert_eq!(d.dimension_reach(), 8.0 + 6.0 + 5.0);
+        let plain = Drawing::of(&e, View::Front, &bare()).unwrap();
+        assert_eq!(plain.dimension_reach(), 0.0);
+        // a drawing that has no dimensions has no reach, as the drawings of a section do
+        let nothing = Drawing {
+            view: View::Top,
+            entities: Vec::new(),
+            notes: Vec::new(),
+            extent: (0.0, 0.0),
+            dxf_dimensions: true,
+        };
+        assert_eq!(nothing.dimension_reach(), 0.0);
+        // the block of the export is put below the dimensions and not over them
+        let gap = 6.0 + d.dimension_reach();
+        let block = d.title_block(&block_settings(), "box", "1:1", gap, Lang::En);
+        let (lo, _) = d.bounds();
+        assert_eq!(block.hi.1, lo.1 - gap);
+        assert!(block.hi.1 < -14.0 - 3.0);
+    }
+
     #[test]
     fn the_svg_file_is_scaled_to_the_page_and_has_the_dimensions() {
         let mut e = model();
@@ -1030,15 +1311,16 @@ mod tests {
         let svg = d.to_svg(&settings());
         assert!(svg.starts_with("<?xml"));
         assert!(svg.contains("width=\"200mm\""));
-        // 104 + 6 + 28 wide, 35 + 6 + 28 high: 200 / 138 per mm
-        assert!(svg.contains("viewBox=\"0 0 138 69\""), "{svg}");
+        // 104 + 6 + 40 wide, 35 + 6 + 40 high (a margin of 14 and 6 for the second level of
+        // dimension lines, because the hole is dimensioned too): 200 / 150 per mm
+        assert!(svg.contains("viewBox=\"0 0 150 81\""), "{svg}");
         for id in ["CONTORNO", "AGUJEROS", "EJES", "COTAS"] {
             assert!(svg.contains(&format!("id=\"{id}\"")), "{id}");
         }
         assert!(svg.contains(">104</text>"));
         assert!(svg.contains(">35</text>"));
         assert!(svg.contains(">\u{2300}6</text>"));
-        assert!(svg.contains(">1:0.69</text>"), "{svg}");
+        assert!(svg.contains(">1:0.75</text>"), "{svg}");
         assert!(svg.trim_end().ends_with("</svg>"));
         let mut plain = settings();
         plain.dimensions = false;
@@ -1079,7 +1361,7 @@ mod tests {
 
     #[test]
     fn the_title_block_goes_under_the_drawing_in_the_dxf_file_on_its_own_layer() {
-        let d = Drawing::of(&model(), View::Top, &settings()).unwrap();
+        let d = Drawing::of(&model(), View::Top, &bare()).unwrap();
         let block = d.title_block(&block_settings(), "box", "1:1", 6.0, Lang::En);
         // the drawing runs from -3 to 107 along x and from -3 to 67 along y
         assert_eq!(block.hi, (107.0, -9.0));

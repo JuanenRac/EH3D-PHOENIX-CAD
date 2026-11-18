@@ -65,8 +65,20 @@ The three views look at the box from above (`top`: `x` to the right, `y` up), fr
 | `CONTORNO` | the outline of the box (the rounded or chamfered corners in the plan), and the bounding rectangles of what stands out of it: extrusions, fins and placed parts; the outline of an extrusion or a fin of the face that the view looks at |
 | `AGUJEROS` | the openings of the holes of the face that the view looks at (a countersink or a counterbore as two circles, a slot as two lines and two arcs) and of the pockets of that face |
 | `EJES` | the centre lines of the box and of every hole drawn, `drawing.axis_overshoot` past what they mark |
+| `COTAS` | the dimensions (lines, extension lines and texts), when `drawing.dxf_dimensions = 1`; the SVG file has them in a group of the same name when `drawing.dimensions = 1` |
 
 The DXF file is R12 text with the entities `LINE`, `CIRCLE` and `ARC` and the header variable `$INSUNITS` set to millimetres. The SVG file is scaled to `drawing.svg_width`; with `drawing.dimensions = 1` it has the width and the height of the box as dimension lines, the size of every hole as a label (`⌀6`, `⌀3 / ⌀8` for a countersink, `4×10` for a slot) and the scale in the corner. Posts, the lip and the inside of the box are not drawn, because they are not seen from outside. A drawing with more than `drawing.max_entities` entities is refused (`PHOENIX-CAD-050`). Neither format has been opened in a drawing program.
+
+### The dimensions of a view
+
+The three views are dimensioned by themselves, in the DXF file (on the layer `COTAS`, as `LINE` and `TEXT` entities) and in the SVG file:
+
+* the **width** under the box and the **height** to the left of it, as the overall dimensions;
+* the **position of every hole** of the face that the view looks at, measured from the lower left corner of the box: one dimension for each distinct position across (`u`) under the box and for each distinct position up (`v`) to the left, so two holes on one row share the height. They are stacked like a baseline dimensioning, the nearest position on the line next to the box and every next one 6 mm farther out, with the overall dimension outermost; the first line is 8 mm from the box. `drawing.hole_dimensions = 0` leaves the positions out and keeps the two overall dimensions;
+* `drawing.dxf_dimensions = 0` writes the DXF file as it was before, with the three layers and no dimension; `drawing.max_dimensions` (40 by default) is the most positions in one view, and a view with more is refused with `PHOENIX-CAD-050`;
+* the text of a dimension is the length in millimetres; the one to the left is turned a quarter and a character that is not printable ASCII is written as the escape of every DXF text. With a title block in the DXF file, the block is put below the dimensions and not over them.
+
+The sizes are not tolerances (nothing here knows ISO 286 fits), a hole of a countersink or a slot is dimensioned by its centre, and the dimension lines are plain lines with no arrow heads: they are for reading a drawing, not for a drawing standard.
 
 ## The hole schedule
 
@@ -90,6 +102,9 @@ In `phoenix-cad.default.cfg` (the `config` command writes them):
 | `drawing.svg_width` | 200 mm | the width of the SVG page |
 | `drawing.dimensions` | 1 | dimensions and labels in the SVG drawing |
 | `drawing.axis_overshoot` | 3 mm | how far the centre lines go past what they mark |
+| `drawing.dxf_dimensions` | 1 | the dimensions in the DXF drawing too, on the layer `COTAS` |
+| `drawing.hole_dimensions` | 1 | the positions of the holes of the face of the view are dimensioned from the corner |
+| `drawing.max_dimensions` | 40 | the most dimensions of hole positions in one view |
 
 ### The title block
 

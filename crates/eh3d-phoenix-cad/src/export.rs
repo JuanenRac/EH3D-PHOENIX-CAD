@@ -193,7 +193,8 @@ pub fn render_titled(
                     drawing.to_svg(&settings.drawing)
                 })
             } else if dxf {
-                let block = drawing.title_block(tb, name, "1:1", 6.0, lang);
+                let block =
+                    drawing.title_block(tb, name, "1:1", 6.0 + drawing.dimension_reach(), lang);
                 text_of(drawing.to_dxf_with(Some(&block)))
             } else {
                 text_of(drawing.to_svg_with(&settings.drawing, Some((tb, name, lang))))
