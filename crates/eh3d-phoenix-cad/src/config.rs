@@ -176,6 +176,12 @@ pub struct ThermalSettings {
     pub conductivity_mw_mk: u32,
     /// How many millikelvin the base of the fins is warmer than the air.
     pub delta_t_mk: u32,
+    /// The emissivity of the surface of the fins in thousandths (from 0 to 1000); 0 leaves the
+    /// radiation out of the estimate.
+    pub emissivity_milli: u32,
+    /// The temperature of the air in millikelvin (the radiation depends on the absolute
+    /// temperature).
+    pub ambient_mk: u32,
 }
 
 impl ThermalSettings {
@@ -193,11 +199,40 @@ impl ThermalSettings {
             }
             Ok(v)
         };
+        let emissivity_milli = c.milli("thermal.emissivity")?;
+        if emissivity_milli > 1_000 {
+            return Err(CadError::Config(
+                "thermal.emissivity must be from 0 to 1".into(),
+            ));
+        }
+        let ambient_mk = c.milli("thermal.ambient_k")?;
+        if !(Self::AMBIENT_MIN_MK..=Self::AMBIENT_MAX_MK).contains(&ambient_mk) {
+            return Err(CadError::Config(
+                "thermal.ambient_k must be from 200 to 500".into(),
+            ));
+        }
         Ok(ThermalSettings {
             convection_mw_m2k: get("thermal.convection_w_m2k")?,
             conductivity_mw_mk: get("thermal.conductivity_w_mk")?,
             delta_t_mk: get("thermal.delta_t_k")?,
+            emissivity_milli,
+            ambient_mk,
         })
+    }
+
+    /// The least temperature of the air that is accepted, in millikelvin (200 K).
+    pub const AMBIENT_MIN_MK: u32 = 200_000;
+    /// The greatest temperature of the air that is accepted, in millikelvin (500 K).
+    pub const AMBIENT_MAX_MK: u32 = 500_000;
+
+    /// The emissivity of the fins, from 0 to 1.
+    pub fn emissivity(&self) -> f64 {
+        f64::from(self.emissivity_milli) / 1_000.0
+    }
+
+    /// The temperature of the air in kelvin.
+    pub fn ambient_k(&self) -> f64 {
+        f64::from(self.ambient_mk) / 1_000.0
     }
 
     /// The coefficient of heat transfer in watts per square metre and kelvin.

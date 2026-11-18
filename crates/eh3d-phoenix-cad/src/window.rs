@@ -1452,7 +1452,13 @@ impl Window {
                 ],
             ),
             false,
-            Msg::FinEstimateNote.tr(lang).to_string(),
+            if self.settings.thermal.emissivity_milli > 0 {
+                Msg::FinEstimateNoteRadiation
+            } else {
+                Msg::FinEstimateNote
+            }
+            .tr(lang)
+            .to_string(),
         ));
         out
     }
@@ -6244,6 +6250,22 @@ mod tests {
             "{}",
             text_of(&v, Key::FinPower)
         );
+        // with an emissivity the note says that the radiation is in the estimate, and the heat is
+        // more than the convection alone
+        let hot = Settings::with_user_config("[thermal]\nemissivity = 0.9\n").unwrap();
+        let mut r = Window::new(Lang::En, hot, UiSettings::defaults()).unwrap();
+        r.add_step(NewStep::Fins);
+        assert_eq!(
+            r.fields[field(&r, Key::FinPower)].note,
+            Msg::FinEstimateNoteRadiation.tr(Lang::En)
+        );
+        let mut plain = fresh();
+        plain.add_step(NewStep::Fins);
+        assert_eq!(
+            plain.fields[field(&plain, Key::FinPower)].note,
+            Msg::FinEstimateNote.tr(Lang::En)
+        );
+        assert_ne!(text_of(&r, Key::FinPower), text_of(&plain, Key::FinPower));
         // the face has no room for a second set of five fins: every try is refused
         let mut x = fresh();
         x.add_step(NewStep::Fins);

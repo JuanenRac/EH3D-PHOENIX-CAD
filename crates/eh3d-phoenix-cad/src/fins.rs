@@ -10,8 +10,9 @@
 //!
 //! [`FinSet::thermal`] is an **estimate** of a simple model: one coefficient of heat transfer for
 //! the whole surface (natural convection in still air, from the settings), fins of constant
-//! section whose tip is counted as if it were as hot as the air, no radiation and no interference
-//! between neighbouring fins. It says how much more heat a set of fins gives to the air than the
+//! section whose tip is counted as if it were as hot as the air, radiation only when the settings
+//! give an emissivity (and then only from the outer envelope of the set, with no view factor
+//! between fins) and no interference between neighbouring fins. It says how much more heat a set of fins gives to the air than the
 //! same strip of the face without them, and what that is for a base that is warmer than the air by
 //! the amount of the settings. It is not a simulation and has been compared with no measurement.
 
@@ -129,8 +130,11 @@ pub struct Thermal {
     /// The fraction of the heat a fin would give if it were as warm along its whole height as at
     /// its foot (from 0 to 1).
     pub efficiency: f64,
-    /// The heat given to the air, in watts, for the temperature of the settings.
+    /// The heat given to the air, in watts, for the temperature of the settings (the radiation
+    /// included when the settings give an emissivity).
     pub power_w: f64,
+    /// The part of the heat that is radiation, in watts; 0 when the settings give no emissivity.
+    pub radiation_w: f64,
     /// The heat the same strip of the face gives without fins, in watts.
     pub flat_power_w: f64,
     /// The thermal resistance from the base to the air, in kelvin per watt.
@@ -337,14 +341,35 @@ impl FinSet {
         let ml = (2.0 * h / (k * t_m)).sqrt() * lc;
         let efficiency = if ml > 0.0 { ml.tanh() / ml } else { 1.0 };
         let to_m2 = 1e-6;
-        let power_w = h * d_t * (base_area_mm2 * to_m2 + efficiency * fin_area_mm2 * to_m2);
-        let flat_power_w = h * d_t * (span * length) as f64 / NM2_PER_MM2 * to_m2;
+        let mut power_w = h * d_t * (base_area_mm2 * to_m2 + efficiency * fin_area_mm2 * to_m2);
+        let mut flat_power_w = h * d_t * (span * length) as f64 / NM2_PER_MM2 * to_m2;
+        // radiation, only when the settings give an emissivity: the coefficient of the linearised
+        // exchange with the air, `e s (Ts^2 + Ta^2) (Ts + Ta)`, over the outer envelope of the
+        // set (its top, its two sides and its two ends) at the mean temperature of a fin, and
+        // over the strip of the face for the same strip without fins
+        let mut radiation_w = 0.0;
+        let emissivity = settings.emissivity();
+        if emissivity > 0.0 {
+            const STEFAN_BOLTZMANN: f64 = 5.670_374_419e-8;
+            let t_air = settings.ambient_k();
+            let t_base = t_air + d_t;
+            let h_rad = emissivity
+                * STEFAN_BOLTZMANN
+                * (t_base * t_base + t_air * t_air)
+                * (t_base + t_air);
+            let envelope_nm2 = span * length + 2 * height * length + 2 * span * height;
+            let envelope_m2 = envelope_nm2 as f64 / NM2_PER_MM2 * to_m2;
+            radiation_w = h_rad * d_t * envelope_m2 * efficiency;
+            power_w += radiation_w;
+            flat_power_w += h_rad * d_t * (span * length) as f64 / NM2_PER_MM2 * to_m2;
+        }
         Thermal {
             area_mm2: fin_area_mm2 + base_area_mm2,
             fin_area_mm2,
             base_area_mm2,
             efficiency,
             power_w,
+            radiation_w,
             flat_power_w,
             resistance_k_w: d_t / power_w,
         }
@@ -631,6 +656,7 @@ mod tests {
             convection_mw_m2k: 5_000,
             conductivity_mw_mk: 200_000,
             delta_t_mk: 30_000,
+            ..Settings::defaults().thermal
         };
         let t = one.thermal(&settings);
         assert_eq!(
@@ -650,6 +676,78 @@ mod tests {
             ..settings
         };
         assert!((one.thermal(&hot).power_w - 2.0 * t.power_w).abs() < 1e-12);
+    }
+
+    #[test]
+    fn the_radiation_is_left_out_unless_the_settings_give_an_emissivity() {
+        let off = Settings::defaults().thermal;
+        assert_eq!((off.emissivity_milli, off.ambient_mk), (0, 293_150));
+        let t = fins().thermal(&off);
+        assert_eq!(t.radiation_w, 0.0);
+        // 3 fins 2 mm thick, 10 mm tall, 8 mm apart, 50 mm long: the set is 18 mm wide and its
+        // outer envelope is 18 x 50 + 2 x 10 x 50 + 2 x 18 x 10 = 2260 mm2; with an emissivity of
+        // 0.9, air at 293.15 K and a base 40 K warmer, the linearised coefficient is
+        // 0.9 x 5.670374419e-8 x (333.15^2 + 293.15^2) x (333.15 + 293.15) = 6.2941831 W/m2K
+        let on = ThermalSettings {
+            emissivity_milli: 900,
+            ..off
+        };
+        let r = fins().thermal(&on);
+        let expected = 6.294_183_142_149_726 * 40.0 * 2.26e-3 * r.efficiency;
+        assert!(
+            (r.radiation_w - expected).abs() < 1e-12,
+            "{}",
+            r.radiation_w
+        );
+        assert!(
+            r.radiation_w > 0.4 && r.radiation_w < 0.7,
+            "{}",
+            r.radiation_w
+        );
+        // the heat is the convection plus the radiation, and the strip without fins radiates too
+        assert!((r.power_w - (t.power_w + r.radiation_w)).abs() < 1e-12);
+        let flat = 6.294_183_142_149_726 * 40.0 * 9.0e-4;
+        assert!((r.flat_power_w - (t.flat_power_w + flat)).abs() < 1e-12);
+        assert!(r.resistance_k_w < t.resistance_k_w);
+        // the radiation is in proportion to the emissivity and the rest does not move
+        let half = ThermalSettings {
+            emissivity_milli: 450,
+            ..off
+        };
+        let h = fins().thermal(&half);
+        assert!((2.0 * h.radiation_w - r.radiation_w).abs() < 1e-12);
+        assert_eq!((h.area_mm2, h.efficiency), (r.area_mm2, r.efficiency));
+        // a warmer air radiates more for the same difference of temperature
+        let warm = ThermalSettings {
+            ambient_mk: 313_150,
+            ..on
+        };
+        assert!(fins().thermal(&warm).radiation_w > r.radiation_w);
+    }
+
+    #[test]
+    fn the_emissivity_and_the_temperature_of_the_air_are_checked_in_the_settings() {
+        let ok =
+            Settings::with_user_config("[thermal]\nemissivity = 1\nambient_k = 200\n").unwrap();
+        assert_eq!(ok.thermal.emissivity_milli, 1_000);
+        assert_eq!(ok.thermal.ambient_mk, 200_000);
+        let ok =
+            Settings::with_user_config("[thermal]\nemissivity = 0.85\nambient_k = 500\n").unwrap();
+        assert_eq!(ok.thermal.emissivity_milli, 850);
+        assert_eq!(ok.thermal.ambient_mk, 500_000);
+        assert_eq!(ok.thermal.emissivity(), 0.85);
+        assert_eq!(ok.thermal.ambient_k(), 500.0);
+        for bad in [
+            "emissivity = 1.001",
+            "emissivity = -1",
+            "emissivity = high",
+            "ambient_k = 199.999",
+            "ambient_k = 500.001",
+            "ambient_k = 0",
+        ] {
+            let text = format!("[thermal]\n{bad}\n");
+            assert!(Settings::with_user_config(&text).is_err(), "{bad}");
+        }
     }
 
     // ---- the fins in the enclosure --------------------------------------------------------
