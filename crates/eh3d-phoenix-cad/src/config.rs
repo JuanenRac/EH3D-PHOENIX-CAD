@@ -182,6 +182,10 @@ pub struct ThermalSettings {
     /// The temperature of the air in millikelvin (the radiation depends on the absolute
     /// temperature).
     pub ambient_mk: u32,
+    /// Whether the opening between two fins radiates as a cavity, with the view factor from the
+    /// surfaces inside it to the opening (the radiation is then more than the outer envelope
+    /// alone and less than all the surface); off leaves the estimate as the outer envelope only.
+    pub fin_view_factor: bool,
 }
 
 impl ThermalSettings {
@@ -211,12 +215,19 @@ impl ThermalSettings {
                 "thermal.ambient_k must be from 200 to 500".into(),
             ));
         }
+        let view_factor = c.number("thermal.fin_view_factor")?;
+        if view_factor > 1 {
+            return Err(CadError::Config(
+                "thermal.fin_view_factor must be 0 or 1".into(),
+            ));
+        }
         Ok(ThermalSettings {
             convection_mw_m2k: get("thermal.convection_w_m2k")?,
             conductivity_mw_mk: get("thermal.conductivity_w_mk")?,
             delta_t_mk: get("thermal.delta_t_k")?,
             emissivity_milli,
             ambient_mk,
+            fin_view_factor: view_factor == 1,
         })
     }
 

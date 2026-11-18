@@ -11,8 +11,8 @@
 //! [`FinSet::thermal`] is an **estimate** of a simple model: one coefficient of heat transfer for
 //! the whole surface (natural convection in still air, from the settings), fins of constant
 //! section whose tip is counted as if it were as hot as the air, radiation only when the settings
-//! give an emissivity (and then only from the outer envelope of the set, with no view factor
-//! between fins) and no interference between neighbouring fins. It says how much more heat a set of fins gives to the air than the
+//! give an emissivity (and then only from the outer envelope of the set, unless the settings ask
+//! for the view factor between fins) and no interference between neighbouring fins. It says how much more heat a set of fins gives to the air than the
 //! same strip of the face without them, and what that is for a base that is warmer than the air by
 //! the amount of the settings. It is not a simulation and has been compared with no measurement.
 
@@ -137,6 +137,10 @@ pub struct Thermal {
     pub radiation_w: f64,
     /// The heat the same strip of the face gives without fins, in watts.
     pub flat_power_w: f64,
+    /// The view factor from the surfaces inside the opening between two fins to the opening (the
+    /// width of the opening over the length of the walls and the floor round it, from 0 to 1); 0
+    /// when the settings do not ask for it, when there is no radiation or with one fin.
+    pub view_factor: f64,
     /// The thermal resistance from the base to the air, in kelvin per watt.
     pub resistance_k_w: f64,
 }
@@ -348,6 +352,7 @@ impl FinSet {
         // set (its top, its two sides and its two ends) at the mean temperature of a fin, and
         // over the strip of the face for the same strip without fins
         let mut radiation_w = 0.0;
+        let mut view_factor = 0.0;
         let emissivity = settings.emissivity();
         if emissivity > 0.0 {
             const STEFAN_BOLTZMANN: f64 = 5.670_374_419e-8;
@@ -358,7 +363,20 @@ impl FinSet {
                 * (t_base * t_base + t_air * t_air)
                 * (t_base + t_air);
             let envelope_nm2 = span * length + 2 * height * length + 2 * span * height;
-            let envelope_m2 = envelope_nm2 as f64 / NM2_PER_MM2 * to_m2;
+            let mut weighted_nm2 = envelope_nm2 as f64;
+            if settings.fin_view_factor && n > 1 {
+                // each opening between two fins is a cavity: the walls and the floor round it
+                // (two heights and the gap) see the opening with the view factor `gap / (2 height
+                // + gap)`, and an isothermal surface of emissivity `e` that sees an opening of
+                // black surroundings with that factor radiates through it as one of emissivity
+                // `e / (e + (1 - e) f)` (the opening of a deep channel is nearly black)
+                let gap = (pitch - t) as f64;
+                view_factor = gap / (2.0 * height as f64 + gap);
+                let boost = 1.0 / (emissivity + (1.0 - emissivity) * view_factor);
+                let openings_nm2 = (n - 1) as f64 * gap * length as f64;
+                weighted_nm2 += openings_nm2 * (boost - 1.0);
+            }
+            let envelope_m2 = weighted_nm2 / NM2_PER_MM2 * to_m2;
             radiation_w = h_rad * d_t * envelope_m2 * efficiency;
             power_w += radiation_w;
             flat_power_w += h_rad * d_t * (span * length) as f64 / NM2_PER_MM2 * to_m2;
@@ -371,6 +389,7 @@ impl FinSet {
             power_w,
             radiation_w,
             flat_power_w,
+            view_factor,
             resistance_k_w: d_t / power_w,
         }
     }
@@ -723,6 +742,81 @@ mod tests {
             ..on
         };
         assert!(fins().thermal(&warm).radiation_w > r.radiation_w);
+    }
+
+    #[test]
+    fn the_openings_between_the_fins_radiate_as_cavities_when_the_settings_ask_for_it() {
+        let off = Settings::defaults().thermal;
+        assert!(!off.fin_view_factor);
+        let plain = ThermalSettings {
+            emissivity_milli: 900,
+            ..off
+        };
+        let view = ThermalSettings {
+            fin_view_factor: true,
+            ..plain
+        };
+        let a = fins().thermal(&plain);
+        let b = fins().thermal(&view);
+        assert_eq!(a.view_factor, 0.0);
+        // 3 fins 2 mm thick, 10 mm tall, 8 mm apart, 50 mm long: two openings of 6 x 50 mm2, each
+        // seen from walls and floor of 10 + 10 + 6 = 26 mm, so the view factor is 3 / 13; with
+        // an emissivity of 0.9 the opening radiates as one of 0.9 / (0.9 + 0.1 x 3 / 13), that
+        // is 13 / 12 times as much: 1660 + 600 x 13 / 12 = 2310 mm2 instead of the 2260 of
+        // the outer envelope
+        assert!((b.view_factor - 3.0 / 13.0).abs() < 1e-12);
+        assert!(
+            (b.radiation_w - a.radiation_w * 2310.0 / 2260.0).abs() < 1e-12,
+            "{} {}",
+            a.radiation_w,
+            b.radiation_w
+        );
+        // the heat is the convection plus the radiation and nothing else moves
+        assert!((b.power_w - (a.power_w - a.radiation_w + b.radiation_w)).abs() < 1e-12);
+        assert_eq!(
+            (a.area_mm2, a.efficiency, a.flat_power_w),
+            (b.area_mm2, b.efficiency, b.flat_power_w)
+        );
+        // without an emissivity there is no radiation to count, with one fin there is no opening
+        let none = ThermalSettings {
+            fin_view_factor: true,
+            ..off
+        };
+        assert_eq!(fins().thermal(&none), fins().thermal(&off));
+        let mut one = fins();
+        one.count = Count::new(1).unwrap();
+        assert_eq!(one.thermal(&view), one.thermal(&plain));
+        // a black surface radiates as the envelope does: the openings change nothing
+        let black = ThermalSettings {
+            emissivity_milli: 1_000,
+            ..view
+        };
+        let black_plain = ThermalSettings {
+            fin_view_factor: false,
+            ..black
+        };
+        let (x, y) = (fins().thermal(&black), fins().thermal(&black_plain));
+        assert!((x.radiation_w - y.radiation_w).abs() < 1e-12);
+        // wider openings between the same fins have a larger view factor (it is 18 / 38 for 20 mm)
+        let mut wide = fins();
+        wide.pitch = mm(20);
+        assert!((wide.thermal(&view).view_factor - 18.0 / 38.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn the_view_factor_between_fins_is_a_switch_in_the_settings() {
+        let on = Settings::with_user_config("[thermal]\nfin_view_factor = 1\n").unwrap();
+        assert!(on.thermal.fin_view_factor);
+        for bad in [
+            "fin_view_factor = 2",
+            "fin_view_factor = -1",
+            "fin_view_factor = yes",
+        ] {
+            assert!(
+                Settings::with_user_config(&format!("[thermal]\n{bad}\n")).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

@@ -1453,7 +1453,11 @@ impl Window {
             ),
             false,
             if self.settings.thermal.emissivity_milli > 0 {
-                Msg::FinEstimateNoteRadiation
+                if self.settings.thermal.fin_view_factor {
+                    Msg::FinEstimateNoteShading
+                } else {
+                    Msg::FinEstimateNoteRadiation
+                }
             } else {
                 Msg::FinEstimateNote
             }
@@ -6299,6 +6303,17 @@ mod tests {
             plain.fields[field(&plain, Key::FinPower)].note,
             Msg::FinEstimateNote.tr(Lang::En)
         );
+        // with the view factor between the fins the note says so, and the heat is more than
+        // with the outer envelope alone
+        let seen = Settings::with_user_config("[thermal]\nemissivity = 0.9\nfin_view_factor = 1\n")
+            .unwrap();
+        let mut s = Window::new(Lang::En, seen, UiSettings::defaults()).unwrap();
+        s.add_step(NewStep::Fins);
+        assert_eq!(
+            s.fields[field(&s, Key::FinPower)].note,
+            Msg::FinEstimateNoteShading.tr(Lang::En)
+        );
+        assert_ne!(text_of(&s, Key::FinPower), text_of(&r, Key::FinPower));
         assert_ne!(text_of(&r, Key::FinPower), text_of(&plain, Key::FinPower));
         // the face has no room for a second set of five fins: every try is refused
         let mut x = fresh();
