@@ -23,6 +23,7 @@
 //! * [`clearance`]: the check of the room between the placed parts: the pairs that do not touch and are closer than a minimum, from the distance between their bounding boxes compared as squares in integers;
 //! * [`placement`]: the table of where the placed parts are with the box of the whole assembly, and an exploded view that pulls the parts away from the middle of the assembly by a percentage;
 //! * [`schedule`]: the hole schedule for the person who drills: every hole by face and position with a stable tag, its diameter and shape, and the list of tools grouped by diameter and shape;
+//! * [`sketch_export`]: a sketch as a flat DXF or SVG drawing of its closed outlines (outer outlines and holes on their own layers, lines, arcs and circles kept as such), for a laser or a router;
 //! * [`fins`]: sets of cooling fins that rise from a face (how many, how thick, how tall, how far apart, where they start and how long they run), checked against the limits of the settings, the edges and the holes of the face and the other sets, and an estimate, marked as one, of the heat they give to still air from a coefficient of the settings;
 //! * [`graph`]: the graph of dependencies between objects, with a deterministic order of calculation, refused cycles, a recalculation that reuses what did not change, and a Graphviz dump;
 //! * [`vars`]: named variables for the master dimensions, the binding of the parameters of an enclosure to them, and families of variants (small, medium, large);
@@ -109,6 +110,7 @@ pub mod scene;
 pub mod schedule;
 pub mod shot;
 pub mod sketch;
+pub mod sketch_export;
 pub mod sketch_ui;
 pub mod solid;
 pub mod step;

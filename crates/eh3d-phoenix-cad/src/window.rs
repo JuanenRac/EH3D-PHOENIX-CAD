@@ -1890,6 +1890,25 @@ impl Window {
         }
     }
 
+    /// A sketch of the project by name; without a name, the only sketch the project has.
+    /// Refused with `PHOENIX-CAD-014` when there is none of that name, none at all, or several and
+    /// no name was given.
+    pub fn find_sketch(&self, name: Option<&str>) -> Result<Sketch, CadError> {
+        match (name, self.mech.sketches.as_slice()) {
+            (Some(n), _) => self
+                .mech
+                .sketch(n)
+                .cloned()
+                .ok_or_else(|| CadError::UnknownName(format!("the project has no sketch {n}"))),
+            (None, [one]) => Ok(one.clone()),
+            (None, []) => Err(CadError::UnknownName("the project has no sketch".into())),
+            (None, _) => Err(CadError::UnknownName(format!(
+                "the project has several sketches ({}): name one",
+                self.sketch_names().join(", ")
+            ))),
+        }
+    }
+
     fn refresh_fields(&mut self) {
         self.fields = self.make_fields();
     }
@@ -6590,6 +6609,46 @@ total,0,
             )),
             "{tools}"
         );
+    }
+
+    #[test]
+    fn a_sketch_of_the_project_is_found_by_name_or_as_the_only_one() {
+        let mut w = fresh();
+        let plate = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/examples/plate.phoenixproj"
+        ));
+        assert!(w.open(&plate), "{:?}", w.status);
+        let names = w.sketch_names();
+        assert!(!names.is_empty());
+        let first = w.find_sketch(Some(&names[0])).unwrap();
+        assert_eq!(first.name(), names[0]);
+        if names.len() == 1 {
+            assert_eq!(w.find_sketch(None).unwrap().name(), names[0]);
+        } else {
+            assert_eq!(w.find_sketch(None).unwrap_err().code(), "PHOENIX-CAD-014");
+        }
+        assert_eq!(
+            w.find_sketch(Some("nothing")).unwrap_err().code(),
+            "PHOENIX-CAD-014"
+        );
+        // a project with no sketch
+        let none = example();
+        if none.sketch_names().is_empty() {
+            assert_eq!(
+                none.find_sketch(None).unwrap_err().code(),
+                "PHOENIX-CAD-014"
+            );
+        }
+        // the drawing of a sketch of the example has an outline
+        let dxf =
+            crate::sketch_export::render(&first, &w.sketch_settings, &w.settings.drawing, true)
+                .unwrap();
+        assert!(dxf.contains(
+            "
+CONTORNO
+"
+        ));
     }
 
     #[test]

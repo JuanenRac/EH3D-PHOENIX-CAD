@@ -72,6 +72,10 @@ The DXF file is R12 text with the entities `LINE`, `CIRCLE` and `ARC` and the he
 
 `eh3d_phoenix_cad::schedule` lists the holes of the box for the person who drills them: by face (front, back, left, right, top, bottom), then by position `u` and `v` from the lower left corner of the face as seen from outside, each with a tag `H1`, `H2`, ... that follows that order, so the same box always gives the same tags. The command `eh3d-phoenix-cad holes PROJECT` prints `tag,name,face,u_mm,v_mm,diameter_mm,style,detail` (the detail is the head of a countersink, the head and the depth of a counterbore, the height of a rectangle or the length and direction of a slot) and a line `total,N`. With `--tools` it prints the drills and cutters the job needs, `diameter_mm,style,detail,count`, the smallest diameter first. The positions are the nominal ones of the model, without the compensation of the printer (see the model for fabrication).
 
+## A sketch as a flat drawing
+
+`eh3d_phoenix_cad::sketch_export` writes the closed outlines of a sketch (the ones the extrusions and pockets are made from) as a DXF or SVG file for a laser, a router or a plotter: the outer outline of each region on the layer `CONTORNO` and the holes in it on `AGUJEROS`, in millimetres and in the coordinates of the sketch. Lines stay lines, arcs stay arcs (counter-clockwise from the first angle to the second) and circles stay circles; construction geometry and points alone are left out. The command is `eh3d-phoenix-cad sketch-export PROJECT|SKETCH --format dxf|svg [--sketch NAME] [--out FILE] [--overwrite]`: a project with one sketch needs no name, one with several needs `--sketch`; `--out` defaults to the name of the sketch in the current folder. As with every export, a file that exists is never written over unless `--overwrite` is given, nor the project that is open. A sketch with no closed outline is refused with `PHOENIX-CAD-036` and a drawing with more entities than `drawing.max_entities` with `PHOENIX-CAD-050`.
+
 ## Settings
 
 In `phoenix-cad.default.cfg` (the `config` command writes them):

@@ -4,6 +4,7 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **Sketch export to DXF and SVG:** `eh3d_phoenix_cad::sketch_export` writes the closed outlines of a sketch as a flat drawing (outer outlines and holes on their own layers; lines, arcs and circles kept as such) and the new command `sketch-export PROJECT|SKETCH --format dxf|svg` writes it without ever overwriting a file unless asked. 6 tests.
 - **Hole schedule:** `eh3d_phoenix_cad::schedule` lists the holes of the box by face and position with stable tags `H1`, `H2`, ... and groups them into the drills and cutters they need; the new command `holes [--tools]` prints both as comma separated values. 5 tests.
 - **Table of placements and exploded view:** `eh3d_phoenix_cad::placement` lists where each placed part ends up with the mates applied (corner, size, turn) and the box of the assembly, and can pull the parts apart from the middle by a percentage; the new command `placements [--explode PERCENT]` prints it as comma separated values and the setting `placement.max_explode_percent` limits the pull. 8 tests.
 - **Clearance check between parts:** `eh3d_phoenix_cad::clearance` lists the placed parts that do not touch and are closer than `clearance.min_gap` (distance between bounding boxes, exact in integers); the new command `clearance` prints them closest first and exits with 1 when there is one; the settings `[clearance]` (`min_gap`, `max_pairs`) are in `phoenix-cad.default.cfg`. 7 tests.

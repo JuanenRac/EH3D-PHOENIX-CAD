@@ -29,6 +29,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad clearance PROJECT.phoenixproj [--config FILE]                  lists, as comma separated values, the pairs of placed parts that do not touch and are closer than clearance.min_gap (exit 1 when there is one)
   eh3d-phoenix-cad placements PROJECT.phoenixproj [--explode PERCENT] [--config FILE]   where each placed part is (the corner and the size in millimetres and the turn) and the size of the whole assembly, as comma separated values; with --explode the parts are first pulled apart from the middle of the assembly by that percentage
   eh3d-phoenix-cad holes PROJECT.phoenixproj [--tools] [--config FILE]            the schedule of the holes of the box for the person who drills (a tag, the face, the position, the diameter and the shape of each) as comma separated values, or with --tools the drills and cutters they need grouped by diameter and shape
+  eh3d-phoenix-cad sketch-export PROJECT.phoenixproj|SKETCH.phoenixsketch --format dxf|svg [--sketch NAME] [--out FILE] [--overwrite] [--config FILE]   writes a sketch (the only one of the project, or the one named) as a flat drawing of its closed outlines for a laser or a router; never over a file that exists unless --overwrite is given
   eh3d-phoenix-cad library FILE.phoenixlib [--config FILE]                        reads a library of parts, checks it and lists its parts
   eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill [--view top|front|side] [--out FILE] [--overwrite] [--ascii|--binary] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), as a Wavefront file (obj) or as a 3MF package (3mf), the plan, front or side as a drawing (dxf, svg), the STEP file, the OpenSCAD-style script, the fit report or the bill of materials
   eh3d-phoenix-cad config                                                         every setting of the library, of the window and of the sketch with its default value, as a file for --config
@@ -262,6 +263,83 @@ fn run_holes(args: &[String]) -> Result<bool, String> {
     Ok(win.info.failed == 0)
 }
 
+/// `sketch-export`: writes a sketch of a project, or a sketch file, as a DXF or SVG drawing. The
+/// answer is whether the file was written. Nothing is written over a file that exists unless
+/// `--overwrite` is given.
+fn run_sketch_export(args: &[String]) -> Result<bool, String> {
+    let mut config: Option<PathBuf> = None;
+    let mut file: Option<PathBuf> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut word: Option<String> = None;
+    let mut name: Option<String> = None;
+    let mut overwrite = false;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--config" => {
+                config = Some(PathBuf::from(
+                    iter.next().ok_or("--config needs a settings file")?,
+                ));
+            }
+            "--format" => word = Some(iter.next().ok_or("--format needs dxf or svg")?.clone()),
+            "--sketch" => name = Some(iter.next().ok_or("--sketch needs a name")?.clone()),
+            "--out" => out = Some(PathBuf::from(iter.next().ok_or("--out needs a file")?)),
+            "--overwrite" => overwrite = true,
+            other if other.starts_with("--") => return Err(format!("unknown option {other}")),
+            other => {
+                if file.is_some() {
+                    return Err("only one project or sketch can be exported".to_owned());
+                }
+                file = Some(PathBuf::from(other));
+            }
+        }
+    }
+    let file = file.ok_or("sketch-export needs a project or a sketch file")?;
+    let dxf = match word.as_deref().ok_or("sketch-export needs --format")? {
+        "dxf" => true,
+        "svg" => false,
+        other => return Err(format!("{other}: unknown format (dxf or svg)")),
+    };
+    let lang = Lang::En;
+    let (settings, ui) = load_settings(config.as_deref())?;
+    let solver = load_solver_settings(config.as_deref())?;
+    let (sketch, project) = if shot::is_sketch_file(&file) {
+        let sketch = eh3d_phoenix_cad::sketch::file::read_file(&file, &solver)
+            .map_err(|e| format!("{}: {}", file.display(), error_text(&e, lang)))?;
+        (sketch, None)
+    } else {
+        let mut win =
+            Window::new(lang, settings.clone(), ui.clone()).map_err(|e| error_text(&e, lang))?;
+        win.sketch_settings = solver.clone();
+        if !win.open(&file) {
+            return Err(format!("{}: {}", file.display(), win.status.text(lang)));
+        }
+        let sketch = win
+            .find_sketch(name.as_deref())
+            .map_err(|e| error_text(&e, lang))?;
+        (sketch, Some(file.clone()))
+    };
+    let text = eh3d_phoenix_cad::sketch_export::render(&sketch, &solver, &settings.drawing, dxf)
+        .map_err(|e| error_text(&e, lang))?;
+    let target = out.unwrap_or_else(|| {
+        PathBuf::from(format!(
+            "{}.{}",
+            sketch.name(),
+            if dxf { "dxf" } else { "svg" }
+        ))
+    });
+    let written = eh3d_phoenix_cad::export::write_file(
+        &target,
+        &text,
+        overwrite,
+        project.as_deref(),
+        ui.export.max_kib,
+    )
+    .map_err(|e| error_text(&e, lang))?;
+    println!("{}: {written} bytes", target.display());
+    Ok(true)
+}
+
 /// `library`: reads a library of parts, checks it against the settings and lists its parts.
 fn run_library(args: &[String]) -> Result<bool, String> {
     let (file, config) = file_and_config(args, "library file")?;
@@ -387,6 +465,7 @@ fn run(args: &[String]) -> Result<bool, String> {
         "clearance" => run_clearance(rest),
         "placements" => run_placements(rest),
         "holes" => run_holes(rest),
+        "sketch-export" => run_sketch_export(rest),
         "library" => run_library(rest),
         "export" => run_export(rest),
         "gui" => Err("this build has no window: build it with --features gui".to_owned()),
@@ -402,7 +481,7 @@ fn window_request(args: &[String]) -> Option<Result<shot::WindowArgs, String>> {
         None | Some("gui") => {}
         Some(
             "help" | "--help" | "-h" | "config" | "check" | "interference" | "bill" | "cutplan"
-            | "clearance" | "placements" | "holes" | "library" | "export",
+            | "clearance" | "placements" | "holes" | "sketch-export" | "library" | "export",
         ) => return None,
         Some(first) if first.starts_with("--") => {}
         Some(first) => {
