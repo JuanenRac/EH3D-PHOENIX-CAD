@@ -255,6 +255,8 @@ pub enum Constraint {
     Tangent(ElementId, ElementId),
     /// Two lines have the same length, or two circles or arcs the same radius.
     Equal(ElementId, ElementId),
+    /// Two lines lie on one and the same line (they are parallel and one is on the other).
+    Collinear(ElementId, ElementId),
     /// Two points are mirror images across a line.
     SymmetricLine {
         /// The first point.
@@ -348,6 +350,26 @@ pub enum Constraint {
         /// The angle.
         dim: Dim<Angle>,
     },
+    /// The distance from a point to the line through a line (the whole line, not only the
+    /// segment). The point keeps the side of the line it is on when the solver starts (a point
+    /// on the line itself counts as being on the left).
+    PointLineDistance {
+        /// The point.
+        point: ElementId,
+        /// The line.
+        line: ElementId,
+        /// The distance.
+        dim: Dim<Length>,
+    },
+    /// The angle from the first axis to the direction of a line, counted counter-clockwise. A
+    /// line has no preferred sense, so an angle and the same angle plus a half turn are the same
+    /// constraint.
+    LineAngle {
+        /// The line.
+        line: ElementId,
+        /// The angle.
+        dim: Dim<Angle>,
+    },
 }
 
 impl Constraint {
@@ -364,6 +386,7 @@ impl Constraint {
             Constraint::Perpendicular(..) => "perpendicular",
             Constraint::Tangent(..) => "tangent",
             Constraint::Equal(..) => "equal",
+            Constraint::Collinear(..) => "collinear",
             Constraint::SymmetricLine { .. } => "symmetric_line",
             Constraint::SymmetricPoint { .. } => "symmetric_point",
             Constraint::Midpoint { .. } => "midpoint",
@@ -375,6 +398,8 @@ impl Constraint {
             Constraint::Radius { .. } => "radius",
             Constraint::Diameter { .. } => "diameter",
             Constraint::AngleBetween { .. } => "angle",
+            Constraint::PointLineDistance { .. } => "point_line_distance",
+            Constraint::LineAngle { .. } => "line_angle",
         }
     }
 
@@ -388,6 +413,7 @@ impl Constraint {
             | Constraint::Perpendicular(a, b)
             | Constraint::Tangent(a, b)
             | Constraint::Equal(a, b)
+            | Constraint::Collinear(a, b)
             | Constraint::Distance { a, b, .. }
             | Constraint::DistanceX { a, b, .. }
             | Constraint::DistanceY { a, b, .. }
@@ -398,7 +424,10 @@ impl Constraint {
             Constraint::SymmetricPoint { a, b, center } => vec![*a, *b, *center],
             Constraint::Midpoint { point, line } => vec![*point, *line],
             Constraint::Fixed { point, .. } => vec![*point],
-            Constraint::LineLength { line, .. } => vec![*line],
+            Constraint::LineLength { line, .. } | Constraint::LineAngle { line, .. } => {
+                vec![*line]
+            }
+            Constraint::PointLineDistance { point, line, .. } => vec![*point, *line],
             Constraint::Radius { round, .. } | Constraint::Diameter { round, .. } => {
                 vec![*round]
             }
@@ -416,6 +445,8 @@ impl Constraint {
                 | Constraint::Radius { .. }
                 | Constraint::Diameter { .. }
                 | Constraint::AngleBetween { .. }
+                | Constraint::PointLineDistance { .. }
+                | Constraint::LineAngle { .. }
         )
     }
 }
@@ -822,6 +853,7 @@ impl Sketch {
             }
             Constraint::Parallel(a, b)
             | Constraint::Perpendicular(a, b)
+            | Constraint::Collinear(a, b)
             | Constraint::AngleBetween { a, b, .. } => {
                 Self::check_distinct(*a, *b)?;
                 self.need(*a, &[Line], "a line")?;
@@ -882,12 +914,21 @@ impl Sketch {
                 self.need(*line, &[Line], "a line")?;
                 self.check_dim_length(dim, true)?;
             }
+            Constraint::PointLineDistance { point, line, dim } => {
+                self.need(*point, &[Point], "a point")?;
+                self.need(*line, &[Line], "a line")?;
+                self.check_dim_length(dim, true)?;
+            }
+            Constraint::LineAngle { line, .. } => {
+                self.need(*line, &[Line], "a line")?;
+            }
             Constraint::Radius { round, dim } | Constraint::Diameter { round, dim } => {
                 self.need(*round, &[Circle, Arc], "a circle or an arc")?;
                 self.check_dim_length(dim, true)?;
             }
         }
-        if let Constraint::AngleBetween { dim, .. } = constraint {
+        if let Constraint::AngleBetween { dim, .. } | Constraint::LineAngle { dim, .. } = constraint
+        {
             if let Some(text) = &dim.expr {
                 check_expr_text(text)?;
             }
@@ -959,6 +1000,7 @@ impl Sketch {
             | Constraint::DistanceX { dim, .. }
             | Constraint::DistanceY { dim, .. }
             | Constraint::LineLength { dim, .. }
+            | Constraint::PointLineDistance { dim, .. }
             | Constraint::Radius { dim, .. }
             | Constraint::Diameter { dim, .. } => {
                 if positive && value <= Length::ZERO {
@@ -992,9 +1034,12 @@ impl Sketch {
             | Constraint::DistanceX { dim, .. }
             | Constraint::DistanceY { dim, .. }
             | Constraint::LineLength { dim, .. }
+            | Constraint::PointLineDistance { dim, .. }
             | Constraint::Radius { dim, .. }
             | Constraint::Diameter { dim, .. } => &mut dim.expr,
-            Constraint::AngleBetween { dim, .. } => &mut dim.expr,
+            Constraint::AngleBetween { dim, .. } | Constraint::LineAngle { dim, .. } => {
+                &mut dim.expr
+            }
             _ => return Err(bad_constraint(format!("{id} is not a dimension"))),
         };
         *slot = expr.map(str::to_string);
@@ -1037,9 +1082,12 @@ impl Sketch {
                 | Constraint::DistanceX { dim, .. }
                 | Constraint::DistanceY { dim, .. }
                 | Constraint::LineLength { dim, .. }
+                | Constraint::PointLineDistance { dim, .. }
                 | Constraint::Radius { dim, .. }
                 | Constraint::Diameter { dim, .. } => (dim.expr.as_deref(), false),
-                Constraint::AngleBetween { dim, .. } => (dim.expr.as_deref(), true),
+                Constraint::AngleBetween { dim, .. } | Constraint::LineAngle { dim, .. } => {
+                    (dim.expr.as_deref(), true)
+                }
                 _ => (None, false),
             };
             let Some(text) = text else { continue };
@@ -1099,11 +1147,15 @@ impl Sketch {
                     | Constraint::DistanceX { dim, .. }
                     | Constraint::DistanceY { dim, .. }
                     | Constraint::LineLength { dim, .. }
+                    | Constraint::PointLineDistance { dim, .. }
                     | Constraint::Radius { dim, .. }
                     | Constraint::Diameter { dim, .. },
                     New::Length(v),
                 ) => dim.value = v,
-                (Constraint::AngleBetween { dim, .. }, New::Angle(v)) => dim.value = v,
+                (
+                    Constraint::AngleBetween { dim, .. } | Constraint::LineAngle { dim, .. },
+                    New::Angle(v),
+                ) => dim.value = v,
                 _ => {}
             }
         }
@@ -1449,5 +1501,95 @@ mod tests {
         s.set_dimension_expr(k, Some("0 mm - 3 mm")).unwrap();
         s.resolve_dimensions(&vars, &settings).unwrap();
         s.set_dimension_expr(k, Some("\n")).unwrap_err();
+    }
+
+    #[test]
+    fn the_collinear_and_the_line_dimensions_are_checked_and_follow_their_expressions() {
+        let settings = Settings::defaults();
+        let vars = Variables::new();
+        let mut s = sketch();
+        let a = s.add_point(mm(0), mm(0)).unwrap();
+        let b = s.add_point(mm(30), mm(0)).unwrap();
+        let c = s.add_point(mm(40), mm(1)).unwrap();
+        let d = s.add_point(mm(60), mm(2)).unwrap();
+        let l1 = s.add_line(a, b).unwrap();
+        let l2 = s.add_line(c, d).unwrap();
+        // collinear ties two different lines
+        s.add_constraint(Constraint::Collinear(l1, l2)).unwrap();
+        assert!(s.add_constraint(Constraint::Collinear(l1, l1)).is_err());
+        assert!(s.add_constraint(Constraint::Collinear(l1, a)).is_err());
+        // a point and a line, and a distance that is positive
+        let ok = Constraint::PointLineDistance {
+            point: c,
+            line: l1,
+            dim: Dim::fixed(mm(4)),
+        };
+        let k = s.add_constraint(ok).unwrap();
+        for bad in [
+            Constraint::PointLineDistance {
+                point: l2,
+                line: l1,
+                dim: Dim::fixed(mm(4)),
+            },
+            Constraint::PointLineDistance {
+                point: c,
+                line: d,
+                dim: Dim::fixed(mm(4)),
+            },
+            Constraint::PointLineDistance {
+                point: c,
+                line: l1,
+                dim: Dim::fixed(mm(0)),
+            },
+            Constraint::LineAngle {
+                line: a,
+                dim: Dim::fixed(Angle::ZERO),
+            },
+        ] {
+            assert!(s.add_constraint(bad).is_err());
+        }
+        s.set_length_dimension(k, mm(7)).unwrap();
+        assert!(s.set_length_dimension(k, mm(0)).is_err());
+        let ka = s
+            .add_constraint(Constraint::LineAngle {
+                line: l2,
+                dim: Dim::with_expr(Angle::ZERO, "30 deg + 15 deg"),
+            })
+            .unwrap();
+        s.set_dimension_expr(k, Some("3 mm + 4 mm")).unwrap();
+        s.resolve_dimensions(&vars, &settings).unwrap();
+        match &s.constraint(k).unwrap().constraint {
+            Constraint::PointLineDistance { dim, .. } => assert_eq!(dim.value, mm(7)),
+            other => panic!("{other:?}"),
+        }
+        match &s.constraint(ka).unwrap().constraint {
+            Constraint::LineAngle { dim, .. } => {
+                assert_eq!(dim.value, Angle::from_deg(45).unwrap());
+            }
+            other => panic!("{other:?}"),
+        }
+        // a length where an angle is wanted
+        s.set_dimension_expr(ka, Some("3 mm")).unwrap();
+        assert!(s.resolve_dimensions(&vars, &settings).is_err());
+        // names, elements and the kinds of dimension
+        let kinds: Vec<(&str, bool, usize)> = s
+            .constraints()
+            .iter()
+            .map(|e| {
+                (
+                    e.constraint.kind_name(),
+                    e.constraint.is_dimension(),
+                    e.constraint.elements().len(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                ("collinear", false, 2),
+                ("point_line_distance", true, 2),
+                ("line_angle", true, 1)
+            ]
+        );
     }
 }

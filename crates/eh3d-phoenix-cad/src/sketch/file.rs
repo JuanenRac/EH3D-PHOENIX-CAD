@@ -73,6 +73,7 @@ fn constraint_text(c: &Constraint) -> String {
         | Constraint::Parallel(a, b)
         | Constraint::Perpendicular(a, b)
         | Constraint::Tangent(a, b)
+        | Constraint::Collinear(a, b)
         | Constraint::Equal(a, b) => format!("{name} {a} {b}"),
         Constraint::PointOnObject { point, object } => format!("{name} {point} {object}"),
         Constraint::Horizontal(l) | Constraint::Vertical(l) => format!("{name} {l}"),
@@ -93,6 +94,12 @@ fn constraint_text(c: &Constraint) -> String {
         }
         Constraint::AngleBetween { a, b, dim } => {
             format!("{name} {a} {b} {}{}", dim.value.get(), dim_tail(dim))
+        }
+        Constraint::PointLineDistance { point, line, dim } => {
+            format!("{name} {point} {line} {}{}", dim.value.get(), dim_tail(dim))
+        }
+        Constraint::LineAngle { line, dim } => {
+            format!("{name} {line} {}{}", dim.value.get(), dim_tail(dim))
         }
     }
 }
@@ -181,7 +188,15 @@ fn parse_constraint(
     let id = |i: usize| element_id(line, words[i]);
     let has_expr_ok = matches!(
         kind,
-        "distance" | "distance_x" | "distance_y" | "length" | "radius" | "diameter" | "angle"
+        "distance"
+            | "distance_x"
+            | "distance_y"
+            | "length"
+            | "radius"
+            | "diameter"
+            | "angle"
+            | "point_line_distance"
+            | "line_angle"
     );
     if expr.is_some() && !has_expr_ok {
         return Err(bad(line, format!("{kind} has no expression")));
@@ -194,7 +209,7 @@ fn parse_constraint(
     };
     let c = match kind {
         "coincident" | "horizontal_points" | "vertical_points" | "parallel" | "perpendicular"
-        | "tangent" | "equal" | "point_on_object" | "midpoint" => {
+        | "tangent" | "equal" | "point_on_object" | "midpoint" | "collinear" => {
             exactly(line, kind, words, 2)?;
             let (a, b) = (id(0)?, id(1)?);
             match kind {
@@ -205,6 +220,7 @@ fn parse_constraint(
                 "perpendicular" => Constraint::Perpendicular(a, b),
                 "tangent" => Constraint::Tangent(a, b),
                 "equal" => Constraint::Equal(a, b),
+                "collinear" => Constraint::Collinear(a, b),
                 "point_on_object" => Constraint::PointOnObject {
                     point: a,
                     object: b,
@@ -267,6 +283,25 @@ fn parse_constraint(
                 Constraint::Radius { round, dim }
             } else {
                 Constraint::Diameter { round, dim }
+            }
+        }
+        "point_line_distance" => {
+            exactly(line, kind, words, 3)?;
+            Constraint::PointLineDistance {
+                point: id(0)?,
+                line: id(1)?,
+                dim: len_dim(2)?,
+            }
+        }
+        "line_angle" => {
+            exactly(line, kind, words, 2)?;
+            Constraint::LineAngle {
+                line: id(0)?,
+                dim: Dim {
+                    value: Angle::new(number(line, words[1])?)
+                        .map_err(|e| bad(line, e.to_string()))?,
+                    expr,
+                },
             }
         }
         "angle" => {
@@ -688,5 +723,61 @@ mod tests {
             "PHOENIX-CAD-012"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_collinear_and_the_line_dimensions_are_written_and_read_back() {
+        let mut k = sketch();
+        let a = k.add_point(mm(0), mm(0)).unwrap();
+        let b = k.add_point(mm(10), mm(0)).unwrap();
+        let c = k.add_point(mm(20), mm(0)).unwrap();
+        let d = k.add_point(mm(30), mm(1)).unwrap();
+        let l1 = k.add_line(a, b).unwrap();
+        let l2 = k.add_line(c, d).unwrap();
+        k.add_constraint(Constraint::Collinear(l1, l2)).unwrap();
+        k.add_constraint(Constraint::PointLineDistance {
+            point: d,
+            line: l1,
+            dim: Dim::fixed(mm(5)),
+        })
+        .unwrap();
+        k.add_constraint(Constraint::LineAngle {
+            line: l2,
+            dim: Dim::with_expr(Angle::from_deg(30).unwrap(), "20 deg + 10 deg"),
+        })
+        .unwrap();
+        let text = to_text(&k);
+        assert!(text.contains("c1 on collinear e5 e6\n"), "{text}");
+        assert!(
+            text.contains("c2 on point_line_distance e4 e5 5000000\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("c3 on line_angle e6 30000000000 = 20 deg + 10 deg\n"),
+            "{text}"
+        );
+        let back = from_text(&text).unwrap();
+        assert_eq!(back, k);
+        assert_eq!(to_text(&back), text);
+        // the number of values is checked for each kind
+        for bad in [
+            "c1 on collinear e5\n",
+            "c1 on collinear e5 e6 e7\n",
+            "c1 on point_line_distance e4 e5\n",
+            "c1 on line_angle e6\n",
+            "c1 on line_angle e6 x\n",
+        ] {
+            let broken = text
+                .lines()
+                .take_while(|l| !l.starts_with("c1 "))
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n"
+                + bad;
+            assert!(from_text(&broken).is_err(), "{bad}");
+        }
+        // collinear has no expression
+        let with_expr = text.replace("c1 on collinear e5 e6", "c1 on collinear e5 e6 = 3");
+        assert!(from_text(&with_expr).is_err());
     }
 }

@@ -353,6 +353,8 @@ pub enum ConstraintTool {
     Tangent,
     /// Two lines or two circles are the same size.
     Equal,
+    /// Two lines lie on one line.
+    Collinear,
     /// Two points are mirror images across a line or through a point.
     Symmetric,
     /// A point is the midpoint of a line.
@@ -363,7 +365,7 @@ pub enum ConstraintTool {
 
 impl ConstraintTool {
     /// Every tool, in the order of the panel.
-    pub const ALL: [ConstraintTool; 11] = [
+    pub const ALL: [ConstraintTool; 12] = [
         ConstraintTool::Coincident,
         ConstraintTool::PointOnObject,
         ConstraintTool::Horizontal,
@@ -372,6 +374,7 @@ impl ConstraintTool {
         ConstraintTool::Perpendicular,
         ConstraintTool::Tangent,
         ConstraintTool::Equal,
+        ConstraintTool::Collinear,
         ConstraintTool::Symmetric,
         ConstraintTool::Midpoint,
         ConstraintTool::Fixed,
@@ -388,6 +391,7 @@ impl ConstraintTool {
             ConstraintTool::Perpendicular => Msg::CoPerpendicular,
             ConstraintTool::Tangent => Msg::CoTangent,
             ConstraintTool::Equal => Msg::CoEqual,
+            ConstraintTool::Collinear => Msg::CoCollinear,
             ConstraintTool::Symmetric => Msg::CoSymmetric,
             ConstraintTool::Midpoint => Msg::CoMidpoint,
             ConstraintTool::Fixed => Msg::CoFixed,
@@ -412,11 +416,15 @@ pub enum DimTool {
     Diameter,
     /// The angle between two lines.
     Angle,
+    /// The angle between a line and the first axis.
+    LineAngle,
+    /// The distance from a point to a line.
+    PointLine,
 }
 
 impl DimTool {
     /// Every dimension, in the order of the panel.
-    pub const ALL: [DimTool; 7] = [
+    pub const ALL: [DimTool; 9] = [
         DimTool::Distance,
         DimTool::DistanceX,
         DimTool::DistanceY,
@@ -424,6 +432,8 @@ impl DimTool {
         DimTool::Radius,
         DimTool::Diameter,
         DimTool::Angle,
+        DimTool::LineAngle,
+        DimTool::PointLine,
     ];
 
     /// The words that name the dimension.
@@ -436,6 +446,8 @@ impl DimTool {
             DimTool::Radius => Msg::DiRadius,
             DimTool::Diameter => Msg::DiDiameter,
             DimTool::Angle => Msg::DiAngle,
+            DimTool::LineAngle => Msg::DiLineAngle,
+            DimTool::PointLine => Msg::DiPointLine,
         }
     }
 }
@@ -774,6 +786,7 @@ fn constraint_msg(c: &Constraint) -> Msg {
         Constraint::Perpendicular(..) => Msg::CoPerpendicular,
         Constraint::Tangent(..) => Msg::CoTangent,
         Constraint::Equal(..) => Msg::CoEqual,
+        Constraint::Collinear(..) => Msg::CoCollinear,
         Constraint::SymmetricLine { .. } | Constraint::SymmetricPoint { .. } => Msg::CoSymmetric,
         Constraint::Midpoint { .. } => Msg::CoMidpoint,
         Constraint::Fixed { .. } => Msg::CoFixed,
@@ -784,6 +797,8 @@ fn constraint_msg(c: &Constraint) -> Msg {
         Constraint::Radius { .. } => Msg::DiRadius,
         Constraint::Diameter { .. } => Msg::DiDiameter,
         Constraint::AngleBetween { .. } => Msg::DiAngle,
+        Constraint::LineAngle { .. } => Msg::DiLineAngle,
+        Constraint::PointLineDistance { .. } => Msg::DiPointLine,
     }
 }
 
@@ -805,6 +820,7 @@ fn marker_of(c: &Constraint) -> Option<&'static str> {
         Constraint::Perpendicular(..) => Some("+"),
         Constraint::Tangent(..) => Some("T"),
         Constraint::Equal(..) => Some("="),
+        Constraint::Collinear(..) => Some("CL"),
         Constraint::Coincident(..) => Some("C"),
         Constraint::PointOnObject { .. } => Some("O"),
         Constraint::SymmetricLine { .. } | Constraint::SymmetricPoint { .. } => Some("S"),
@@ -1665,6 +1681,9 @@ impl SketchEditor {
             ConstraintTool::Perpendicular if all.len() == 2 && lines.len() == 2 => {
                 vec![Constraint::Perpendicular(lines[0], lines[1])]
             }
+            ConstraintTool::Collinear if all.len() == 2 && lines.len() == 2 => {
+                vec![Constraint::Collinear(lines[0], lines[1])]
+            }
             ConstraintTool::Tangent if all.len() == 2 && !rounds.is_empty() => {
                 vec![Constraint::Tangent(all[0], all[1])]
             }
@@ -1825,6 +1844,34 @@ impl SketchEditor {
                     dim: Dim::fixed(measured),
                 }
             }
+            DimTool::LineAngle if all.len() == 1 && lines.len() == 1 => {
+                let measured = self.sketch.measured_line_angle(lines[0])?;
+                Constraint::LineAngle {
+                    line: lines[0],
+                    dim: Dim::fixed(measured),
+                }
+            }
+            DimTool::PointLine if all.len() == 2 && points.len() == 1 && lines.len() == 1 => {
+                let Some(Element::Line { a, b }) = self.sketch.element(lines[0]).copied() else {
+                    return Err(wrong());
+                };
+                let (p, pa, pb) = (
+                    self.position(points[0]).ok_or_else(wrong)?,
+                    self.position(a).ok_or_else(wrong)?,
+                    self.position(b).ok_or_else(wrong)?,
+                );
+                let (d, w) = ((pb.0 - pa.0, pb.1 - pa.1), (p.0 - pa.0, p.1 - pa.1));
+                let length = dist(pa, pb);
+                if length <= 0.0 {
+                    return Err(wrong());
+                }
+                let away = (d.0 * w.1 - d.1 * w.0).abs() / length;
+                Constraint::PointLineDistance {
+                    point: points[0],
+                    line: lines[0],
+                    dim: Dim::fixed(to_len(away)?),
+                }
+            }
             _ => return Err(wrong()),
         };
         self.sketch.check_constraint(&c)?;
@@ -1898,9 +1945,12 @@ impl SketchEditor {
             | Constraint::DistanceX { dim, .. }
             | Constraint::DistanceY { dim, .. }
             | Constraint::LineLength { dim, .. }
+            | Constraint::PointLineDistance { dim, .. }
             | Constraint::Radius { dim, .. }
             | Constraint::Diameter { dim, .. } => (mm_text(dim.value.get()), dim.expr.clone()),
-            Constraint::AngleBetween { dim, .. } => (degrees_text(dim.value), dim.expr.clone()),
+            Constraint::AngleBetween { dim, .. } | Constraint::LineAngle { dim, .. } => {
+                (degrees_text(dim.value), dim.expr.clone())
+            }
             _ => return None,
         };
         let edit = expr.unwrap_or_else(|| value.clone());
@@ -2564,7 +2614,10 @@ impl SketchEditor {
                 Constraint::Diameter { .. } => "D ",
                 _ => "",
             };
-            let suffix = if matches!(c, Constraint::AngleBetween { .. }) {
+            let suffix = if matches!(
+                c,
+                Constraint::AngleBetween { .. } | Constraint::LineAngle { .. }
+            ) {
                 "\u{b0}"
             } else {
                 ""
@@ -2574,9 +2627,12 @@ impl SketchEditor {
                 | Constraint::DistanceX { dim, .. }
                 | Constraint::DistanceY { dim, .. }
                 | Constraint::LineLength { dim, .. }
+                | Constraint::PointLineDistance { dim, .. }
                 | Constraint::Radius { dim, .. }
                 | Constraint::Diameter { dim, .. } => dim.expr.clone(),
-                Constraint::AngleBetween { dim, .. } => dim.expr.clone(),
+                Constraint::AngleBetween { dim, .. } | Constraint::LineAngle { dim, .. } => {
+                    dim.expr.clone()
+                }
                 _ => None,
             };
             let text = match name {
@@ -2821,7 +2877,7 @@ fn auto_constrain(s: &mut Sketch, ctx: &Ctx, line: ElementId, a: Mm, b: Mm) {
 fn apply_text(s: &mut Sketch, ctx: &Ctx, id: ConstraintId, text: &str) -> Result<(), CadError> {
     let angle = matches!(
         s.constraint(id).map(|c| &c.constraint),
-        Some(Constraint::AngleBetween { .. })
+        Some(Constraint::AngleBetween { .. } | Constraint::LineAngle { .. })
     );
     let numeric = !text.chars().any(char::is_alphabetic);
     let expr = if numeric {
@@ -3324,7 +3380,10 @@ mod tests {
         assert!(e.available().is_empty());
         assert!(e.dimensions_available().is_empty());
         pick(&mut e, &[5]);
-        assert_eq!(e.dimensions_available(), vec![DimTool::Length]);
+        assert_eq!(
+            e.dimensions_available(),
+            vec![DimTool::Length, DimTool::LineAngle]
+        );
         pick(&mut e, &[1, 3]);
         assert_eq!(
             e.dimensions_available(),
@@ -3332,6 +3391,77 @@ mod tests {
         );
         pick(&mut e, &[5, 6]);
         assert_eq!(e.dimensions_available(), vec![DimTool::Angle]);
+    }
+
+    #[test]
+    fn collinear_and_the_two_new_dimensions_are_offered_for_their_selections() {
+        let mut e = editor();
+        rectangle(&mut e);
+        // the bottom side and the top side: two lines can be made collinear
+        pick(&mut e, &[5, 7]);
+        assert!(e.available().contains(&ConstraintTool::Collinear));
+        pick(&mut e, &[1, 3]);
+        assert!(!e.available().contains(&ConstraintTool::Collinear));
+        // a side and its angle with the first axis: the bottom side lies along it
+        pick(&mut e, &[5]);
+        e.add_dimension(DimTool::LineAngle);
+        let angle = e
+            .sketch
+            .constraints()
+            .iter()
+            .find_map(|c| match &c.constraint {
+                Constraint::LineAngle { dim, .. } => Some(dim.value),
+                _ => None,
+            });
+        assert_eq!(angle, Some(Angle::ZERO));
+        // a corner and the opposite side: 40 mm apart; a corner and a side through it: not offered
+        let mut e = editor();
+        rectangle(&mut e);
+        pick(&mut e, &[1, 6]);
+        assert_eq!(e.dimensions_available(), vec![DimTool::PointLine]);
+        e.add_dimension(DimTool::PointLine);
+        let away = e
+            .sketch
+            .constraints()
+            .iter()
+            .find_map(|c| match &c.constraint {
+                Constraint::PointLineDistance { dim, .. } => Some(dim.value),
+                _ => None,
+            });
+        assert_eq!(away, Some(mm(40.0)));
+        pick(&mut e, &[1, 5]);
+        assert!(!e.dimensions_available().contains(&DimTool::PointLine));
+        // every new constraint and dimension has a name, a value to show and a sign
+        let mut e = editor();
+        rectangle(&mut e);
+        pick(&mut e, &[5, 7]);
+        e.add_constraint(ConstraintTool::Collinear);
+        assert!(e
+            .sketch
+            .constraints()
+            .iter()
+            .any(|c| matches!(c.constraint, Constraint::Collinear(..))));
+        for t in [ConstraintTool::Collinear] {
+            for l in Lang::ALL {
+                assert!(!t.msg().tr(l).is_empty());
+            }
+        }
+        assert_eq!(
+            constraint_msg(&Constraint::Collinear(ElementId(5), ElementId(7))),
+            Msg::CoCollinear
+        );
+        assert_eq!(
+            marker_of(&Constraint::Collinear(ElementId(5), ElementId(7))),
+            Some("CL")
+        );
+        let line_angle = Constraint::LineAngle {
+            line: ElementId(5),
+            dim: Dim::fixed(Angle::from_deg(30).unwrap()),
+        };
+        assert_eq!(
+            SketchEditor::dimension_texts(&line_angle),
+            Some(("30".to_owned(), "30".to_owned()))
+        );
     }
 
     #[test]

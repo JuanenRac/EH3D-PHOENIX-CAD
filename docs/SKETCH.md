@@ -34,6 +34,7 @@ Geometric:
 | Perpendicular | two lines are perpendicular | 1 |
 | Tangent | a line touches a circle or an arc, or two of those touch | 1 |
 | Equal | two lines have the same length, or two circles or arcs the same radius | 1 |
+| Collinear | two lines lie on one and the same line | 2 |
 | Symmetric about a line | two points are mirror images across a line | 2 |
 | Symmetric about a point | two points are mirror images through a point | 2 |
 | Midpoint | a point is the midpoint of a line | 2 |
@@ -48,10 +49,12 @@ Dimensional (each has a value):
 | Length | of a line, positive |
 | Radius / Diameter | of a circle or an arc, positive |
 | Angle | from the direction of the first line to the direction of the second, counter-clockwise |
+| Angle to the horizontal | from the first axis to the direction of a line, counter-clockwise (a half turn is the same line) |
+| Distance from a point to a line | from a point to the whole line through a line, positive; the point keeps the side of the line it is on when the solver starts |
 
 A constraint is checked when it is added: the elements must exist and be of the right kind, the same element cannot be tied to itself, and a dimension that must be positive is positive (`PHOENIX-CAD-032`). A constraint can be turned off without removing it; the solver ignores it.
 
-Two choices that the solver makes from where the drawing is when it starts, because the equations hold on both sides: a **tangent** keeps the side of the line the centre is on (or whether two circles touch from outside or one lies inside the other), and an **angle** is a direction, so an angle and the same angle plus a half turn are the same constraint and the one nearer to the drawing is kept. Draw the sketch roughly as it should be and the solver keeps it that way.
+Two choices that the solver makes from where the drawing is when it starts, because the equations hold on both sides: a **tangent** keeps the side of the line the centre is on (or whether two circles touch from outside or one lies inside the other), a **distance from a point to a line** keeps the side the point is on, and an **angle** (between two lines or to the horizontal) is a direction, so an angle and the same angle plus a half turn are the same constraint and the one nearer to the drawing is kept. Draw the sketch roughly as it should be and the solver keeps it that way. The constraints collinear, distance from a point to a line and angle to the horizontal are written in the sketch file as `collinear`, `point_line_distance` and `line_angle`; a program that does not know them refuses the file and names the kind, so a sketch that uses them should not be shared with an older program.
 
 ## Dimensions that follow the variables
 
@@ -143,17 +146,17 @@ The window has a **Sketch** part beside the **Box** part (the switch in the top 
 | Selection | Constraints offered |
 |---|---|
 | two points | coincident, horizontal, vertical |
-| lines | horizontal, vertical (each line), parallel, perpendicular and equal (two lines) |
+| lines | horizontal, vertical (each line), parallel, perpendicular, collinear and equal (two lines) |
 | a point and a line, circle or arc | point on object; with a line also midpoint |
 | a line and a circle or arc, or two of those | tangent; equal for two circles or arcs |
 | three points, or two points and a line | symmetric about a point, or about the line |
 | points | fixed (each one where it is) |
 
-* **Dimensions** (the right panel): the distance, the horizontal and vertical distance of two points, the length of a line, the radius or diameter of a circle or arc and the angle of two lines. A dimension starts with the value the drawing has, or with the text typed in the box above the buttons; the value of a dimension that exists is edited in its own line. The text is a number (millimetres, or degrees for an angle), a length with its unit, a variable of the project (`width`) or a formula (`width / 2 + 2 mm`); a number stays a plain value and anything else is kept as the expression of the dimension and follows the variables. A text the model refuses leaves the sketch as it was.
+* **Dimensions** (the right panel): the distance, the horizontal and vertical distance of two points, the length of a line, the radius or diameter of a circle or arc, the angle of two lines, the angle of one line to the horizontal and the distance from a point to a line. A dimension starts with the value the drawing has, or with the text typed in the box above the buttons; the value of a dimension that exists is edited in its own line. The text is a number (millimetres, or degrees for an angle), a length with its unit, a variable of the project (`width`) or a formula (`width / 2 + 2 mm`); a number stays a plain value and anything else is kept as the expression of the dimension and follows the variables. A text the model refuses leaves the sketch as it was.
 * **Dragging**: a point, a line (both its points), a circle or an arc (its centre) is dragged with the solver running at each move, with the dragged points held at the pointer, so what is tied to them follows and what cannot move stays. When the constraints between the dragged points forbid holding all of them, only the first is held. A point dropped on another point is made coincident with it. The whole drag is one step of the history, and Escape puts everything back.
 * **State of the sketch**: an indicator and a sentence after every change. *Green*: fully constrained. *Amber*: degrees of freedom left (or nothing drawn). *Red*: over-constrained (the constraints that repeat or contradict the others are listed, drawn in the colours of the list, and one button switches them off, the latest named one first, until the sketch holds together) or no solution found. A constraint that makes the sketch red is kept so that it can be seen; each constraint has a switch to turn it off and a button to remove it.
 * **History and file**: undo and redo go back and forward through the changes of the window (`undo.depth` changes are kept); the sketch is opened and saved as a `.phoenixsketch` file, by name, by the buttons, with Ctrl+O and Ctrl+S, or by dropping the file on the window; the button *Keep in project* puts the sketch in the project under the name typed beside it.
-* **Canvas**: the grid (lines every `grid` millimetres, drawn every tenth line when they would crowd each other), the axes, the wheel to zoom around the pointer, the middle button or Space with a drag to pan, a double click to fit the drawing. The signs of the constraints (`H`, `V`, `//`, `+`, `T`, `=`, `C`, `O`, `S`, `M`, `F`) and the dimensions are drawn beside what they are about.
+* **Canvas**: the grid (lines every `grid` millimetres, drawn every tenth line when they would crowd each other), the axes, the wheel to zoom around the pointer, the middle button or Space with a drag to pan, a double click to fit the drawing. The signs of the constraints (`H`, `V`, `//`, `+`, `T`, `=`, `CL`, `C`, `O`, `S`, `M`, `F`) and the dimensions are drawn beside what they are about.
 
 The picture mode takes a sketch: `eh3d-phoenix-cad gui box.phoenixsketch --view sketch --shot sketch.png`. `eh3d-phoenix-cad config` writes the settings of the solver and of the sketch window with the other settings.
 

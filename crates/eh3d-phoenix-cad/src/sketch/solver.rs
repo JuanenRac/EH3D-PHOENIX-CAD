@@ -219,6 +219,15 @@ impl<'a> Model<'a> {
     /// for two circles that touch from outside and `+1`/`-1` (the sign of the difference of the
     /// radii) when one is inside the other.
     fn branch_of(&self, c: &Constraint, x: &[f64]) -> f64 {
+        if let Constraint::PointLineDistance { point, line, .. } = c {
+            // the side of the line the point is on, from where the sketch is now
+            let (p, q) = self.line_ends(x, *line);
+            return if side(self.pt(x, *point), p, q) < 0.0 {
+                -1.0
+            } else {
+                1.0
+            };
+        }
         let Constraint::Tangent(a, b) = c else {
             return 1.0;
         };
@@ -375,6 +384,24 @@ impl<'a> Model<'a> {
                 let cos = dim.value.cos() as f64 / 1e9;
                 let sin = dim.value.sin() as f64 / 1e9;
                 out.push((cross * cos - dot * sin) / norm(d2));
+            }
+            Constraint::Collinear(a, b) => {
+                let ((p1, q1), (p2, q2)) = (self.line_ends(x, *a), self.line_ends(x, *b));
+                let (d1, d2) = ((q1.0 - p1.0, q1.1 - p1.1), (q2.0 - p2.0, q2.1 - p2.1));
+                out.push((d1.0 * d2.1 - d1.1 * d2.0) / norm(d2));
+                out.push(side(p2, p1, q1));
+            }
+            Constraint::PointLineDistance { point, line, dim } => {
+                let (p, q) = self.line_ends(x, *line);
+                out.push(self.branch[k] * side(self.pt(x, *point), p, q) - mm_of(dim.value));
+            }
+            Constraint::LineAngle { line, dim } => {
+                let (p, q) = self.line_ends(x, *line);
+                let d = (q.0 - p.0, q.1 - p.1);
+                let cos = dim.value.cos() as f64 / 1e9;
+                let sin = dim.value.sin() as f64 / 1e9;
+                // the first axis is (1, 0): its cross product with d is d.1 and its dot product d.0
+                out.push((d.1 * cos - d.0 * sin) / norm(d));
             }
         }
     }
@@ -737,33 +764,51 @@ impl Sketch {
             ));
         }
         let ((p1, q1), (p2, q2)) = (model.line_ends(&x, a), model.line_ends(&x, b));
-        let (d1, d2) = ((q1.0 - p1.0, q1.1 - p1.1), (q2.0 - p2.0, q2.1 - p2.1));
-        let cross = d1.0 * d2.1 - d1.1 * d2.0;
-        let dot_product = d1.0 * d2.0 + d1.1 * d2.1;
-        let half: i64 = 180_000_000_000;
-        if cross == 0.0 {
-            return Angle::new(if dot_product >= 0.0 { 0 } else { half });
-        }
-        // the first direction turned by theta, crossed with the second, is positive before the
-        // angle and negative after it, inside the half turn on the side the cross product gives
-        let turned = |theta: i64| -> Result<f64, CadError> {
-            let t = Angle::new(theta)?;
-            let c = t.cos() as f64 / 1e9;
-            let s = t.sin() as f64 / 1e9;
-            let v = (d1.0 * c - d1.1 * s, d1.0 * s + d1.1 * c);
-            Ok(v.0 * d2.1 - v.1 * d2.0)
-        };
-        let (mut lo, mut hi) = if cross > 0.0 { (0, half) } else { (-half, 0) };
-        while hi - lo > 1 {
-            let mid = lo + (hi - lo) / 2;
-            if turned(mid)? > 0.0 {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
-        }
-        Angle::new(hi)
+        vector_angle((q1.0 - p1.0, q1.1 - p1.1), (q2.0 - p2.0, q2.1 - p2.1))
     }
+
+    /// The angle from the first axis to the direction of a line, found as
+    /// [`Sketch::measured_angle`] finds the angle between two lines.
+    pub fn measured_line_angle(&self, line: ElementId) -> Result<Angle, CadError> {
+        let (model, x) = Model::new(self);
+        if !model.is_line(line) {
+            return Err(CadError::SketchConstraint(
+                "an angle to the axis is of a line".into(),
+            ));
+        }
+        let (p, q) = model.line_ends(&x, line);
+        vector_angle((1.0, 0.0), (q.0 - p.0, q.1 - p.1))
+    }
+}
+
+/// The angle from the direction `d1` to the direction `d2`, counter-clockwise, from 0 to a half
+/// turn (excluded) or, when it is a half turn exactly, the half turn.
+fn vector_angle(d1: Pt, d2: Pt) -> Result<Angle, CadError> {
+    let cross = d1.0 * d2.1 - d1.1 * d2.0;
+    let dot_product = d1.0 * d2.0 + d1.1 * d2.1;
+    let half: i64 = 180_000_000_000;
+    if cross == 0.0 {
+        return Angle::new(if dot_product >= 0.0 { 0 } else { half });
+    }
+    // the first direction turned by theta, crossed with the second, is positive before the
+    // angle and negative after it, inside the half turn on the side the cross product gives
+    let turned = |theta: i64| -> Result<f64, CadError> {
+        let t = Angle::new(theta)?;
+        let c = t.cos() as f64 / 1e9;
+        let s = t.sin() as f64 / 1e9;
+        let v = (d1.0 * c - d1.1 * s, d1.0 * s + d1.1 * c);
+        Ok(v.0 * d2.1 - v.1 * d2.0)
+    };
+    let (mut lo, mut hi) = if cross > 0.0 { (0, half) } else { (-half, 0) };
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if turned(mid)? > 0.0 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    Angle::new(hi)
 }
 
 #[cfg(test)]
@@ -1339,5 +1384,126 @@ mod tests {
     fn an_empty_sketch_is_solved_with_nothing_free() {
         let mut k = sketch();
         assert_eq!(solved(&mut k), 0);
+    }
+
+    #[test]
+    fn two_collinear_lines_end_on_one_line() {
+        let mut k = sketch();
+        let a = k.add_point(mm(0), mm(0)).unwrap();
+        let b = k.add_point(mm(10), mm(0)).unwrap();
+        let c = k.add_point(mm(20), mm(3)).unwrap();
+        let d = k.add_point(mm(35), mm(2)).unwrap();
+        let la = k.add_line(a, b).unwrap();
+        let lb = k.add_line(c, d).unwrap();
+        k.fix_point(a).unwrap();
+        k.fix_point(b).unwrap();
+        k.add_constraint(Constraint::Collinear(la, lb)).unwrap();
+        k.add_constraint(Constraint::DistanceX {
+            a,
+            b: c,
+            dim: Dim::fixed(mm(20)),
+        })
+        .unwrap();
+        // the second line still slides along the first: 8 unknowns, 4 + 2 + 1 conditions
+        assert_eq!(solved(&mut k), 1);
+        k.add_constraint(Constraint::DistanceX {
+            a: c,
+            b: d,
+            dim: Dim::fixed(mm(15)),
+        })
+        .unwrap();
+        assert_eq!(solved(&mut k), 0);
+        assert_eq!(k.point(c).unwrap(), (mm(20), mm(0)));
+        assert_eq!(k.point(d).unwrap(), (mm(35), mm(0)));
+    }
+
+    #[test]
+    fn a_point_keeps_its_side_of_the_line_at_the_distance_given() {
+        for (start, end) in [(-3, -5), (3, 5)] {
+            let mut k = sketch();
+            let a = k.add_point(mm(0), mm(0)).unwrap();
+            let b = k.add_point(mm(10), mm(0)).unwrap();
+            let line = k.add_line(a, b).unwrap();
+            k.fix_point(a).unwrap();
+            k.fix_point(b).unwrap();
+            let p = k.add_point(mm(4), mm(start)).unwrap();
+            k.add_constraint(Constraint::PointLineDistance {
+                point: p,
+                line,
+                dim: Dim::fixed(mm(5)),
+            })
+            .unwrap();
+            // the point can still slide along a parallel to the line
+            assert_eq!(solved(&mut k), 1);
+            k.add_constraint(Constraint::DistanceX {
+                a,
+                b: p,
+                dim: Dim::fixed(mm(4)),
+            })
+            .unwrap();
+            assert_eq!(solved(&mut k), 0);
+            assert_eq!(k.point(p).unwrap(), (mm(4), mm(end)));
+        }
+    }
+
+    #[test]
+    fn a_line_takes_the_angle_to_the_first_axis() {
+        let mut k = sketch();
+        let o = k.add_point(mm(0), mm(0)).unwrap();
+        let e = k.add_point(mm(10), mm(1)).unwrap();
+        let line = k.add_line(o, e).unwrap();
+        k.fix_point(o).unwrap();
+        k.add_constraint(Constraint::LineLength {
+            line,
+            dim: Dim::fixed(mm(10)),
+        })
+        .unwrap();
+        let angle = k
+            .add_constraint(Constraint::LineAngle {
+                line,
+                dim: Dim::fixed(Angle::from_deg(30).unwrap()),
+            })
+            .unwrap();
+        assert_eq!(solved(&mut k), 0);
+        // 10 cos 30 = 8.660254037844386, 10 sin 30 = 5
+        assert_eq!(k.point(e).unwrap(), (nm(8_660_254), mm(5)));
+        let measured = k.measured_line_angle(line).unwrap();
+        assert!(
+            (measured.get() - 30_000_000_000).abs() < 1_000_000,
+            "{measured:?}"
+        );
+        // 120 degrees: up and to the left
+        k.remove_constraint(angle).unwrap();
+        k.add_constraint(Constraint::LineAngle {
+            line,
+            dim: Dim::fixed(Angle::from_deg(120).unwrap()),
+        })
+        .unwrap();
+        assert_eq!(solved(&mut k), 0);
+        let (x, y) = k.point(e).unwrap();
+        assert!((x.get() + 5_000_000).abs() < 2, "{x:?}");
+        assert!((y.get() - 8_660_254).abs() < 2, "{y:?}");
+        // only lines have an angle to the axis
+        assert!(k.measured_line_angle(o).is_err());
+    }
+
+    #[test]
+    fn collinear_lines_that_already_are_add_nothing_when_repeated() {
+        let mut k = sketch();
+        let a = k.add_point(mm(0), mm(0)).unwrap();
+        let b = k.add_point(mm(10), mm(0)).unwrap();
+        let c = k.add_point(mm(20), mm(0)).unwrap();
+        let d = k.add_point(mm(30), mm(0)).unwrap();
+        let la = k.add_line(a, b).unwrap();
+        let lb = k.add_line(c, d).unwrap();
+        k.add_constraint(Constraint::Collinear(la, lb)).unwrap();
+        k.add_constraint(Constraint::Parallel(la, lb)).unwrap();
+        match k.solve(&s()).unwrap() {
+            Outcome::OverConstrained { redundant, .. } => {
+                // the second constraint is the repeated one, listed with the first
+                assert!(redundant.contains(&ConstraintId(2)), "{redundant:?}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }
