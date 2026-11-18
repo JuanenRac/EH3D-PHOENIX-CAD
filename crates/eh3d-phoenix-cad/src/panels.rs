@@ -37,6 +37,8 @@ pub enum Panel {
     Clearance,
     /// The table of placements and the exploded view.
     Placements,
+    /// The list of the placed parts with their properties.
+    PartList,
     /// The mass and the centre of mass.
     Balance,
     /// A sketch written as a DXF or SVG drawing.
@@ -47,11 +49,12 @@ pub enum Panel {
 
 impl Panel {
     /// Every panel, in the order of the menu.
-    pub const ALL: [Panel; 7] = [
+    pub const ALL: [Panel; 8] = [
         Panel::CutPlan,
         Panel::Holes,
         Panel::Clearance,
         Panel::Placements,
+        Panel::PartList,
         Panel::Balance,
         Panel::SketchExport,
         Panel::Revolve,
@@ -64,6 +67,7 @@ impl Panel {
             Panel::Holes => Msg::PanelHoles,
             Panel::Clearance => Msg::PanelClearance,
             Panel::Placements => Msg::PanelPlacements,
+            Panel::PartList => Msg::PanelPartList,
             Panel::Balance => Msg::PanelBalance,
             Panel::SketchExport => Msg::PanelSketchExport,
             Panel::Revolve => Msg::PanelRevolve,

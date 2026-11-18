@@ -28,6 +28,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad cutplan PROJECT.phoenixproj [--text] [--lang CODE] [--config FILE]            the cutting plan of the profiles placed in a project: the pieces of the cut list fitted into bars (the longest cut each profile comes in) with the kerf of the saw and the trimmed ends, as comma separated values or, with --text, as lines for a person
   eh3d-phoenix-cad clearance PROJECT.phoenixproj [--text] [--lang CODE] [--config FILE]                  lists, as comma separated values, the pairs of placed parts that do not touch and are closer than clearance.min_gap (exit 1 when there is one)
   eh3d-phoenix-cad placements PROJECT.phoenixproj [--explode PERCENT] [--text] [--lang CODE] [--config FILE]   where each placed part is (the corner and the size in millimetres and the turn) and the size of the whole assembly, as comma separated values; with --explode the parts are first pulled apart from the middle of the assembly by that percentage
+  eh3d-phoenix-cad partlist PROJECT.phoenixproj [--text] [--lang CODE] [--config FILE]           the placed parts with their properties (name, kind, part, material, density, volume, mass, corner and size of the box) and the totals, as comma separated values; --text prints lines for a person in the language of --lang (any of the eight)
   eh3d-phoenix-cad holes PROJECT.phoenixproj [--tools] [--text] [--lang CODE] [--config FILE]            the schedule of the holes of the box for the person who drills (a tag, the face, the position, the diameter and the shape of each) as comma separated values, or with --tools the drills and cutters they need grouped by diameter and shape
   eh3d-phoenix-cad sketch-export PROJECT.phoenixproj|SKETCH.phoenixsketch --format dxf|svg [--sketch NAME] [--out FILE] [--overwrite] [--lang CODE] [--config FILE]   writes a sketch (the only one of the project, or the one named) as a flat drawing of its closed outlines for a laser or a router; never over a file that exists unless --overwrite is given
   eh3d-phoenix-cad balance PROJECT.phoenixproj [--lang CODE] [--config FILE]                     the mass of the placed parts and where their centre of mass is (exact for profiles, an estimate for screws and brackets, and the number of estimated parts is said)
@@ -270,6 +271,23 @@ fn run_placements(args: &[String]) -> Result<bool, String> {
         win.placement_text(explode)
     } else {
         win.placement_csv_text(explode)
+    }
+    .map_err(|e| error_text(&e, lang))?;
+    print!("{out}");
+    Ok(win.info.failed == 0)
+}
+
+/// `partlist`: reads a project and prints the placed parts with their properties and the totals.
+fn run_partlist(args: &[String]) -> Result<bool, String> {
+    let (lang, args) = take_lang(args)?;
+    let text = args.iter().any(|a| a == "--text");
+    let rest: Vec<String> = args.iter().filter(|a| *a != "--text").cloned().collect();
+    let (file, config) = file_and_config(&rest, "project file")?;
+    let win = open_for_report(&file, config.as_deref(), lang)?;
+    let out = if text {
+        win.part_list_text()
+    } else {
+        win.part_list_csv()
     }
     .map_err(|e| error_text(&e, lang))?;
     print!("{out}");
@@ -775,6 +793,7 @@ fn run(args: &[String]) -> Result<bool, String> {
         "clearance" => run_clearance(rest),
         "placements" => run_placements(rest),
         "holes" => run_holes(rest),
+        "partlist" => run_partlist(rest),
         "balance" => run_balance(rest),
         "revolve" => run_revolve(rest),
         "sweep" => run_sweep(rest),
@@ -794,7 +813,7 @@ fn window_request(args: &[String]) -> Option<Result<shot::WindowArgs, String>> {
         None | Some("gui") => {}
         Some(
             "help" | "--help" | "-h" | "config" | "check" | "interference" | "bill" | "cutplan"
-            | "clearance" | "placements" | "holes" | "balance" | "revolve" | "sweep"
+            | "clearance" | "placements" | "holes" | "partlist" | "balance" | "revolve" | "sweep"
             | "sketch-export" | "library" | "export",
         ) => return None,
         Some(first) if first.starts_with("--") => {}

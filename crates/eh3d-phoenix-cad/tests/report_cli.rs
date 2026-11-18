@@ -383,3 +383,49 @@ fn the_triangles_of_a_turned_or_swept_solid_are_written_in_the_format_of_the_ext
     let obj = fs::read_to_string(&tube).unwrap();
     assert!(obj.contains("\no profile\n"), "{obj}");
 }
+#[test]
+fn the_part_list_is_csv_for_a_program_and_text_for_a_person() {
+    let (code, csv, err) = run(&["partlist", FRAME]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        csv.starts_with("name,kind,part,material,density_kg_m3,volume_mm3,mass_g,"),
+        "{csv}"
+    );
+    assert_eq!(csv.lines().count(), 20);
+    assert!(
+        csv.lines().last().unwrap().starts_with("total,18 parts,"),
+        "{csv}"
+    );
+    // the mass of the list is the mass of the balance
+    let (_, balance, _) = run(&["balance", FRAME]);
+    let grams = balance
+        .lines()
+        .find_map(|l| l.strip_prefix("mass: "))
+        .unwrap()
+        .to_owned();
+    assert!(
+        csv.lines()
+            .last()
+            .unwrap()
+            .contains(&format!(",{}", grams.trim_end_matches(" g"))),
+        "{csv} {grams}"
+    );
+    let (code, text, _) = run(&["partlist", FRAME, "--text", "--lang", "es"]);
+    assert_eq!(code, 0);
+    assert!(text.contains(" (perfil, "), "{text}");
+    assert!(
+        text.lines()
+            .last()
+            .unwrap()
+            .starts_with("piezas: 18, volumen: "),
+        "{text}"
+    );
+    // the language alone is enough, and a language that is not one is refused
+    let (_, de, _) = run(&["partlist", FRAME, "--lang", "de"]);
+    assert!(de.starts_with("name,kind,"));
+    let (code, _, err) = run(&["partlist", FRAME, "--lang", "xx"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("unknown language"), "{err}");
+    let (code, _, _) = run(&["partlist"]);
+    assert_eq!(code, 1);
+}

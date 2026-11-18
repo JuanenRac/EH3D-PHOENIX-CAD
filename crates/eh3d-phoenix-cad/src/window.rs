@@ -1960,6 +1960,23 @@ impl Window {
         crate::balance::balance(&placed, &self.settings.materials)
     }
 
+    /// The placed parts (with the mates applied) with their kind, material, volume, mass and box
+    /// (see [`crate::partlist`]).
+    pub fn part_list(&self) -> Result<crate::partlist::List, CadError> {
+        crate::partlist::list(&self.placed_parts()?, &self.settings.materials)
+    }
+
+    /// The list of the placed parts as comma separated values.
+    pub fn part_list_csv(&self) -> Result<String, CadError> {
+        self.part_list().map(|l| crate::partlist::csv(&l))
+    }
+
+    /// The list of the placed parts as lines of text in the language of the window.
+    pub fn part_list_text(&self) -> Result<String, CadError> {
+        self.part_list()
+            .map(|l| crate::partlist::text_in(&l, self.lang))
+    }
+
     /// The balance of the placed parts as lines of text in the language of the window.
     pub fn balance_text(&self) -> Result<String, CadError> {
         self.balance()
@@ -1984,7 +2001,11 @@ impl Window {
         let lang = self.lang;
         let needs_parts = matches!(
             panel,
-            Panel::CutPlan | Panel::Clearance | Panel::Placements | Panel::Balance
+            Panel::CutPlan
+                | Panel::Clearance
+                | Panel::Placements
+                | Panel::PartList
+                | Panel::Balance
         );
         if needs_parts && self.built.enclosure.parts().is_empty() {
             return Msg::PanelNoParts.tr(lang).to_string();
@@ -2015,6 +2036,7 @@ impl Window {
                 };
                 crate::placement::table(&placed).map(|t| panels::placements_text_in(&t, lang))
             }),
+            Panel::PartList => self.part_list().map(|l| crate::partlist::text_in(&l, lang)),
             Panel::Balance => self.balance().map(|b| panels::balance_text_in(&b, lang)),
             Panel::SketchExport | Panel::Revolve => Ok(if self.mech.sketches.is_empty() {
                 Msg::PanelNoSketch.tr(lang).to_string()
@@ -7482,5 +7504,30 @@ mass: "
         assert!(dxf.contains("1\nAna\n"));
         let svg = w.export_text(Format::SvgFront).unwrap();
         assert!(svg.contains(">Número de plano</text>"));
+    }
+
+    #[test]
+    fn the_part_list_of_the_frame_has_its_parts_and_the_mass_of_the_balance() {
+        use crate::panels::{Panel, PanelOptions};
+        let mut w = fresh();
+        assert!(w.open(&frame_path()), "{:?}", w.status);
+        let l = w.part_list().unwrap();
+        assert_eq!(l.rows.len(), 18);
+        assert_eq!(l.mass_ug, w.balance().unwrap().mass_ug);
+        let csv = w.part_list_csv().unwrap();
+        assert!(csv.starts_with("name,kind,part,material,"), "{csv}");
+        assert_eq!(csv.lines().count(), 20);
+        let text = w.panel_text(Panel::PartList, &PanelOptions::default());
+        assert_eq!(text, w.part_list_text().unwrap());
+        assert!(text.contains(" (profile, "), "{text}");
+        w.lang = Lang::De;
+        assert!(w
+            .panel_text(Panel::PartList, &PanelOptions::default())
+            .contains(" (Profil, "));
+        // a new project has no part
+        assert_eq!(
+            fresh().panel_text(Panel::PartList, &PanelOptions::default()),
+            Msg::PanelNoParts.tr(Lang::En)
+        );
     }
 }
