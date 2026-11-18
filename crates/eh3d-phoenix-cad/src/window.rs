@@ -39,6 +39,7 @@ use crate::sketch::file as sketch_file;
 use crate::sketch::settings::SketchSettings;
 use crate::sketch::{check_sketch_name, Sketch};
 use crate::store;
+use crate::swept::SweptSpec;
 use crate::turned::TurnedSpec;
 use crate::uiconfig::UiSettings;
 use crate::units::{format_angle, format_length, parse_angle, parse_length, Count};
@@ -76,6 +77,8 @@ pub enum Selection {
     Mate(usize),
     /// A turned body: the index of its step.
     Turned(usize),
+    /// A swept body: the index of its step.
+    Swept(usize),
     /// A part of the open library, which is not in the model: its place in the library.
     CatalogPart(usize),
     /// A step that has no editor of its own: its index.
@@ -113,6 +116,8 @@ pub enum NewStep {
     Mate,
     /// A sketch of the project turned about an axis, as a body of its own.
     Turned,
+    /// The profile of a sketch of the project swept along the path of another, as a body.
+    Swept,
 }
 
 /// A row of the sheet of variables.
@@ -158,6 +163,7 @@ impl Selection {
             | Selection::Part(i)
             | Selection::Mate(i)
             | Selection::Turned(i)
+            | Selection::Swept(i)
             | Selection::Other(i) => Some(i),
             Selection::Nothing
             | Selection::Body
@@ -296,8 +302,10 @@ pub enum Key {
     TurnedAxis,
     /// The turn of a turned body, in degrees.
     TurnedAngle,
-    /// The material of a turned body.
+    /// The material of a turned or a swept body.
     TurnedMaterial,
+    /// The sketch that draws the path of a swept body.
+    SweptPath,
 }
 
 /// How a field is edited.
@@ -700,6 +708,7 @@ pub fn step_label(step: &Step) -> String {
         Operation::AddFins { fins, .. } => fins.name.clone(),
         Operation::AddPart { part, .. } => part.name.clone(),
         Operation::AddTurned { turned, .. } => turned.name.clone(),
+        Operation::AddSwept { swept, .. } => swept.name.clone(),
         _ => "-".to_string(),
     }
 }
@@ -716,6 +725,7 @@ fn the_selection_of(index: usize, step: &Step) -> Selection {
         Operation::AddPart { .. } => Selection::Part(index),
         Operation::AddMate { .. } => Selection::Mate(index),
         Operation::AddTurned { .. } => Selection::Turned(index),
+        Operation::AddSwept { .. } => Selection::Swept(index),
         _ => Selection::Other(index),
     }
 }
@@ -911,6 +921,7 @@ impl Window {
         let mut parts = Vec::new();
         let mut mates = Vec::new();
         let mut turned = Vec::new();
+        let mut swept = Vec::new();
         let mut edges = Vec::new();
         let mut lids = Vec::new();
         let mut features = Vec::new();
@@ -930,6 +941,7 @@ impl Window {
                 Selection::Part(_) => parts.push(item),
                 Selection::Mate(_) => mates.push(item),
                 Selection::Turned(_) => turned.push(item),
+                Selection::Swept(_) => swept.push(item),
                 Selection::Edging(_) => edges.push(item),
                 Selection::Lid(_) => lids.push(item),
                 Selection::Feature(_) => features.push(item),
@@ -987,6 +999,7 @@ impl Window {
             (Msg::GroupParts, parts),
             (Msg::GroupMates, mates),
             (Msg::GroupTurned, turned),
+            (Msg::GroupSwept, swept),
             (Msg::GroupEdges, edges),
             (Msg::GroupLid, lids),
             (Msg::GroupScrews, screws),
@@ -1022,6 +1035,7 @@ impl Window {
             | Selection::Part(i)
             | Selection::Mate(i)
             | Selection::Turned(i)
+            | Selection::Swept(i)
             | Selection::Other(i) => i < self.mech.steps.len(),
             Selection::CatalogPart(k) => k < self.library.as_ref().map_or(0, |l| l.parts.len()),
             Selection::Screw(k) => k < self.built.enclosure.lid_holes().len(),
@@ -1044,7 +1058,8 @@ impl Window {
                 | Some(Operation::Pocket { id, .. })
                 | Some(Operation::AddFins { id, .. })
                 | Some(Operation::AddPart { id, .. })
-                | Some(Operation::AddTurned { id, .. }) => Highlight::Object(*id),
+                | Some(Operation::AddTurned { id, .. })
+                | Some(Operation::AddSwept { id, .. }) => Highlight::Object(*id),
                 Some(Operation::AddMate { mate, .. }) => Highlight::Object(mate.b),
                 Some(Operation::AddPattern { id, .. }) => Highlight::Pattern(*id),
                 _ => Highlight::Nothing,
@@ -1058,6 +1073,7 @@ impl Window {
             | Selection::Fins(i)
             | Selection::Part(i)
             | Selection::Turned(i)
+            | Selection::Swept(i)
             | Selection::Mate(i) => id_of(i),
             Selection::Screw(k) => Highlight::Screw(k),
             _ => Highlight::Nothing,
@@ -1229,6 +1245,9 @@ impl Window {
             }
             (Selection::Turned(_), Some(Operation::AddTurned { id, turned })) => {
                 self.turned_fields(*id, turned, writable)
+            }
+            (Selection::Swept(_), Some(Operation::AddSwept { id, swept })) => {
+                self.swept_fields(*id, swept, writable)
             }
             (Selection::CatalogPart(k), _) => self.catalog_fields(k),
             (Selection::Edging(_), Some(Operation::SetEdging(edging))) => {
@@ -1808,6 +1827,69 @@ impl Window {
         out
     }
 
+    /// The fields of a swept body: its name, the two sketches, the material, the position of the
+    /// origin of the sketches and, once the model has it, its size, volume and mass.
+    fn swept_fields(&self, id: Id, swept: &SweptSpec, writable: bool) -> Vec<Field> {
+        let text = |key: Key, label: Msg, text: String| Field {
+            key,
+            label,
+            text,
+            note: String::new(),
+            input: Input::Text,
+            editable: writable,
+        };
+        let mut out = vec![
+            text(Key::Name, Msg::FieldName, swept.name.clone()),
+            text(Key::Sketch, Msg::FieldSweptProfile, swept.profile.clone()),
+            text(Key::SweptPath, Msg::FieldSweptPath, swept.path.clone()),
+            text(
+                Key::TurnedMaterial,
+                Msg::FieldPartMaterial,
+                swept.material.clone(),
+            ),
+            self.length_field(Key::PartX, Msg::FieldPartX, swept.at[0], writable),
+            self.length_field(Key::PartY, Msg::FieldPartY, swept.at[1], writable),
+            self.length_field(Key::PartZ, Msg::FieldPartZ, swept.at[2], writable),
+        ];
+        if let Some(body) = self.built.enclosure.swept().get(&id) {
+            if let Ok((lo, hi)) = body.bounds() {
+                out.push(Self::info_field(
+                    Key::PartSize,
+                    Msg::FieldPartSize,
+                    self.size_text([hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]),
+                ));
+            }
+            out.extend(self.material_fields(body.volume_nm3(), &swept.material));
+        }
+        out
+    }
+
+    /// A swept body after an edit of the field `key`. The material has to be one of the settings.
+    fn edited_swept(&self, swept: &SweptSpec, key: Key, text: &str) -> Result<SweptSpec, CadError> {
+        let mut t = swept.clone();
+        match key {
+            Key::Name => t.name = text.trim().to_string(),
+            Key::Sketch => t.profile = self.edited_sketch(&swept.profile, key, text)?,
+            Key::SweptPath => {
+                let name = text.trim();
+                check_sketch_name(name)?;
+                t.path = name.to_string();
+            }
+            Key::TurnedMaterial => {
+                let name = text.trim();
+                if !self.settings.materials.contains_key(name) {
+                    return Err(CadError::UnknownName(name.to_string()));
+                }
+                t.material = name.to_string();
+            }
+            Key::PartX => t.at[0] = self.parse_text(text)?,
+            Key::PartY => t.at[1] = self.parse_text(text)?,
+            Key::PartZ => t.at[2] = self.parse_text(text)?,
+            _ => return Err(refusal()),
+        }
+        Ok(t)
+    }
+
     /// A turned body after an edit of the field `key`. The material has to be one of the settings.
     fn edited_turned(
         &self,
@@ -2057,13 +2139,30 @@ impl Window {
     pub fn balance(&self) -> Result<crate::balance::Balance, CadError> {
         let placed =
             crate::assembly::place(self.built.enclosure.parts(), self.built.enclosure.mates())?;
-        let weighed = self.weighed_turned()?;
+        let weighed = self.weighed_bodies()?;
         crate::balance::balance_with(&placed, &weighed, &self.settings.materials)
     }
 
-    /// The mass and the centre of mass of each turned body of the model.
-    fn weighed_turned(&self) -> Result<Vec<crate::balance::Weighed>, CadError> {
-        self.built
+    /// The mass and the centre of mass of each turned and swept body of the model.
+    fn weighed_bodies(&self) -> Result<Vec<crate::balance::Weighed>, CadError> {
+        let density_of = |material: &str, name: &str| -> Result<u32, CadError> {
+            self.settings
+                .materials
+                .get(material)
+                .copied()
+                .ok_or_else(|| {
+                    CadError::Part(format!(
+                        "the material {material} of {name} is not in the settings"
+                    ))
+                })
+        };
+        let mut out = Vec::new();
+        for s in self.built.enclosure.swept().values() {
+            let density = density_of(&s.spec.material, &s.spec.name)?;
+            out.push(s.weigh(density, &self.settings.mesh)?);
+        }
+        let turned: Result<Vec<crate::balance::Weighed>, CadError> = self
+            .built
             .enclosure
             .turned()
             .values()
@@ -2080,7 +2179,9 @@ impl Window {
                     })?;
                 t.weigh(density, &self.settings.mesh)
             })
-            .collect()
+            .collect();
+        out.extend(turned?);
+        Ok(out)
     }
 
     /// The placed parts (with the mates applied) with their kind, material, volume, mass and box
@@ -2089,6 +2190,7 @@ impl Window {
         crate::partlist::list_with(
             &self.placed_parts()?,
             self.built.enclosure.turned(),
+            self.built.enclosure.swept(),
             &self.settings.materials,
         )
     }
@@ -2129,7 +2231,9 @@ impl Window {
         let needs_parts = matches!(panel, Panel::CutPlan | Panel::Clearance | Panel::Placements);
         let needs_bodies = matches!(panel, Panel::PartList | Panel::Balance);
         let no_parts = self.built.enclosure.parts().is_empty();
-        let no_bodies = no_parts && self.built.enclosure.turned().is_empty();
+        let no_bodies = no_parts
+            && self.built.enclosure.turned().is_empty()
+            && self.built.enclosure.swept().is_empty();
         if (needs_parts && no_parts) || (needs_bodies && no_bodies) {
             return Msg::PanelNoParts.tr(lang).to_string();
         }
@@ -2373,6 +2477,10 @@ impl Window {
             Operation::AddTurned { id, turned } => Ok(Operation::AddTurned {
                 id: *id,
                 turned: self.edited_turned(turned, key, text)?,
+            }),
+            Operation::AddSwept { id, swept } => Ok(Operation::AddSwept {
+                id: *id,
+                swept: self.edited_swept(swept, key, text)?,
             }),
             Operation::SetEdging(edging) => {
                 Ok(Operation::SetEdging(self.edited_edging(edging, key, text)?))
@@ -2851,7 +2959,9 @@ impl Window {
                 | Operation::AddMate { id, .. }
                 | Operation::RemoveMate { id }
                 | Operation::AddTurned { id, .. }
-                | Operation::RemoveTurned { id } => ids.push(*id),
+                | Operation::RemoveTurned { id }
+                | Operation::AddSwept { id, .. }
+                | Operation::RemoveSwept { id } => ids.push(*id),
                 Operation::AddPattern { id, pattern } => ids.extend(pattern.instance_ids(*id)),
                 Operation::AddPost { id, post } | Operation::ReplacePost { id, post } => {
                     ids.push(*id);
@@ -3191,6 +3301,52 @@ impl Window {
                     name,
                 ))
             }
+            NewStep::Swept => {
+                // the profile is the active sketch (the first one when none is) and the path the
+                // first sketch that is not the profile
+                let profile = self
+                    .active_sketch
+                    .as_ref()
+                    .filter(|name| self.mech.sketch(name).is_some())
+                    .cloned()
+                    .or_else(|| self.mech.sketches.first().map(|s| s.name().to_string()))
+                    .ok_or_else(|| CadError::Feature("the project has no sketch".to_string()))?;
+                let path = self
+                    .mech
+                    .sketches
+                    .iter()
+                    .map(|s| s.name().to_string())
+                    .find(|name| *name != profile)
+                    .ok_or_else(|| {
+                        CadError::Feature(
+                            "a swept body needs two sketches, the profile and the path".to_string(),
+                        )
+                    })?;
+                if !self.settings.materials.contains_key(&d.turned_material) {
+                    return Err(CadError::UnknownName(d.turned_material.clone()));
+                }
+                let count = self
+                    .mech
+                    .steps
+                    .iter()
+                    .filter(|s| matches!(s.op, Operation::AddSwept { .. }))
+                    .count();
+                let name = fill(Msg::NameSwept.tr(self.lang), &[&(count + 1).to_string()]);
+                let swept = SweptSpec {
+                    name: name.clone(),
+                    profile,
+                    path,
+                    at: [d.part_x.checked_add(shift)?, d.part_y, d.part_z],
+                    material: d.turned_material.clone(),
+                };
+                Ok((
+                    Operation::AddSwept {
+                        id: self.fresh_id()?,
+                        swept,
+                    },
+                    name,
+                ))
+            }
             NewStep::Edging => {
                 if self
                     .mech
@@ -3230,7 +3386,8 @@ impl Window {
             | NewStep::Extrude
             | NewStep::Pocket
             | NewStep::Mate
-            | NewStep::Turned => 1,
+            | NewStep::Turned
+            | NewStep::Swept => 1,
             NewStep::Hole
             | NewStep::Post
             | NewStep::HolePattern
@@ -3345,6 +3502,7 @@ impl Window {
         let used = self.mech.steps.iter().any(|s| match &s.op {
             Operation::Extrude { sketch, .. } | Operation::Pocket { sketch, .. } => sketch == name,
             Operation::AddTurned { turned, .. } => turned.sketch == name,
+            Operation::AddSwept { swept, .. } => swept.profile == name || swept.path == name,
             _ => false,
         });
         let result = if used {
@@ -7387,6 +7545,68 @@ CONTORNO
         let bodies = crate::solid::bodies(w.enclosure(), &w.settings.mesh).unwrap();
         assert_eq!(bodies.len(), 2);
         assert_eq!(bodies[1].name, "Turned body 1");
+        assert!(crate::step::export_step(w.enclosure()).is_err());
+    }
+
+    #[test]
+    fn a_swept_body_is_a_step_with_fields_a_volume_and_a_place_in_the_lists_and_the_files() {
+        use crate::enclosure::Face as SketchFace;
+        use crate::sketch::SketchPlane;
+        let mut w = fresh();
+        // a swept body needs two sketches
+        w.keep_sketch(plate());
+        w.add_step(NewStep::Swept);
+        assert!(problem(&w), "{:?}", w.status);
+        let plane = || SketchPlane::on_face(SketchFace::Front);
+        let mut rail = Sketch::new("rail", plane()).unwrap();
+        let a = rail.add_point(mm_len(0), mm_len(0)).unwrap();
+        let b = rail.add_point(mm_len(100), mm_len(0)).unwrap();
+        rail.add_line(a, b).unwrap();
+        w.keep_sketch(rail);
+        // the sketch that was kept last is the active one: the profile is the plate
+        w.active_sketch = Some("plate".to_string());
+        w.add_step(NewStep::Swept);
+        assert!(!problem(&w), "{:?}", w.status);
+        assert_eq!(w.selection, Selection::Swept(0));
+        assert_eq!(w.mech.steps[0].name, "Swept body 1");
+        assert_eq!(w.enclosure().swept().len(), 1);
+        assert_eq!(w.mech.version(), 6);
+        // the profile is the sketch plate and the path the other one: the plate is 1000 mm2 less
+        // the hole (pi 9 mm2) and the volume is that over 100 mm
+        assert!(
+            text_of(&w, Key::PartVolume).starts_with("97"),
+            "{}",
+            text_of(&w, Key::PartVolume)
+        );
+        assert_eq!(text_of(&w, Key::Sketch), "plate");
+        assert_eq!(text_of(&w, Key::SweptPath), "rail");
+        assert!(w.tree().iter().any(|g| g.title == Msg::GroupSwept));
+        // a refused value leaves the body as it was
+        for (key, text) in [
+            (Key::SweptPath, "nothing"),
+            (Key::TurnedMaterial, "glue"),
+            (Key::Sketch, "nothing"),
+        ] {
+            set(&mut w, key, text);
+            assert!(problem(&w), "{key:?} {text}");
+        }
+        set(&mut w, Key::PartX, "50 mm");
+        assert!(!problem(&w), "{:?}", w.status);
+        // the lists and the balance count it
+        let b = w.balance().unwrap();
+        assert_eq!((b.parts, b.estimated), (1, 0));
+        let list = w.part_list().unwrap();
+        assert!(list.rows[0].swept && !list.rows[0].turned);
+        let csv = w.part_list_csv().unwrap();
+        assert!(csv.contains("Swept body 1,swept,rail,PLA,1240,"), "{csv}");
+        // neither sketch can be removed
+        for name in ["plate", "rail"] {
+            w.remove_sketch(name);
+            assert!(problem(&w), "{name}");
+        }
+        let bodies = crate::solid::bodies(w.enclosure(), &w.settings.mesh).unwrap();
+        assert_eq!(bodies.len(), 2);
+        assert_eq!(bodies[1].name, "Swept body 1");
         assert!(crate::step::export_step(w.enclosure()).is_err());
     }
 

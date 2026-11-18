@@ -27,6 +27,7 @@ use crate::mount::{lid_holes_of, Lid, Post};
 use crate::pattern::{PatternOp, Seed};
 use crate::profile::{Profile, ProfileLimits};
 use crate::sketch::Sketch;
+use crate::swept::{SweptBody, SweptSpec};
 use crate::turned::{Turned, TurnedSpec};
 use crate::units::isqrt_u128;
 use crate::{CadError, Length};
@@ -602,6 +603,20 @@ pub enum Operation {
         /// The id of the body.
         id: Id,
     },
+    /// Adds a swept body: the profile of a sketch swept along the path of another, as a body of
+    /// its own next to the box (see [`crate::swept`]). The sketches are taken by their names every
+    /// time the model is built.
+    AddSwept {
+        /// The id of the body.
+        id: Id,
+        /// The two sketches, where they are put and the material.
+        swept: SweptSpec,
+    },
+    /// Takes a swept body away.
+    RemoveSwept {
+        /// The id of the body.
+        id: Id,
+    },
 }
 
 /// What a feature does to the box.
@@ -666,6 +681,7 @@ pub struct Enclosure {
     parts: BTreeMap<Id, PartInstance>,
     mates: BTreeMap<Id, Mate>,
     turned: BTreeMap<Id, Turned>,
+    swept: BTreeMap<Id, SweptBody>,
     design: Option<DesignLimits>,
 }
 
@@ -688,6 +704,7 @@ impl Enclosure {
             parts: BTreeMap::new(),
             mates: BTreeMap::new(),
             turned: BTreeMap::new(),
+            swept: BTreeMap::new(),
             design: None,
         })
     }
@@ -696,6 +713,11 @@ impl Enclosure {
     /// not part of the volume of the box.
     pub fn turned(&self) -> &BTreeMap<Id, Turned> {
         &self.turned
+    }
+
+    /// The swept bodies by id (ordered by id). They are separate bodies, like the parts.
+    pub fn swept(&self) -> &BTreeMap<Id, SweptBody> {
+        &self.swept
     }
 
     /// The parts placed in the model by id (ordered by id). They are separate bodies: they are not
@@ -878,6 +900,11 @@ impl Enclosure {
     pub fn set_sketches(&mut self, sketches: Vec<Sketch>, limits: Option<ProfileLimits>) {
         self.sketches = sketches;
         self.limits = limits;
+    }
+
+    /// How many parts and bodies of sketches the model has: what the limit of instances counts.
+    fn bodies_count(&self) -> usize {
+        self.parts.len() + self.turned.len() + self.swept.len()
     }
 
     /// The sketches the enclosure was given (see [`Enclosure::set_sketches`]).
@@ -1545,9 +1572,9 @@ impl Enclosure {
                 if self.turned.contains_key(&id) {
                     return Err(CadError::HoleId(id));
                 }
-                if self.parts.len() + self.turned.len() >= limits.max_instances {
+                if self.bodies_count() >= limits.max_instances {
                     return Err(CadError::Part(format!(
-                        "more than the {} parts and turned bodies the settings allow",
+                        "more than the {} parts and bodies the settings allow",
                         limits.max_instances
                     )));
                 }
@@ -1561,6 +1588,30 @@ impl Enclosure {
                 Some(body) => Ok(Operation::AddTurned {
                     id,
                     turned: body.spec,
+                }),
+                None => Err(CadError::HoleId(id)),
+            },
+            Operation::AddSwept { id, swept } => {
+                let limits = self.design_limits().catalog;
+                if self.swept.contains_key(&id) {
+                    return Err(CadError::HoleId(id));
+                }
+                if self.bodies_count() >= limits.max_instances {
+                    return Err(CadError::Part(format!(
+                        "more than the {} parts and bodies the settings allow",
+                        limits.max_instances
+                    )));
+                }
+                swept.check(&limits)?;
+                let profiles = self.limits.unwrap_or_else(ProfileLimits::shipped);
+                let body = SweptBody::resolve(&swept, &self.sketches, &profiles)?;
+                self.swept.insert(id, body);
+                Ok(Operation::RemoveSwept { id })
+            }
+            Operation::RemoveSwept { id } => match self.swept.remove(&id) {
+                Some(body) => Ok(Operation::AddSwept {
+                    id,
+                    swept: body.spec,
                 }),
                 None => Err(CadError::HoleId(id)),
             },
@@ -2818,5 +2869,80 @@ mod feature_tests {
         let printer = crate::config::Settings::defaults().printer;
         let f = printer.for_fabrication(&e).unwrap();
         assert_eq!(f.turned(), e.turned());
+    }
+
+    fn swept_op(n: u64, name: &str) -> Operation {
+        Operation::AddSwept {
+            id: id(n),
+            swept: crate::swept::SweptSpec {
+                name: name.into(),
+                profile: "section".into(),
+                path: "rail".into(),
+                at: [Length::ZERO; 3],
+                material: "PLA".into(),
+            },
+        }
+    }
+
+    fn with_rail() -> Enclosure {
+        let plane = || SketchPlane::on_face(Face::Front);
+        let mut path = Sketch::new("rail", plane()).unwrap();
+        let a = path.add_point(mm(0), mm(0)).unwrap();
+        let b = path.add_point(mm(100), mm(0)).unwrap();
+        path.add_line(a, b).unwrap();
+        let mut section = Sketch::new("section", plane()).unwrap();
+        section
+            .add_rectangle((mm(0), mm(-1)), (mm(4), mm(1)))
+            .unwrap();
+        let mut e = Enclosure::new(params()).unwrap();
+        e.set_sketches(vec![path, section], None);
+        e
+    }
+
+    #[test]
+    fn a_swept_body_is_added_and_removed_by_its_exact_inverse_and_a_refused_one_changes_nothing() {
+        let mut e = with_rail();
+        let before = e.clone();
+        let undo = e.apply(swept_op(7, "rail")).unwrap();
+        assert_eq!(undo, Operation::RemoveSwept { id: id(7) });
+        assert_eq!(e.swept().len(), 1);
+        let redo = e.apply(undo).unwrap();
+        assert_eq!(e, before);
+        e.apply(redo).unwrap();
+        let once = e.clone();
+        // the id is used, the name is empty, a sketch is missing
+        assert!(e.apply(swept_op(7, "again")).is_err());
+        assert_eq!(
+            e.apply(swept_op(8, "")).unwrap_err().code(),
+            "PHOENIX-CAD-045"
+        );
+        let mut lost = swept_op(8, "lost");
+        if let Operation::AddSwept { swept, .. } = &mut lost {
+            swept.path = "nothing".into();
+        }
+        assert_eq!(e.apply(lost).unwrap_err().code(), "PHOENIX-CAD-037");
+        assert!(e.apply(Operation::RemoveSwept { id: id(9) }).is_err());
+        assert_eq!(e, once);
+    }
+
+    #[test]
+    fn the_swept_bodies_count_with_the_parts_and_the_turned_bodies_against_the_limit() {
+        let mut design = crate::config::DesignLimits::shipped();
+        design.catalog.max_instances = 1;
+        let mut e = with_rail();
+        e.set_design_limits(design);
+        e.apply(swept_op(7, "first")).unwrap();
+        let err = e.apply(swept_op(8, "second")).unwrap_err();
+        assert!(err.to_string().contains("more than the 1 parts"), "{err}");
+        assert_eq!(e.swept().len(), 1);
+    }
+
+    #[test]
+    fn the_swept_bodies_are_kept_when_the_model_is_made_for_fabrication() {
+        let mut e = with_rail();
+        e.apply(swept_op(7, "rail")).unwrap();
+        let printer = crate::config::Settings::defaults().printer;
+        let f = printer.for_fabrication(&e).unwrap();
+        assert_eq!(f.swept(), e.swept());
     }
 }

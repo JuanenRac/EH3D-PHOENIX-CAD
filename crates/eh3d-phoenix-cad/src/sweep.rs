@@ -66,7 +66,7 @@ pub struct Swept {
 }
 
 /// A path of a sketch in the order it is walked.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Path {
     /// The pieces, each walked from its start to its end.
     pub pieces: Vec<Piece>,

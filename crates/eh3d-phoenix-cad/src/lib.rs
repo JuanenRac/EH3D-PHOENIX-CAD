@@ -31,6 +31,7 @@
 //! * [`revolve`]: the volume, the surface and the mass of the solid that a sketch makes when it is turned about one of its axes (by the theorems of Pappus, with the circular segments of its arcs), refused when the profile crosses the axis;
 //! * [`turned`]: a sketch turned about one of its axes kept in the model as a body of its own (its sketch, axis, angle, position and material), with its volume, mass, box, triangles and centre of mass, and its place in the bill, the balance and the files of triangles;
 //! * [`sweep`]: the volume and the surface of a profile swept along a path of lines and arcs of a sketch (a bend, a mitred corner, a closed path), by the theorems of Pappus with the first moments of the profile, refused when the path branches or the profile reaches the centre of a bend;
+//! * [`swept`]: a profile swept along a path, each a sketch of the project, kept in the model as a body of its own like a turned body, with its volume, mass, box, triangles and centre of mass;
 //! * [`fins`]: sets of cooling fins that rise from a face (how many, how thick, how tall, how far apart, where they start and how long they run), checked against the limits of the settings, the edges and the holes of the face and the other sets, and an estimate, marked as one, of the heat they give to still air from a coefficient of the settings;
 //! * [`graph`]: the graph of dependencies between objects, with a deterministic order of calculation, refused cycles, a recalculation that reuses what did not change, and a Graphviz dump;
 //! * [`vars`]: named variables for the master dimensions, the binding of the parameters of an enclosure to them, and families of variants (small, medium, large);
@@ -127,6 +128,7 @@ pub mod solid;
 pub mod step;
 pub mod store;
 pub mod sweep;
+pub mod swept;
 pub mod titleblock;
 pub mod triangulate;
 pub mod turned;

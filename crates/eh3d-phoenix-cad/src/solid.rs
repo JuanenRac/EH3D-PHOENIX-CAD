@@ -934,9 +934,9 @@ pub fn verify(name: &str, mesh: &Mesh, expected_nm3: f64, ppm: u32) -> Result<()
     Ok(())
 }
 
-/// Every solid of the model: the box with everything on it, every placed part and every turned
-/// body. The box and the parts are checked against their exact volume and a turned body is checked
-/// to be closed.
+/// Every solid of the model: the box with everything on it, every placed part, every turned body
+/// and every swept body. The box and the parts are checked against their exact volume and the
+/// other bodies are checked to be closed.
 pub fn bodies(enclosure: &Enclosure, settings: &MeshSettings) -> Result<Vec<Body>, CadError> {
     let circle = Circle::new(settings.circle_segments);
     let mut budget = settings.max_triangles as usize;
@@ -971,6 +971,17 @@ pub fn bodies(enclosure: &Enclosure, settings: &MeshSettings) -> Result<Vec<Body
             name: turned.spec.name.clone(),
             mesh,
             expected_nm3: turned.volume_nm3()? as f64,
+        });
+    }
+    for swept in enclosure.swept().values() {
+        let mesh = swept.mesh(settings, budget)?;
+        mesh.check_closed()
+            .map_err(|why| CadError::MeshCheck(format!("{}: {why}", swept.spec.name)))?;
+        budget -= mesh.triangles.len();
+        out.push(Body {
+            name: swept.spec.name.clone(),
+            mesh,
+            expected_nm3: swept.volume_nm3()? as f64,
         });
     }
     Ok(out)

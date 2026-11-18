@@ -45,6 +45,33 @@ fn turned_error(why: impl AsRef<str>) -> CadError {
     CadError::Part(why.as_ref().to_string())
 }
 
+/// Whether the names of a body formed from sketches are within the limit of the settings and the
+/// body is no farther from the origin than the settings allow a part to be placed.
+pub(crate) fn check_body(
+    name: &str,
+    material: &str,
+    at: &[Length; 3],
+    limits: &CatalogLimits,
+) -> Result<(), CadError> {
+    if name.is_empty() || name.len() > limits.max_name_bytes {
+        return Err(turned_error(
+            "the name of a body is empty or longer than the limit",
+        ));
+    }
+    if material.is_empty() || material.len() > limits.max_name_bytes {
+        return Err(turned_error(format!(
+            "{name}: the material is empty or longer than the limit"
+        )));
+    }
+    let far = limits.max_dimension.get();
+    if at.iter().any(|v| v.get().abs() > far) {
+        return Err(turned_error(format!(
+            "{name}: the body is farther from the origin than the {far} nm the settings allow"
+        )));
+    }
+    Ok(())
+}
+
 impl TurnedSpec {
     /// A body that turns the sketch about its first axis by a full turn, at the origin, of the
     /// material.
@@ -62,25 +89,7 @@ impl TurnedSpec {
     /// Whether the names are within the limit of the settings and the body is no farther from the
     /// origin than the settings allow a part to be placed.
     pub fn check(&self, limits: &CatalogLimits) -> Result<(), CadError> {
-        if self.name.is_empty() || self.name.len() > limits.max_name_bytes {
-            return Err(turned_error(
-                "the name of a turned body is empty or longer than the limit",
-            ));
-        }
-        if self.material.is_empty() || self.material.len() > limits.max_name_bytes {
-            return Err(turned_error(format!(
-                "{}: the material is empty or longer than the limit",
-                self.name
-            )));
-        }
-        let far = limits.max_dimension.get();
-        if self.at.iter().any(|v| v.get().abs() > far) {
-            return Err(turned_error(format!(
-                "{}: the body is farther from the origin than the {} nm the settings allow",
-                self.name, far
-            )));
-        }
-        Ok(())
+        check_body(&self.name, &self.material, &self.at, limits)
     }
 }
 

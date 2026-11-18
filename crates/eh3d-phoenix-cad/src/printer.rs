@@ -81,13 +81,19 @@ impl PrinterProfile {
                 part: part.clone(),
             })?;
         }
-        // turned bodies are not printed by this model either: they stay where they are
-        if !design.turned().is_empty() {
+        // turned and swept bodies are not printed by this model either: they stay where they are
+        if !design.turned().is_empty() || !design.swept().is_empty() {
             out.set_sketches(design.sketches().to_vec(), design.profile_limits());
             for (id, body) in design.turned() {
                 out.apply(Operation::AddTurned {
                     id: *id,
                     turned: body.spec.clone(),
+                })?;
+            }
+            for (id, body) in design.swept() {
+                out.apply(Operation::AddSwept {
+                    id: *id,
+                    swept: body.spec.clone(),
                 })?;
             }
         }

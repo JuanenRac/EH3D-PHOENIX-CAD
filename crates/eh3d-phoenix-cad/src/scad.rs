@@ -577,6 +577,9 @@ pub fn to_scad(enclosure: &Enclosure) -> String {
     if !enclosure.turned().is_empty() {
         out.push_str("// The turned bodies are not drawn in this script.\n");
     }
+    if !enclosure.swept().is_empty() {
+        out.push_str("// The swept bodies are not drawn in this script.\n");
+    }
     for (name, v) in [
         ("inner_length", p.inner_length),
         ("inner_width", p.inner_width),

@@ -19,6 +19,7 @@ use crate::lang::{fill, Lang, Msg};
 use crate::mass::mass_micrograms;
 use crate::revolve::scaled;
 use crate::scad::mm_text;
+use crate::swept::SweptBody;
 use crate::turned::Turned;
 use crate::window::kind_msg;
 use crate::CadError;
@@ -30,10 +31,13 @@ const NM3_PER_MM3: i128 = 1_000_000_000_000_000_000;
 pub struct Row {
     /// The name of the part in the model.
     pub name: String,
-    /// What kind of part it is (`Profile` for a turned body, which has none: read `turned`).
+    /// What kind of part it is (`Profile` for a turned or a swept body, which have none: read
+    /// `turned` and `swept`).
     pub kind: Kind,
     /// Whether the row is a turned body.
     pub turned: bool,
+    /// Whether the row is a swept body.
+    pub swept: bool,
     /// The part of the library it is a copy of, or the sketch of a turned body.
     pub part: String,
     /// The material.
@@ -67,15 +71,16 @@ pub fn list(
     parts: &BTreeMap<Id, PartInstance>,
     densities: &BTreeMap<String, u32>,
 ) -> Result<List, CadError> {
-    list_with(parts, &BTreeMap::new(), densities)
+    list_with(parts, &BTreeMap::new(), &BTreeMap::new(), densities)
 }
 
-/// The list of some placed parts and of the turned bodies of the model, which come after the
-/// parts, by name and identifier. A turned body has the volume of its profile turned, the mass of
-/// that volume in its material, and the box that holds it.
+/// The list of some placed parts and of the turned and swept bodies of the model, which come after
+/// the parts (the turned ones first), by name and identifier. A body has the volume of its profile
+/// turned or swept, the mass of that volume in its material, and the box that holds it.
 pub fn list_with(
     parts: &BTreeMap<Id, PartInstance>,
     turned: &BTreeMap<Id, Turned>,
+    swept: &BTreeMap<Id, SweptBody>,
     densities: &BTreeMap<String, u32>,
 ) -> Result<List, CadError> {
     let mut keyed: Vec<(Kind, String, Id, Row)> = Vec::with_capacity(parts.len());
@@ -105,6 +110,7 @@ pub fn list_with(
                 name: p.name.clone(),
                 kind,
                 turned: false,
+                swept: false,
                 part: p.part.name.clone(),
                 material: p.part.material.clone(),
                 density,
@@ -142,6 +148,7 @@ pub fn list_with(
                 name: spec.name.clone(),
                 kind: Kind::Profile,
                 turned: true,
+                swept: false,
                 part: spec.sketch.clone(),
                 material: spec.material.clone(),
                 density,
@@ -154,6 +161,44 @@ pub fn list_with(
     }
     bodies.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
     rows.extend(bodies.into_iter().map(|b| b.2));
+    let mut formed: Vec<(&String, &Id, Row)> = Vec::with_capacity(swept.len());
+    for (id, s) in swept {
+        let spec = &s.spec;
+        let density = *densities.get(&spec.material).ok_or_else(|| {
+            CadError::Part(format!(
+                "the material {} of {} is not in the settings",
+                spec.material, spec.name
+            ))
+        })?;
+        let volume_nm3 = s.volume_nm3()?;
+        let mass_ug = mass_micrograms(volume_nm3, density)?;
+        let (min, max) = s.bounds()?;
+        volume = volume
+            .checked_add(volume_nm3)
+            .ok_or(CadError::Overflow("volume"))?;
+        mass = mass
+            .checked_add(mass_ug)
+            .ok_or(CadError::Overflow("mass"))?;
+        formed.push((
+            &spec.name,
+            id,
+            Row {
+                name: spec.name.clone(),
+                kind: Kind::Profile,
+                turned: false,
+                swept: true,
+                part: spec.path.clone(),
+                material: spec.material.clone(),
+                density,
+                volume_nm3,
+                mass_ug,
+                min,
+                size: [max[0] - min[0], max[1] - min[1], max[2] - min[2]],
+            },
+        ));
+    }
+    formed.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+    rows.extend(formed.into_iter().map(|b| b.2));
     Ok(List {
         rows,
         volume_nm3: volume,
@@ -171,7 +216,13 @@ pub fn csv(l: &List) -> String {
             out,
             "{},{},{},{},{},{},{},{},{},{},{},{},{}",
             r.name,
-            if r.turned { "turned" } else { r.kind.name() },
+            if r.turned {
+                "turned"
+            } else if r.swept {
+                "swept"
+            } else {
+                r.kind.name()
+            },
             r.part,
             r.material,
             r.density,
@@ -208,6 +259,8 @@ pub fn text_in(l: &List, lang: Lang) -> String {
                     &r.name,
                     if r.turned {
                         Msg::KindTurned.tr(lang)
+                    } else if r.swept {
+                        Msg::KindSwept.tr(lang)
                     } else {
                         kind_msg(r.kind).tr(lang)
                     },
@@ -417,7 +470,8 @@ mod tests {
         spec.at = [mm(100), mm(0), mm(0)];
         let turned = BTreeMap::from([(id(9), Turned { spec, profile })]);
         let parts = BTreeMap::from([(id(1), cube("block", "steel", 0))]);
-        let l = list_with(&parts, &turned, &densities()).unwrap();
+        let none = BTreeMap::new();
+        let l = list_with(&parts, &turned, &none, &densities()).unwrap();
         assert_eq!(l.rows.len(), 2);
         assert!(!l.rows[0].turned && l.rows[1].turned);
         let r = &l.rows[1];
@@ -444,7 +498,7 @@ mod tests {
         assert!(text.contains("spacer (turned, steel)"), "{text}");
         // without turned bodies the list is the one of the parts
         assert_eq!(
-            list_with(&parts, &BTreeMap::new(), &densities()).unwrap(),
+            list_with(&parts, &BTreeMap::new(), &none, &densities()).unwrap(),
             list(&parts, &densities()).unwrap()
         );
         // a material that is not in the settings is refused
@@ -453,7 +507,9 @@ mod tests {
             t.spec.material = "wood".into();
         }
         assert_eq!(
-            list_with(&parts, &other, &densities()).unwrap_err().code(),
+            list_with(&parts, &other, &none, &densities())
+                .unwrap_err()
+                .code(),
             "PHOENIX-CAD-045"
         );
     }

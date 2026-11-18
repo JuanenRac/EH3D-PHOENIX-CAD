@@ -30,7 +30,8 @@
 //! the axes and the length it is cut to); only a recipe that places a part is written as version 4. Version 5 adds the steps `add-mate` and `remove-mate`
 //! (a part placed relative to another along one axis: a gap, an alignment or a stack); only a recipe that has a mate is written
 //! as version 5, so a project without one keeps the version and the bytes it had. Version 6 adds the steps `add-turned` and `remove-turned`
-//! (a sketch of the project turned about one of its axes as a body of its own, with its angle, its position and its material); only a
+//! (a sketch of the project turned about one of its axes as a body of its own, with its angle, its position and its material) and `add-swept` and
+//! `remove-swept` (the profile of a sketch swept along the path of another, with its position and its material); only a
 //! recipe that has a turned body is written as version 6, and the recipes of versions 1 to 5 are read and written as before. The sketches
 //! are not in this domain: they have their own domain, `sketch` (see [`crate::sketch::domain`]).
 
@@ -53,6 +54,7 @@ use crate::profile::ProfileLimits;
 use crate::project::{parameters_from_bytes, parameters_to_bytes, Document, PARAMETERS_DOMAIN};
 use crate::revolve::Axis;
 use crate::sketch::{check_sketch_name, Sketch};
+use crate::swept::SweptSpec;
 use crate::turned::TurnedSpec;
 use crate::units::{Angle, Count};
 use crate::vars::{Param, Variables};
@@ -546,6 +548,21 @@ fn operation_words(op: &Operation, limits: &MechanicalLimits) -> Result<Vec<Stri
             words.push("remove-turned".to_string());
             words.push(id.to_string());
         }
+        Operation::AddSwept { id, swept } => {
+            words.push("add-swept".to_string());
+            words.push(id.to_string());
+            words.push(escape(&swept.name, limits)?);
+            words.push(sketch_word(&swept.profile)?);
+            words.push(sketch_word(&swept.path)?);
+            for v in swept.at {
+                words.push(v.get().to_string());
+            }
+            words.push(escape(&swept.material, limits)?);
+        }
+        Operation::RemoveSwept { id } => {
+            words.push("remove-swept".to_string());
+            words.push(id.to_string());
+        }
     }
     Ok(words)
 }
@@ -607,11 +624,14 @@ fn layout_of(word: &str) -> Result<Layout, CadError> {
     }
 }
 
-/// The version of the domain a step needs: 6 for a turned body, 5 for a mate, 4 for a placed part, 3 for a pattern or
+/// The version of the domain a step needs: 6 for a turned or a swept body, 5 for a mate, 4 for a placed part, 3 for a pattern or
 /// cooling fins, 2 for an extrusion or a pocket and 1 for the rest.
 fn step_version(op: &Operation) -> u32 {
     match op {
-        Operation::AddTurned { .. } | Operation::RemoveTurned { .. } => 6,
+        Operation::AddTurned { .. }
+        | Operation::RemoveTurned { .. }
+        | Operation::AddSwept { .. }
+        | Operation::RemoveSwept { .. } => 6,
         Operation::AddMate { .. } | Operation::RemoveMate { .. } => 5,
         Operation::AddPart { .. } | Operation::RemovePart { .. } => 4,
         Operation::AddPattern { .. }
@@ -780,6 +800,21 @@ fn operation_of(words: &[&str], limits: &MechanicalLimits) -> Result<Operation, 
             })
         }
         ["remove-turned", id] => Ok(Operation::RemoveTurned { id: id_of(id)? }),
+        ["add-swept", id, name, profile, path, x, y, z, material] => Ok(Operation::AddSwept {
+            id: id_of(id)?,
+            swept: SweptSpec {
+                name: unescape(name, limits)?,
+                profile: sketch_word(profile)?,
+                path: sketch_word(path)?,
+                at: [
+                    length_of(x, "position of a swept body")?,
+                    length_of(y, "position of a swept body")?,
+                    length_of(z, "position of a swept body")?,
+                ],
+                material: unescape(material, limits)?,
+            },
+        }),
+        ["remove-swept", id] => Ok(Operation::RemoveSwept { id: id_of(id)? }),
         _ => Err(bad("a step is not understood")),
     }
 }
@@ -3568,5 +3603,115 @@ mod feature_tests {
         assert_eq!(d.mechanical_version().unwrap(), Some(6));
         let read = Document::from_bytes(&d.to_bytes(), 1 << 24).unwrap();
         assert_eq!(read.mechanical(&s.expr, &s.mechanical).unwrap(), Some(m));
+    }
+
+    fn with_swept() -> Mechanical {
+        let mut m = Mechanical::new(ParamModel::new(base()).unwrap(), Variables::new());
+        let plane = || SketchPlane {
+            face: Face::Front,
+            u0: Length::ZERO,
+            v0: Length::ZERO,
+            offset: Length::ZERO,
+        };
+        let mut path = Sketch::new("rail", plane()).unwrap();
+        let a = path.add_point(mm(0), mm(0)).unwrap();
+        let b = path.add_point(mm(100), mm(0)).unwrap();
+        path.add_line(a, b).unwrap();
+        let mut section = Sketch::new("section", plane()).unwrap();
+        section
+            .add_rectangle((mm(0), mm(-1)), (mm(4), mm(1)))
+            .unwrap();
+        m.sketches.push(path);
+        m.sketches.push(section);
+        m.steps.push(step(
+            "gasket one",
+            Operation::AddSwept {
+                id: id(1),
+                swept: SweptSpec {
+                    name: "gasket one".into(),
+                    profile: "section".into(),
+                    path: "rail".into(),
+                    at: [mm(10), mm(0), mm(-5)],
+                    material: "PLA".into(),
+                },
+            },
+        ));
+        m.steps
+            .push(step("no gasket", Operation::RemoveSwept { id: id(1) }));
+        m.tip = 1;
+        m
+    }
+
+    #[test]
+    fn swept_bodies_are_steps_of_version_six_with_a_golden_text() {
+        let s = Settings::defaults();
+        let m = with_swept();
+        assert_eq!(m.version(), 6);
+        let text = String::from_utf8(m.to_bytes(&s.mechanical).unwrap()).unwrap();
+        assert!(text.starts_with("mechanical 6\n[parameters]\n"));
+        let steps = text.split("[steps]\n").nth(1).unwrap();
+        let expect = format!(
+            "tip 1\n\
+             step 0 gasket%20one add-swept {a} gasket%20one section rail 10000000 0 -5000000 PLA\n\
+             step 0 no%20gasket remove-swept {a}\n",
+            a = id(1)
+        );
+        assert_eq!(steps, expect);
+        let read = Mechanical::from_bytes(text.as_bytes(), &s.expr, &s.mechanical).unwrap();
+        assert_eq!(read, m);
+        assert_eq!(read.to_bytes(&s.mechanical).unwrap(), text.as_bytes());
+        let built = m.build(&s.constants, &s.expr).unwrap();
+        assert_eq!(built.enclosure.swept().len(), 1);
+        assert_eq!(built.states[1], StepState::AfterTip);
+        let mut all = m.clone();
+        all.tip = 2;
+        let built = all.build(&s.constants, &s.expr).unwrap();
+        assert!(built.enclosure.swept().is_empty());
+        // and a turned and a swept body can be in one recipe: still version 6
+        let mut both = with_turned();
+        both.steps.extend(m.steps.clone());
+        both.sketches.extend(m.sketches.clone());
+        both.tip = both.steps.len();
+        assert_eq!(both.version(), 6);
+    }
+
+    #[test]
+    fn the_words_of_a_swept_body_that_are_not_understood_are_refused() {
+        let s = Settings::defaults();
+        let good = String::from_utf8(with_swept().to_bytes(&s.mechanical).unwrap()).unwrap();
+        let parse = |t: &str| Mechanical::from_bytes(t.as_bytes(), &s.expr, &s.mechanical);
+        let line = "gasket%20one section rail 10000000 0 -5000000 PLA";
+        for bad in [
+            "gasket%20one section ra%69l 10000000 0 -5000000 PLA",
+            "gasket%20one section rail 10.5 0 -5000000 PLA",
+            "gasket%20one section rail 10000000 0 -5000000",
+            "gasket%20one section rail 10000000 0 -5000000 PLA extra",
+            "gasket%20one section 10000000 0 -5000000 PLA",
+        ] {
+            let text = good.replace(line, bad);
+            assert_ne!(text, good, "{bad}");
+            let e = parse(&text).unwrap_err();
+            assert_eq!(e.code(), "PHOENIX-CAD-018", "{bad}: {e}");
+        }
+        for bad in ["remove-swept", "remove-swept X"] {
+            let text = good.replace(&format!("remove-swept {}", id(1)), bad);
+            assert!(parse(&text).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_swept_body_of_a_path_that_is_not_there_fails_its_step() {
+        let s = Settings::defaults();
+        let mut m = with_swept();
+        m.sketches.retain(|k| k.name() != "rail");
+        let built = m.build(&s.constants, &s.expr).unwrap();
+        match &built.states[0] {
+            StepState::Failed(e) => assert_eq!(e.code(), "PHOENIX-CAD-037"),
+            other => panic!("{other:?}"),
+        }
+        assert!(built.enclosure.swept().is_empty());
+        let mut d = Document::new();
+        d.set_mechanical(&with_swept(), &s.mechanical).unwrap();
+        assert_eq!(d.mechanical_version().unwrap(), Some(6));
     }
 }
