@@ -16,8 +16,10 @@
 
 use crate::config::DrawingSettings;
 use crate::enclosure::{Enclosure, Face, FeatureKind, Hole, HoleStyle, Treatment};
+use crate::lang::Lang;
 use crate::scad::mm_text;
 use crate::solid::Frame;
+use crate::titleblock::{self, Block, Item, TitleBlockSettings};
 use crate::CadError;
 use std::fmt::Write as _;
 
@@ -420,8 +422,28 @@ impl Drawing {
         self.entities.iter().filter(|(l, _)| *l == layer).count()
     }
 
+    /// The title block of this drawing: under the box, with its upper right corner at the right
+    /// edge of the drawing. `gap` is the room left between the box and the block, `fallback` the
+    /// title when the settings have none and `scale` the text of the scale.
+    pub fn title_block(
+        &self,
+        settings: &TitleBlockSettings,
+        fallback: &str,
+        scale: &str,
+        gap: f64,
+        lang: Lang,
+    ) -> Block {
+        let (lo, hi) = self.bounds();
+        titleblock::layout(settings, fallback, scale, (hi.0, lo.1 - gap), lang)
+    }
+
     /// The DXF file (R12 text, millimetres).
     pub fn to_dxf(&self) -> String {
+        self.to_dxf_with(None)
+    }
+
+    /// The DXF file with a title block (layer `ROTULO`) when one is given.
+    pub fn to_dxf_with(&self, block: Option<&Block>) -> String {
         let n = |v: f64| {
             let t = format!("{v:.6}");
             if t.starts_with('-') && t[1..].bytes().all(|b| b == b'0' || b == b'.') {
@@ -458,12 +480,19 @@ impl Drawing {
         put(0, "ENDTAB");
         put(0, "TABLE");
         put(2, "LAYER");
-        put(70, "3");
+        put(70, if block.is_some() { "4" } else { "3" });
         for layer in [Layer::Outline, Layer::Holes, Layer::Axes] {
             put(0, "LAYER");
             put(2, layer.name());
             put(70, "0");
             put(62, &layer.dxf_colour().to_string());
+            put(6, "CONTINUOUS");
+        }
+        if block.is_some() {
+            put(0, "LAYER");
+            put(2, titleblock::LAYER);
+            put(70, "0");
+            put(62, "7");
             put(6, "CONTINUOUS");
         }
         put(0, "ENDTAB");
@@ -502,6 +531,31 @@ impl Drawing {
                 }
             }
         }
+        if let Some(block) = block {
+            for item in &block.items {
+                match item {
+                    Item::Line(a, b) => {
+                        put(0, "LINE");
+                        put(8, titleblock::LAYER);
+                        put(10, &n(a.0));
+                        put(20, &n(a.1));
+                        put(30, "0.0");
+                        put(11, &n(b.0));
+                        put(21, &n(b.1));
+                        put(31, "0.0");
+                    }
+                    Item::Text { at, height, text } => {
+                        put(0, "TEXT");
+                        put(8, titleblock::LAYER);
+                        put(10, &n(at.0));
+                        put(20, &n(at.1));
+                        put(30, "0.0");
+                        put(40, &n(*height));
+                        put(1, &titleblock::dxf_text(text));
+                    }
+                }
+            }
+        }
         put(0, "ENDSEC");
         put(0, "EOF");
         o
@@ -509,7 +563,24 @@ impl Drawing {
 
     /// The SVG file, scaled to the width of the page of the settings.
     pub fn to_svg(&self, settings: &DrawingSettings) -> String {
-        let (lo, hi) = self.bounds();
+        self.to_svg_with(settings, None)
+    }
+
+    /// The SVG file with a title block under the drawing when the settings of the title block
+    /// are given with the title to use when they have none and the language of the cells. The
+    /// page grows to hold the block.
+    pub fn to_svg_with(
+        &self,
+        settings: &DrawingSettings,
+        title: Option<(&TitleBlockSettings, &str, Lang)>,
+    ) -> String {
+        let (mut lo, mut hi) = self.bounds();
+        let gap = if settings.dimensions { 16.0 } else { 6.0 };
+        if let Some((tb, fallback, lang)) = title {
+            let shape = self.title_block(tb, fallback, "", gap, lang);
+            lo = (lo.0.min(shape.lo.0), lo.1.min(shape.lo.1));
+            hi = (hi.0.max(shape.hi.0), hi.1.max(shape.hi.1));
+        }
         let margin = if settings.dimensions { 14.0 } else { 4.0 };
         let (width, height) = (hi.0 - lo.0 + 2.0 * margin, hi.1 - lo.1 + 2.0 * margin);
         let page = mm(settings.svg_width.get());
@@ -682,6 +753,40 @@ impl Drawing {
                             num(px(note.at.0)),
                             num(py(note.at.1)),
                             note.text
+                        );
+                    }
+                }
+            }
+            o.push_str("</g>\n");
+        }
+        if let Some((tb, fallback, lang)) = title {
+            let block = self.title_block(tb, fallback, &format!("1:{:.2}", 1.0 / scale), gap, lang);
+            let _ = writeln!(
+                o,
+                "<g id=\"{}\" fill=\"#111111\" stroke=\"#111111\" stroke-width=\"{}\" font-family=\"sans-serif\">",
+                titleblock::LAYER,
+                num(line)
+            );
+            for item in &block.items {
+                match item {
+                    Item::Line(a, b) => {
+                        let _ = writeln!(
+                            o,
+                            "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"/>",
+                            num(px(a.0)),
+                            num(py(a.1)),
+                            num(px(b.0)),
+                            num(py(b.1))
+                        );
+                    }
+                    Item::Text { at, height, text } => {
+                        let _ = writeln!(
+                            o,
+                            "<text x=\"{}\" y=\"{}\" font-size=\"{}\" stroke=\"none\">{}</text>",
+                            num(px(at.0)),
+                            num(py(at.1)),
+                            num(*height),
+                            titleblock::xml_text(text)
                         );
                     }
                 }
@@ -945,5 +1050,68 @@ mod tests {
         }
         assert_eq!(View::from_name("back"), None);
         assert_eq!(View::Side.face(), Face::Right);
+    }
+
+    fn block_settings() -> TitleBlockSettings {
+        TitleBlockSettings {
+            enabled: true,
+            organisation: "Workshop".into(),
+            title: String::new(),
+            number: "A-12".into(),
+            revision: "B".into(),
+            author: "Ana".into(),
+            width: mmv(100),
+            row: mmv(8),
+        }
+    }
+
+    #[test]
+    fn the_title_block_goes_under_the_drawing_in_the_dxf_file_on_its_own_layer() {
+        let d = Drawing::of(&model(), View::Top, &settings()).unwrap();
+        let block = d.title_block(&block_settings(), "box", "1:1", 6.0, Lang::En);
+        // the drawing runs from -3 to 107 along x and from -3 to 67 along y
+        assert_eq!(block.hi, (107.0, -9.0));
+        assert_eq!(block.lo, (7.0, -41.0));
+        let plain = d.to_dxf();
+        assert!(!plain.contains("ROTULO"));
+        assert_eq!(plain, d.to_dxf_with(None));
+        let with = d.to_dxf_with(Some(&block));
+        assert!(with.contains("2\nLAYER\n70\n4\n"));
+        // the layer, eight lines and twelve texts
+        assert_eq!(with.matches("ROTULO").count(), 1 + 8 + 12);
+        assert_eq!(with.matches("\nTEXT\n").count(), 12);
+        assert!(with.contains("1\nWorkshop\n"));
+        assert!(with.contains("1\nDrawing number\n"));
+        assert!(with.contains("1\nbox\n"));
+        assert!(with.ends_with("0\nENDSEC\n0\nEOF\n"));
+        // what was in the file before is still there
+        assert!(with.contains("0\nLINE\n8\nCONTORNO\n"));
+    }
+
+    #[test]
+    fn the_title_block_grows_the_svg_page_and_escapes_its_texts() {
+        let d = Drawing::of(&model(), View::Top, &settings()).unwrap();
+        let plain = d.to_svg(&settings());
+        assert_eq!(plain, d.to_svg_with(&settings(), None));
+        assert!(plain.contains("viewBox=\"0 0 138 98\""), "{plain}");
+        let tb = block_settings();
+        let svg = d.to_svg_with(&settings(), Some((&tb, "a & b", Lang::Es)));
+        // 16 mm under the drawing and 4 rows of 8 mm: 48 mm more
+        assert!(svg.contains("viewBox=\"0 0 138 146\""), "{svg}");
+        assert!(svg.contains("<g id=\"ROTULO\""));
+        assert!(svg.contains(">Organización</text>"));
+        assert!(svg.contains(">Número de plano</text>"));
+        assert!(svg.contains(">a &amp; b</text>"));
+        assert!(svg.contains(">1:0.69</text>"), "{svg}");
+        assert_eq!(
+            svg.matches("<text").count(),
+            plain.matches("<text").count() + 12
+        );
+        // a title given by the settings wins over the name
+        let mut own = block_settings();
+        own.title = "Front <panel>".into();
+        let svg = d.to_svg_with(&settings(), Some((&own, "box", Lang::En)));
+        assert!(svg.contains(">Front &lt;panel&gt;</text>"));
+        assert!(!svg.contains(">box</text>"));
     }
 }

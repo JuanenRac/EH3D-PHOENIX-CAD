@@ -355,8 +355,15 @@ fn run_sketch_export(args: &[String]) -> Result<bool, String> {
             .map_err(|e| error_text(&e, lang))?;
         (sketch, Some(file.clone()))
     };
-    let text = eh3d_phoenix_cad::sketch_export::render(&sketch, &solver, &settings.drawing, dxf)
-        .map_err(|e| error_text(&e, lang))?;
+    let text = eh3d_phoenix_cad::sketch_export::render_titled(
+        &sketch,
+        &solver,
+        &settings.drawing,
+        dxf,
+        &settings.title_block,
+        lang,
+    )
+    .map_err(|e| error_text(&e, lang))?;
     let target = out.unwrap_or_else(|| {
         PathBuf::from(format!(
             "{}.{}",

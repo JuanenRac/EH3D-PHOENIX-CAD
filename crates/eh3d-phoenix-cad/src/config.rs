@@ -20,6 +20,7 @@ use crate::expr::{parse, Constants, ExprLimits, Value};
 use crate::nesting::StockSettings;
 use crate::placement::PlacementSettings;
 use crate::printer::PrinterProfile;
+use crate::titleblock::TitleBlockSettings;
 use crate::units::{parse_length, Unit};
 use crate::{CadError, Length};
 
@@ -562,6 +563,8 @@ pub struct Settings {
     pub clearance: ClearanceSettings,
     /// The settings of the table of placements and of the exploded view.
     pub placement: PlacementSettings,
+    /// The settings of the title block of the drawings.
+    pub title_block: TitleBlockSettings,
     /// The named values that expressions can use: the sizes of the screws, the compensation of the
     /// printer and the `[constants]` of the settings.
     pub constants: Constants,
@@ -844,6 +847,7 @@ impl Settings {
         let stock = StockSettings::from_config(c)?;
         let clearance = ClearanceSettings::from_config(c)?;
         let placement = PlacementSettings::from_config(c)?;
+        let title_block = TitleBlockSettings::from_config(c)?;
         let constants = build_constants(c, &screws, &printer, counterbore_extra, &expr)?;
         Ok(Settings {
             backups,
@@ -866,6 +870,7 @@ impl Settings {
             stock,
             clearance,
             placement,
+            title_block,
             constants,
         })
     }

@@ -91,6 +91,21 @@ In `phoenix-cad.default.cfg` (the `config` command writes them):
 | `drawing.dimensions` | 1 | dimensions and labels in the SVG drawing |
 | `drawing.axis_overshoot` | 3 mm | how far the centre lines go past what they mark |
 
+### The title block
+
+With `title_block.enabled = 1` the DXF and SVG drawings of the views and of a sketch have a title block under the drawing, aligned to its right edge: a table of four rows with the organisation, the title, the number of the drawing with its revision, and the author with the scale. The names of the cells are words of the window in the language of the window (or of `--lang`); the values are the ones typed in the settings and go in as they are, in any language. In the DXF file the block is on its own layer `ROTULO` as lines and `TEXT` entities, and a character that is not printable ASCII is written as the escape `\U+XXXX`; in the SVG file the block is a group `ROTULO` under the drawing, the page grows to hold it and the five characters that XML keeps for itself are written as entities. The scale of the DXF block is `1:1` (the file is in millimetres) and that of the SVG block is the scale of the page.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `title_block.enabled` | 0 | 1 draws the block, 0 leaves it out (the files are then exactly what they were) |
+| `title_block.organisation` | empty | the organisation, at most 80 characters on one line |
+| `title_block.title` | empty | the title; empty means the name of the project (or of the sketch) |
+| `title_block.number` | empty | the number of the drawing |
+| `title_block.revision` | A | the revision |
+| `title_block.author` | empty | the author |
+| `title_block.width` | 120 mm | the width of the block, from 60 mm to 400 mm |
+| `title_block.row` | 7 mm | the height of each of the four rows, from 4 mm to 20 mm |
+
 In `phoenix-cad-window.default.cfg`: `export.format` (the format the dialog starts with: `script`, `step`, `stl`, `dxf-top`, `dxf-front`, `dxf-side`, `svg-top`, `svg-front`, `svg-side`, `report`, `bill`, `obj` or `3mf`), `export.overwrite` and `export.max_kib`.
 
 ## The reports in the window and in the eight languages

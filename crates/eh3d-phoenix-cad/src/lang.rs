@@ -511,6 +511,12 @@ messages! {
     CoCollinear => ["Collinear", "Colineales", "Kollinear", "Colinéaires", "Allineate", "同一直線上", "共线", "Colineares"],
     DiLineAngle => ["Angle to the horizontal", "Ángulo con la horizontal", "Winkel zur Waagerechten", "Angle avec l'horizontale", "Angolo con l'orizzontale", "水平との角度", "与水平方向的夹角", "Ângulo com a horizontal"],
     DiPointLine => ["Distance from point to line", "Distancia de punto a recta", "Abstand von Punkt zu Gerade", "Distance du point à la droite", "Distanza da punto a retta", "点と直線の距離", "点到直线的距离", "Distância de ponto a reta"],
+    TbOrganisation => ["Organisation", "Organización", "Organisation", "Organisation", "Organizzazione", "組織", "机构", "Organização"],
+    TbTitle => ["Title", "Título", "Titel", "Titre", "Titolo", "タイトル", "标题", "Título"],
+    TbNumber => ["Drawing number", "Número de plano", "Zeichnungsnummer", "Numéro de plan", "Numero del disegno", "図面番号", "图号", "Número do desenho"],
+    TbRevision => ["Revision", "Revisión", "Revision", "Révision", "Revisione", "改訂", "版本", "Revisão"],
+    TbAuthor => ["Author", "Autor", "Autor", "Auteur", "Autore", "作成者", "作者", "Autor"],
+    TbScale => ["Scale", "Escala", "Maßstab", "Échelle", "Scala", "縮尺", "比例", "Escala"],
 }
 
 impl Msg {

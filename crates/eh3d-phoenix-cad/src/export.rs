@@ -15,6 +15,7 @@ use crate::config::Settings;
 use crate::drawing::{Drawing, View};
 use crate::enclosure::Enclosure;
 use crate::interchange;
+use crate::lang::Lang;
 use crate::mesh;
 use crate::scad::to_scad;
 use crate::sketch::file as sketch_file;
@@ -150,6 +151,20 @@ pub fn render(
     text: &str,
     settings: &Settings,
 ) -> Result<Vec<u8>, CadError> {
+    render_titled(format, enclosure, text, settings, Lang::En, "box")
+}
+
+/// The same as [`render`] with the language of the cells of the title block of the drawings and
+/// the name of the model, which is the title of the block when the settings give none. A
+/// drawing has a title block only when `title_block.enabled` is 1.
+pub fn render_titled(
+    format: Format,
+    enclosure: &Enclosure,
+    text: &str,
+    settings: &Settings,
+    lang: Lang,
+    name: &str,
+) -> Result<Vec<u8>, CadError> {
     let text_of = |s: String| Ok(s.into_bytes());
     match format {
         Format::Script => text_of(to_scad(enclosure)),
@@ -169,10 +184,19 @@ pub fn render(
         _ => {
             let view = format.view().unwrap_or(View::Top);
             let drawing = Drawing::of(enclosure, view, &settings.drawing)?;
-            if format.extension() == "dxf" {
-                text_of(drawing.to_dxf())
+            let tb = &settings.title_block;
+            let dxf = format.extension() == "dxf";
+            if !tb.enabled {
+                text_of(if dxf {
+                    drawing.to_dxf()
+                } else {
+                    drawing.to_svg(&settings.drawing)
+                })
+            } else if dxf {
+                let block = drawing.title_block(tb, name, "1:1", 6.0, lang);
+                text_of(drawing.to_dxf_with(Some(&block)))
             } else {
-                text_of(drawing.to_svg(&settings.drawing))
+                text_of(drawing.to_svg_with(&settings.drawing, Some((tb, name, lang))))
             }
         }
     }
@@ -560,5 +584,44 @@ o enclosure
         .is_ok());
         let e = check_target(Path::new(""), false, None).unwrap_err();
         assert_eq!(e.code(), "PHOENIX-CAD-041");
+    }
+
+    #[test]
+    fn a_drawing_has_a_title_block_only_when_the_settings_ask_for_it() {
+        let e = enclosure();
+        let off = Settings::defaults();
+        for format in [Format::DxfTop, Format::SvgFront] {
+            let plain = render(format, &e, "", &off).unwrap();
+            assert!(!String::from_utf8(plain.clone()).unwrap().contains("ROTULO"));
+            // the language and the name change nothing while it is off
+            assert_eq!(
+                render_titled(format, &e, "", &off, Lang::De, "plate").unwrap(),
+                plain
+            );
+        }
+        let on = Settings::with_user_config(
+            "[title_block]
+enabled = 1
+number = P-7
+",
+        )
+        .unwrap();
+        let dxf = String::from_utf8(
+            render_titled(Format::DxfTop, &e, "", &on, Lang::De, "plate").unwrap(),
+        )
+        .unwrap();
+        assert!(dxf.contains("ROTULO"));
+        assert!(dxf.contains("1\nZeichnungsnummer\n"));
+        assert!(dxf.contains("1\nplate\n"));
+        assert!(dxf.contains("1\nP-7\n"));
+        let svg = String::from_utf8(
+            render_titled(Format::SvgSide, &e, "", &on, Lang::Fr, "plate").unwrap(),
+        )
+        .unwrap();
+        assert!(svg.contains(">Numéro de plan</text>"));
+        assert!(svg.contains(">plate</text>"));
+        // the other formats do not have one
+        let step = render_titled(Format::Script, &e, "", &on, Lang::En, "plate").unwrap();
+        assert!(!String::from_utf8(step).unwrap().contains("ROTULO"));
     }
 }

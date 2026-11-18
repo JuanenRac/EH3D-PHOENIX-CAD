@@ -2045,11 +2045,13 @@ impl Window {
         overwrite: bool,
     ) -> Result<(String, usize), CadError> {
         let found = self.find_sketch(Some(sketch))?;
-        let text = crate::sketch_export::render(
+        let text = crate::sketch_export::render_titled(
             &found,
             &self.sketch_settings,
             &self.settings.drawing,
             format.is_dxf(),
+            &self.settings.title_block,
+            self.lang,
         )?;
         let target = crate::panels::drawing_target(self.path.as_deref(), file)?;
         let bytes = export::write_file(
@@ -3581,7 +3583,18 @@ impl Window {
             Format::Report => self.report_text(),
             _ => String::new(),
         };
-        export::render(format, &self.built.enclosure, &text, &self.settings)
+        let name = export::suggested_name(self.path.as_deref(), format);
+        let stem = name
+            .rsplit_once('.')
+            .map_or(name.as_str(), |(stem, _)| stem);
+        export::render_titled(
+            format,
+            &self.built.enclosure,
+            &text,
+            &self.settings,
+            self.lang,
+            stem,
+        )
     }
 
     /// The text of a format for the model as it is now; a binary STL file is not text and is
@@ -7313,5 +7326,23 @@ mass: "
         assert!(w.report_text().contains(
             "Interference: none (4 pairs with overlapping boxes looked at, 4 screws through holes)"
         ));
+    }
+
+    #[test]
+    fn the_title_block_of_the_drawings_follows_the_settings_and_the_language_of_the_window() {
+        let mut w = example();
+        let plain = w.export_text(Format::DxfTop).unwrap();
+        assert!(!plain.contains("ROTULO"));
+        w.settings.title_block.enabled = true;
+        w.settings.title_block.author = "Ana".into();
+        w.lang = Lang::Es;
+        let dxf = w.export_text(Format::DxfTop).unwrap();
+        // the DXF file is ASCII: the accent is written as an escape
+        assert!(dxf.contains("1\nN\\U+00FAmero de plano\n"));
+        // the name of the project is the title
+        assert!(dxf.contains("1\nbox\n"), "{dxf}");
+        assert!(dxf.contains("1\nAna\n"));
+        let svg = w.export_text(Format::SvgFront).unwrap();
+        assert!(svg.contains(">Número de plano</text>"));
     }
 }

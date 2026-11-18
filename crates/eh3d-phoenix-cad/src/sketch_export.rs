@@ -12,9 +12,11 @@
 
 use crate::config::DrawingSettings;
 use crate::drawing::{Drawing, Entity, Layer, View};
+use crate::lang::Lang;
 use crate::profile::{Outline, Piece, Profile, ProfileLimits, Pt};
 use crate::sketch::settings::SketchSettings;
 use crate::sketch::Sketch;
+use crate::titleblock::TitleBlockSettings;
 use crate::CadError;
 
 fn mm(nm: i64) -> f64 {
@@ -97,6 +99,27 @@ pub fn render(
     drawing: &DrawingSettings,
     dxf: bool,
 ) -> Result<String, CadError> {
+    render_titled(
+        sketch,
+        solver,
+        drawing,
+        dxf,
+        &TitleBlockSettings::off(),
+        Lang::En,
+    )
+}
+
+/// The same as [`render`] with a title block under the drawing when `title.enabled` is true: the
+/// title of the block is the name of the sketch when the settings give none, and `lang` is the
+/// language of the names of its cells.
+pub fn render_titled(
+    sketch: &Sketch,
+    solver: &SketchSettings,
+    drawing: &DrawingSettings,
+    dxf: bool,
+    title: &TitleBlockSettings,
+    lang: Lang,
+) -> Result<String, CadError> {
     let profile = Profile::from_sketch(sketch, &ProfileLimits::from_settings(solver))?;
     let d = drawing_of(&profile);
     if d.entities.len() > drawing.max_entities as usize {
@@ -106,7 +129,15 @@ pub fn render(
             drawing.max_entities
         )));
     }
-    Ok(if dxf { d.to_dxf() } else { d.to_svg(drawing) })
+    Ok(match (title.enabled, dxf) {
+        (false, true) => d.to_dxf(),
+        (false, false) => d.to_svg(drawing),
+        (true, true) => {
+            let block = d.title_block(title, sketch.name(), "1:1", 6.0, lang);
+            d.to_dxf_with(Some(&block))
+        }
+        (true, false) => d.to_svg_with(drawing, Some((title, sketch.name(), lang))),
+    })
 }
 
 #[cfg(test)]
@@ -233,5 +264,26 @@ mod tests {
         assert_eq!(e.code(), "PHOENIX-CAD-050");
         dr.max_entities = 5;
         assert!(render(&plate(), &s, &dr, true).is_ok());
+    }
+
+    #[test]
+    fn the_drawing_of_a_sketch_can_have_a_title_block_named_after_the_sketch() {
+        let (s, dr) = settings();
+        let tb = TitleBlockSettings {
+            enabled: true,
+            ..TitleBlockSettings::off()
+        };
+        let dxf = render_titled(&plate(), &s, &dr, true, &tb, Lang::It).unwrap();
+        assert!(dxf.contains("ROTULO"));
+        assert!(dxf.contains("1\nNumero del disegno\n"));
+        assert!(dxf.contains("1\nplate\n"));
+        let svg = render_titled(&plate(), &s, &dr, false, &tb, Lang::En).unwrap();
+        assert!(svg.contains("<g id=\"ROTULO\""));
+        // off, it is the drawing it always was
+        let off = TitleBlockSettings::off();
+        assert_eq!(
+            render_titled(&plate(), &s, &dr, true, &off, Lang::It).unwrap(),
+            render(&plate(), &s, &dr, true).unwrap()
+        );
     }
 }
