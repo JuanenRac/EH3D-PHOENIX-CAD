@@ -385,6 +385,11 @@ impl<'a> Model<'a> {
                 let sin = dim.value.sin() as f64 / 1e9;
                 out.push((cross * cos - dot * sin) / norm(d2));
             }
+            Constraint::Concentric(a, b) => {
+                let (p, q) = (self.center(x, *a), self.center(x, *b));
+                out.push(p.0 - q.0);
+                out.push(p.1 - q.1);
+            }
             Constraint::Collinear(a, b) => {
                 let ((p1, q1), (p2, q2)) = (self.line_ends(x, *a), self.line_ends(x, *b));
                 let (d1, d2) = ((q1.0 - p1.0, q1.1 - p1.1), (q2.0 - p2.0, q2.1 - p2.1));
@@ -1505,5 +1510,37 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn a_circle_and_an_arc_with_one_centre_share_it() {
+        let mut k = sketch();
+        let c1 = k.add_point(mm(5), mm(5)).unwrap();
+        let c2 = k.add_point(mm(9), mm(1)).unwrap();
+        let circle = k.add_circle(c1, mm(3)).unwrap();
+        let start = k.add_point(mm(12), mm(1)).unwrap();
+        let end = k.add_point(mm(9), mm(4)).unwrap();
+        let arc = k.add_arc(c2, start, end).unwrap();
+        k.fix_point(c1).unwrap();
+        k.add_constraint(Constraint::Concentric(circle, arc))
+            .unwrap();
+        solved(&mut k);
+        assert_eq!(k.point(c2).unwrap(), (mm(5), mm(5)));
+        // the circle keeps its radius and the arc keeps its own: only a line cannot have a centre
+        assert_eq!(
+            k.add_constraint(Constraint::Concentric(circle, circle))
+                .unwrap_err()
+                .code(),
+            "PHOENIX-CAD-032"
+        );
+        let a = k.add_point(mm(0), mm(0)).unwrap();
+        let b = k.add_point(mm(1), mm(0)).unwrap();
+        let line = k.add_line(a, b).unwrap();
+        assert_eq!(
+            k.add_constraint(Constraint::Concentric(circle, line))
+                .unwrap_err()
+                .code(),
+            "PHOENIX-CAD-032"
+        );
     }
 }

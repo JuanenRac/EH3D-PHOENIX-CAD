@@ -257,6 +257,8 @@ pub enum Constraint {
     Equal(ElementId, ElementId),
     /// Two lines lie on one and the same line (they are parallel and one is on the other).
     Collinear(ElementId, ElementId),
+    /// Two circles or arcs have the same centre.
+    Concentric(ElementId, ElementId),
     /// Two points are mirror images across a line.
     SymmetricLine {
         /// The first point.
@@ -387,6 +389,7 @@ impl Constraint {
             Constraint::Tangent(..) => "tangent",
             Constraint::Equal(..) => "equal",
             Constraint::Collinear(..) => "collinear",
+            Constraint::Concentric(..) => "concentric",
             Constraint::SymmetricLine { .. } => "symmetric_line",
             Constraint::SymmetricPoint { .. } => "symmetric_point",
             Constraint::Midpoint { .. } => "midpoint",
@@ -414,6 +417,7 @@ impl Constraint {
             | Constraint::Tangent(a, b)
             | Constraint::Equal(a, b)
             | Constraint::Collinear(a, b)
+            | Constraint::Concentric(a, b)
             | Constraint::Distance { a, b, .. }
             | Constraint::DistanceX { a, b, .. }
             | Constraint::DistanceY { a, b, .. }
@@ -876,6 +880,11 @@ impl Sketch {
                         "equal ties two lines or two circles or arcs, not one of each",
                     ));
                 }
+            }
+            Constraint::Concentric(a, b) => {
+                Self::check_distinct(*a, *b)?;
+                self.need(*a, &[Circle, Arc], "a circle or an arc")?;
+                self.need(*b, &[Circle, Arc], "a circle or an arc")?;
             }
             Constraint::SymmetricLine { a, b, axis } => {
                 Self::check_distinct(*a, *b)?;

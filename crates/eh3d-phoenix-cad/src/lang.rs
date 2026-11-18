@@ -515,6 +515,7 @@ messages! {
     DetailSlot => ["length {0} {1}", "longitud {0} {1}", "Länge {0} {1}", "longueur {0} {1}", "lunghezza {0} {1}", "長さ {0} {1}", "长度 {0} {1}", "comprimento {0} {1}"],
     DetailVertical => ["vertical", "vertical", "senkrecht", "vertical", "verticale", "縦", "竖直", "vertical"],
     DetailHorizontal => ["horizontal", "horizontal", "waagerecht", "horizontal", "orizzontale", "横", "水平", "horizontal"],
+    CoConcentric => ["Concentric", "Concéntricos", "Konzentrisch", "Concentriques", "Concentrici", "同心", "同心", "Concêntricos"],
     CoCollinear => ["Collinear", "Colineales", "Kollinear", "Colinéaires", "Allineate", "同一直線上", "共线", "Colineares"],
     DiLineAngle => ["Angle to the horizontal", "Ángulo con la horizontal", "Winkel zur Waagerechten", "Angle avec l'horizontale", "Angolo con l'orizzontale", "水平との角度", "与水平方向的夹角", "Ângulo com a horizontal"],
     DiPointLine => ["Distance from point to line", "Distancia de punto a recta", "Abstand von Punkt zu Gerade", "Distance du point à la droite", "Distanza da punto a retta", "点と直線の距離", "点到直线的距离", "Distância de ponto a reta"],

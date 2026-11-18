@@ -355,6 +355,8 @@ pub enum ConstraintTool {
     Equal,
     /// Two lines lie on one line.
     Collinear,
+    /// Two circles or arcs have the same centre.
+    Concentric,
     /// Two points are mirror images across a line or through a point.
     Symmetric,
     /// A point is the midpoint of a line.
@@ -365,7 +367,7 @@ pub enum ConstraintTool {
 
 impl ConstraintTool {
     /// Every tool, in the order of the panel.
-    pub const ALL: [ConstraintTool; 12] = [
+    pub const ALL: [ConstraintTool; 13] = [
         ConstraintTool::Coincident,
         ConstraintTool::PointOnObject,
         ConstraintTool::Horizontal,
@@ -375,6 +377,7 @@ impl ConstraintTool {
         ConstraintTool::Tangent,
         ConstraintTool::Equal,
         ConstraintTool::Collinear,
+        ConstraintTool::Concentric,
         ConstraintTool::Symmetric,
         ConstraintTool::Midpoint,
         ConstraintTool::Fixed,
@@ -392,6 +395,7 @@ impl ConstraintTool {
             ConstraintTool::Tangent => Msg::CoTangent,
             ConstraintTool::Equal => Msg::CoEqual,
             ConstraintTool::Collinear => Msg::CoCollinear,
+            ConstraintTool::Concentric => Msg::CoConcentric,
             ConstraintTool::Symmetric => Msg::CoSymmetric,
             ConstraintTool::Midpoint => Msg::CoMidpoint,
             ConstraintTool::Fixed => Msg::CoFixed,
@@ -787,6 +791,7 @@ fn constraint_msg(c: &Constraint) -> Msg {
         Constraint::Tangent(..) => Msg::CoTangent,
         Constraint::Equal(..) => Msg::CoEqual,
         Constraint::Collinear(..) => Msg::CoCollinear,
+        Constraint::Concentric(..) => Msg::CoConcentric,
         Constraint::SymmetricLine { .. } | Constraint::SymmetricPoint { .. } => Msg::CoSymmetric,
         Constraint::Midpoint { .. } => Msg::CoMidpoint,
         Constraint::Fixed { .. } => Msg::CoFixed,
@@ -821,6 +826,7 @@ fn marker_of(c: &Constraint) -> Option<&'static str> {
         Constraint::Tangent(..) => Some("T"),
         Constraint::Equal(..) => Some("="),
         Constraint::Collinear(..) => Some("CL"),
+        Constraint::Concentric(..) => Some("CN"),
         Constraint::Coincident(..) => Some("C"),
         Constraint::PointOnObject { .. } => Some("O"),
         Constraint::SymmetricLine { .. } | Constraint::SymmetricPoint { .. } => Some("S"),
@@ -1687,8 +1693,17 @@ impl SketchEditor {
             ConstraintTool::Tangent if all.len() == 2 && !rounds.is_empty() => {
                 vec![Constraint::Tangent(all[0], all[1])]
             }
-            ConstraintTool::Equal if all.len() == 2 && (lines.len() == 2 || rounds.len() == 2) => {
-                vec![Constraint::Equal(all[0], all[1])]
+            ConstraintTool::Equal
+                if all.len() >= 2 && (lines.len() == all.len() || rounds.len() == all.len()) =>
+            {
+                // three or more: every one is made equal to the first
+                all[1..]
+                    .iter()
+                    .map(|other| Constraint::Equal(all[0], *other))
+                    .collect()
+            }
+            ConstraintTool::Concentric if all.len() == 2 && rounds.len() == 2 => {
+                vec![Constraint::Concentric(rounds[0], rounds[1])]
             }
             ConstraintTool::Symmetric if all.len() == 3 && points.len() == 3 => {
                 vec![Constraint::SymmetricPoint {
@@ -4156,5 +4171,47 @@ mod tests {
         );
         w.new_sketch();
         assert_eq!(w.name_input, "sketch");
+    }
+
+    #[test]
+    fn equal_ties_every_selected_line_to_the_first_and_concentric_needs_two_circles() {
+        let mut e = editor();
+        rectangle(&mut e);
+        pick(&mut e, &[5, 6, 7]);
+        assert!(e.available().contains(&ConstraintTool::Equal));
+        assert!(!e.available().contains(&ConstraintTool::Concentric));
+        e.add_constraint(ConstraintTool::Equal);
+        let equal = e
+            .sketch
+            .constraints()
+            .iter()
+            .filter(|c| matches!(c.constraint, Constraint::Equal(..)))
+            .count();
+        assert_eq!(equal, 2);
+        // a line and a point are not offered the new tool, two circles are
+        let c1 = e.sketch.add_point(mm(60.0), mm(10.0)).unwrap();
+        let r1 = e.sketch.add_circle(c1, mm(4.0)).unwrap();
+        let c2 = e.sketch.add_point(mm(70.0), mm(10.0)).unwrap();
+        let r2 = e.sketch.add_circle(c2, mm(6.0)).unwrap();
+        pick(&mut e, &[r1.0, r2.0]);
+        assert!(e.available().contains(&ConstraintTool::Concentric));
+        assert!(e.available().contains(&ConstraintTool::Equal));
+        e.add_constraint(ConstraintTool::Concentric);
+        assert!(e
+            .sketch
+            .constraints()
+            .iter()
+            .any(|c| c.constraint == Constraint::Concentric(r1, r2)));
+        pick(&mut e, &[5, r1.0]);
+        assert!(!e.available().contains(&ConstraintTool::Concentric));
+        assert!(!e.available().contains(&ConstraintTool::Equal));
+        for l in Lang::ALL {
+            assert!(!ConstraintTool::Concentric.msg().tr(l).is_empty());
+        }
+        assert_eq!(
+            constraint_msg(&Constraint::Concentric(r1, r2)),
+            Msg::CoConcentric
+        );
+        assert_eq!(marker_of(&Constraint::Concentric(r1, r2)), Some("CN"));
     }
 }

@@ -1,7 +1,10 @@
 //! The sketch file (`.phoenixsketch`): one sketch in plain text, the way in and the way out of the
 //! sketches of a project, which are kept in the project file itself (`super::domain`).
 //!
-//! The file has its own version in its first line, and the same text is what the domain `sketch`
+//! The file has its own version in its first line (1, or 2 when the sketch has a kind of constraint
+//! that came with the second version: `collinear`, `point_line_distance`, `line_angle` and
+//! `concentric`; a program that reads only version 1 refuses such a file with its version, and a
+//! file of version 1 that has one of those kinds is refused), and the same text is what the domain `sketch`
 //! of the project file holds for each sketch. One line for the header, one for the name, one for the plane, one for the counters of
 //! the identifiers and then one line for each element and each constraint, in the order they
 //! were added:
@@ -38,8 +41,34 @@ use crate::store;
 use crate::units::Angle;
 use crate::{CadError, Length};
 
-/// The version of the format that this program writes and reads.
-pub const FILE_VERSION: u32 = 1;
+/// The newest version of the format that this program reads.
+pub const FILE_VERSION: u32 = 2;
+
+/// The version of a sketch that has only the kinds of constraint of the first version.
+pub const BASE_VERSION: u32 = 1;
+
+/// The kinds of constraint that came with the second version of the format.
+const VERSION_2_KINDS: [&str; 4] = [
+    "collinear",
+    "point_line_distance",
+    "line_angle",
+    "concentric",
+];
+
+/// The version a sketch is written with: 2 when it has a constraint that came with that version
+/// and 1 otherwise, so that a sketch that does not need the newer kinds can still be read by a
+/// program that reads only the first version.
+pub fn version_of(sketch: &Sketch) -> u32 {
+    let newer = sketch
+        .constraints()
+        .iter()
+        .any(|c| VERSION_2_KINDS.contains(&c.constraint.kind_name()));
+    if newer {
+        FILE_VERSION
+    } else {
+        BASE_VERSION
+    }
+}
 
 /// The extension of a sketch file.
 pub const EXTENSION: &str = "phoenixsketch";
@@ -74,6 +103,7 @@ fn constraint_text(c: &Constraint) -> String {
         | Constraint::Perpendicular(a, b)
         | Constraint::Tangent(a, b)
         | Constraint::Collinear(a, b)
+        | Constraint::Concentric(a, b)
         | Constraint::Equal(a, b) => format!("{name} {a} {b}"),
         Constraint::PointOnObject { point, object } => format!("{name} {point} {object}"),
         Constraint::Horizontal(l) | Constraint::Vertical(l) => format!("{name} {l}"),
@@ -109,7 +139,7 @@ pub fn to_text(sketch: &Sketch) -> String {
     let mut out = String::new();
     let plane = sketch.plane();
     let (next_e, next_c) = sketch.next_ids();
-    let _ = writeln!(out, "{HEADER} {FILE_VERSION}");
+    let _ = writeln!(out, "{HEADER} {}", version_of(sketch));
     let _ = writeln!(out, "name {}", sketch.name());
     let _ = writeln!(
         out,
@@ -209,7 +239,7 @@ fn parse_constraint(
     };
     let c = match kind {
         "coincident" | "horizontal_points" | "vertical_points" | "parallel" | "perpendicular"
-        | "tangent" | "equal" | "point_on_object" | "midpoint" | "collinear" => {
+        | "tangent" | "equal" | "point_on_object" | "midpoint" | "collinear" | "concentric" => {
             exactly(line, kind, words, 2)?;
             let (a, b) = (id(0)?, id(1)?);
             match kind {
@@ -221,6 +251,7 @@ fn parse_constraint(
                 "tangent" => Constraint::Tangent(a, b),
                 "equal" => Constraint::Equal(a, b),
                 "collinear" => Constraint::Collinear(a, b),
+                "concentric" => Constraint::Concentric(a, b),
                 "point_on_object" => Constraint::PointOnObject {
                     point: a,
                     object: b,
@@ -367,6 +398,7 @@ fn parse_element(line: usize, words: &[&str]) -> Result<(Element, bool), CadErro
 /// Reads a sketch from its text.
 pub fn from_text(text: &str) -> Result<Sketch, CadError> {
     let mut header = false;
+    let mut version = 0u32;
     let mut name: Option<String> = None;
     let mut plane: Option<SketchPlane> = None;
     let mut next: Option<(u32, u32)> = None;
@@ -385,7 +417,7 @@ pub fn from_text(text: &str) -> Result<Sketch, CadError> {
             if words.next() != Some(HEADER) {
                 return Err(bad(line, "this is not a sketch file"));
             }
-            let version = words
+            version = words
                 .next()
                 .and_then(|v| v.parse::<u32>().ok())
                 .ok_or_else(|| bad(line, "the version is missing"))?;
@@ -464,6 +496,12 @@ pub fn from_text(text: &str) -> Result<Sketch, CadError> {
                 let Some((kind, args)) = rest.split_first() else {
                     return Err(bad(line, "a constraint needs a kind"));
                 };
+                if version < FILE_VERSION && VERSION_2_KINDS.contains(kind) {
+                    return Err(bad(
+                        line,
+                        format!("{kind} needs a file of version {FILE_VERSION}"),
+                    ));
+                }
                 let constraint = parse_constraint(line, kind, args, expr)?;
                 constraints.push(ConstraintEntry {
                     id,
@@ -617,7 +655,7 @@ mod tests {
         let cases: Vec<(String, &str)> = vec![
             ("".into(), "not a sketch file"),
             ("hello 1\n".into(), "not a sketch file"),
-            ("phoenix-sketch 2\n".into(), "version 2"),
+            ("phoenix-sketch 3\n".into(), "version 3"),
             ("phoenix-sketch 0\n".into(), "1 or more"),
             ("phoenix-sketch x\n".into(), "version is missing"),
             ("phoenix-sketch 1\n".into(), "name is missing"),
@@ -747,6 +785,7 @@ mod tests {
         })
         .unwrap();
         let text = to_text(&k);
+        assert!(text.starts_with("phoenix-sketch 2\n"), "{text}");
         assert!(text.contains("c1 on collinear e5 e6\n"), "{text}");
         assert!(
             text.contains("c2 on point_line_distance e4 e5 5000000\n"),
@@ -779,5 +818,71 @@ mod tests {
         // collinear has no expression
         let with_expr = text.replace("c1 on collinear e5 e6", "c1 on collinear e5 e6 = 3");
         assert!(from_text(&with_expr).is_err());
+    }
+
+    #[test]
+    fn a_sketch_is_written_as_version_two_only_when_it_needs_the_newer_constraints() {
+        // the first version's kinds only: version 1, as before
+        let mut k = sketch();
+        let a = k.add_point(mm(0), mm(0)).unwrap();
+        let b = k.add_point(mm(10), mm(0)).unwrap();
+        let l = k.add_line(a, b).unwrap();
+        k.add_constraint(Constraint::Horizontal(l)).unwrap();
+        assert_eq!(version_of(&k), BASE_VERSION);
+        assert!(to_text(&k).starts_with(
+            "phoenix-sketch 1
+"
+        ));
+        // a concentric constraint needs version 2, and it reads back the same
+        let c1 = k.add_point(mm(20), mm(20)).unwrap();
+        let c2 = k.add_point(mm(21), mm(20)).unwrap();
+        let r1 = k.add_circle(c1, mm(3)).unwrap();
+        let r2 = k.add_circle(c2, mm(5)).unwrap();
+        k.add_constraint(Constraint::Concentric(r1, r2)).unwrap();
+        assert_eq!(version_of(&k), FILE_VERSION);
+        let text = to_text(&k);
+        assert!(
+            text.starts_with(
+                "phoenix-sketch 2
+"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "on concentric e6 e7
+"
+            ),
+            "{text}"
+        );
+        let back = from_text(&text).unwrap();
+        assert_eq!(back, k);
+        assert_eq!(to_text(&back), text);
+        // the same text with the header of version 1 is refused with the kind that needs 2,
+        // and a file of a newer version than this program reads is refused with both versions
+        let old = text.replacen("phoenix-sketch 2", "phoenix-sketch 1", 1);
+        let e = from_text(&old).unwrap_err().to_string();
+        assert!(e.contains("concentric needs a file of version 2"), "{e}");
+        let newer = text.replacen("phoenix-sketch 2", "phoenix-sketch 3", 1);
+        let e = from_text(&newer).unwrap_err().to_string();
+        assert!(
+            e.contains("version 3 and this program reads up to 2"),
+            "{e}"
+        );
+        // a file of version 1 without the newer kinds is read as it always was, and so is the
+        // same sketch written with the header of version 2
+        let plain = "phoenix-sketch 1
+name a
+plane top 0 0 0
+next 4 2
+e1 point 0 0
+e2 point 1 0
+e3 line e1 e2
+c1 on horizontal e3
+";
+        let one = from_text(plain).unwrap();
+        let two = from_text(&plain.replacen("phoenix-sketch 1", "phoenix-sketch 2", 1)).unwrap();
+        assert_eq!(one, two);
+        assert_eq!(to_text(&two), plain);
     }
 }
