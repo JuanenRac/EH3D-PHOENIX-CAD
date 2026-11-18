@@ -624,7 +624,8 @@ fn layout_of(word: &str) -> Result<Layout, CadError> {
     }
 }
 
-/// The version of the domain a step needs: 6 for a turned or a swept body, 5 for a mate, 4 for a placed part, 3 for a pattern or
+/// The version of the domain a step needs: 6 for a turned or a swept body or a mate of the newer
+/// kinds (offset, symmetric and turn), 5 for a mate, 4 for a placed part, 3 for a pattern or
 /// cooling fins, 2 for an extrusion or a pocket and 1 for the rest.
 fn step_version(op: &Operation) -> u32 {
     match op {
@@ -632,6 +633,7 @@ fn step_version(op: &Operation) -> u32 {
         | Operation::RemoveTurned { .. }
         | Operation::AddSwept { .. }
         | Operation::RemoveSwept { .. } => 6,
+        Operation::AddMate { mate, .. } if mate.kind.is_newer() => 6,
         Operation::AddMate { .. } | Operation::RemoveMate { .. } => 5,
         Operation::AddPart { .. } | Operation::RemovePart { .. } => 4,
         Operation::AddPattern { .. }
@@ -3713,5 +3715,77 @@ mod feature_tests {
         let mut d = Document::new();
         d.set_mechanical(&with_swept(), &s.mechanical).unwrap();
         assert_eq!(d.mechanical_version().unwrap(), Some(6));
+    }
+
+    #[test]
+    fn the_newer_mates_are_steps_of_version_six_with_a_golden_text() {
+        use crate::assembly::{Dim, MateKind};
+        let s = Settings::defaults();
+        let mut m = with_mates();
+        assert_eq!(m.version(), 5);
+        m.steps.push(mate_step(
+            "centred",
+            6,
+            1,
+            2,
+            MateKind::Offset {
+                axis: Dim::Y,
+                distance: mm(-30),
+            },
+        ));
+        m.steps.push(mate_step(
+            "mirror",
+            7,
+            1,
+            2,
+            MateKind::Symmetric {
+                axis: Dim::X,
+                plane: mm(100),
+            },
+        ));
+        m.steps
+            .push(mate_step("rolled", 8, 1, 2, MateKind::Turn { quarters: 3 }));
+        m.tip = m.steps.len();
+        assert_eq!(m.version(), 6);
+        let text = String::from_utf8(m.to_bytes(&s.mechanical).unwrap()).unwrap();
+        assert!(text.starts_with("mechanical 6\n"));
+        let steps = text.split("[steps]\n").nth(1).unwrap();
+        for expect in [
+            format!(
+                "step 0 centred add-mate {} {} {} offset y -30000000\n",
+                id(6),
+                id(1),
+                id(2)
+            ),
+            format!(
+                "step 0 mirror add-mate {} {} {} symmetric x 100000000\n",
+                id(7),
+                id(1),
+                id(2)
+            ),
+            format!(
+                "step 0 rolled add-mate {} {} {} turn 3\n",
+                id(8),
+                id(1),
+                id(2)
+            ),
+        ] {
+            assert!(steps.contains(&expect), "{expect}");
+        }
+        let read = Mechanical::from_bytes(text.as_bytes(), &s.expr, &s.mechanical).unwrap();
+        assert_eq!(read, m);
+        assert_eq!(read.to_bytes(&s.mechanical).unwrap(), text.as_bytes());
+        // the version has to agree with the steps: version 5 cannot hold the newer kinds
+        let parse = |t: &str| Mechanical::from_bytes(t.as_bytes(), &s.expr, &s.mechanical);
+        let e = parse(&text.replacen("mechanical 6", "mechanical 5", 1)).unwrap_err();
+        assert!(
+            e.to_string()
+                .contains("version 6 is in a domain of version 5"),
+            "{e}"
+        );
+        // and the recipe with only the first three kinds stays version 5
+        m.steps.truncate(6);
+        m.tip = 5;
+        assert_eq!(m.version(), 5);
     }
 }

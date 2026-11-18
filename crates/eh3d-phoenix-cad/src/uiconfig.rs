@@ -101,6 +101,12 @@ pub struct NewStepDefaults {
     pub mate_axis: Dim,
     /// The faces a new alignment puts on one plane.
     pub mate_edge: Edge,
+    /// How far the middle of the placed part is from the middle of the fixed one, for a new offset.
+    pub mate_offset: Length,
+    /// The position of the plane of a new symmetry, across the axis of `mate_axis`.
+    pub mate_plane: Length,
+    /// The quarter turns of the roll of the placed part, for a new turn (0 to 3).
+    pub mate_quarters: u8,
     /// The material of a new turned body, a name of the table of densities of the settings.
     pub turned_material: String,
 }
@@ -118,6 +124,17 @@ impl NewStepDefaults {
                 edge: self.mate_edge,
             }),
             "stack" => Some(MateKind::Stack),
+            "offset" => Some(MateKind::Offset {
+                axis: self.mate_axis,
+                distance: self.mate_offset,
+            }),
+            "symmetric" => Some(MateKind::Symmetric {
+                axis: self.mate_axis,
+                plane: self.mate_plane,
+            }),
+            "turn" => Some(MateKind::Turn {
+                quarters: self.mate_quarters,
+            }),
             _ => None,
         }
     }
@@ -280,9 +297,9 @@ impl NewStepDefaults {
         let part_axis = word(c, "new_step.part_axis")?;
         let part_roll = count(c, "new_step.part_roll", 0, 270)?;
         let mate_kind = word(c, "new_step.mate_kind")?;
-        if !["gap", "align", "stack"].contains(&mate_kind) {
+        if !["gap", "align", "stack", "offset", "symmetric", "turn"].contains(&mate_kind) {
             return Err(CadError::Config(format!(
-                "new_step.mate_kind: {mate_kind} is not gap, align or stack"
+                "new_step.mate_kind: {mate_kind} is not gap, align, stack, offset, symmetric or turn"
             )));
         }
         let mate_direction = word(c, "new_step.mate_direction")?;
@@ -377,6 +394,9 @@ impl NewStepDefaults {
                 ))
             })?,
             turned_material: turned_material.to_string(),
+            mate_offset: c.length("new_step.mate_offset")?,
+            mate_plane: c.length("new_step.mate_plane")?,
+            mate_quarters: u8::try_from(count(c, "new_step.mate_quarters", 0, 3)?).unwrap_or(0),
         })
     }
 }
@@ -591,6 +611,25 @@ mod tests {
         assert_eq!((n.mate_direction, n.mate_distance), (Axis::PlusZ, mm(0)));
         assert_eq!((n.mate_axis, n.mate_edge), (Dim::Z, Edge::Min));
         assert_eq!(n.turned_material, "PLA");
+        assert_eq!(
+            (n.mate_offset, n.mate_plane, n.mate_quarters),
+            (mm(0), mm(0), 1)
+        );
+        assert_eq!(
+            n.mate_of("offset"),
+            Some(MateKind::Offset {
+                axis: Dim::Z,
+                distance: mm(0)
+            })
+        );
+        assert_eq!(
+            n.mate_of("symmetric"),
+            Some(MateKind::Symmetric {
+                axis: Dim::Z,
+                plane: mm(0)
+            })
+        );
+        assert_eq!(n.mate_of("turn"), Some(MateKind::Turn { quarters: 1 }));
         assert_eq!(n.mate_of("stack"), Some(MateKind::Stack));
         assert_eq!(
             n.mate_of("gap"),

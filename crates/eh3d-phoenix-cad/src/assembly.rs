@@ -4,14 +4,21 @@
 //!
 //! A [`Mate`] places one part (`b`) relative to another (`a`) along **one** axis, so it takes away
 //! one of the three coordinates of `b` and leaves the other two as they were placed. There are
-//! three kinds:
+//! six kinds (the last three are the newer ones, see [`MateKind::is_newer`]):
 //!
 //! * `gap <direction> <distance>`: `b` lies on the side of `a` that the direction names (`+x`
 //!   to `-z`), `distance` away from its face (0 touches it);
 //! * `align <axis> <min|max|center>`: the lower faces of the two bounding boxes lie on one plane
 //!   (`min`), the upper faces do (`max`) or the middles do (`center`; refused when the middle is
 //!   half a nanometre off, because positions are whole nanometres);
-//! * `stack`: `b` stands on `a`, the lower face of `b` on the upper face of `a` (`gap +z 0`).
+//! * `stack`: `b` stands on `a`, the lower face of `b` on the upper face of `a` (`gap +z 0`);
+//! * `offset <axis> <distance>`: the middle of `b` is `distance` (signed) from the middle of `a`
+//!   along the axis (refused when the middles differ by half a nanometre);
+//! * `symmetric <axis> <plane>`: the middles of the two parts are symmetric about the plane at
+//!   that coordinate across the axis (`a` mirrored in the plane gives the middle of `b`);
+//! * `turn <quarters>`: no coordinate of `b` is taken away: its roll is the roll of `a` plus that
+//!   many quarter turns (0 to 3), the only angle between two parts that the 24 turns of a part
+//!   can give.
 //!
 //! The mates are constraints, not moves: the position typed for a part stays in the model and
 //! [`place`] gives every part its position with the mates applied, so taking a mate away puts the
@@ -202,6 +209,25 @@ pub enum MateKind {
     },
     /// `b` stands on `a`.
     Stack,
+    /// The middle of `b` is `distance` from the middle of `a` along the axis, with its sign.
+    Offset {
+        /// The axis along which the middles are apart.
+        axis: Dim,
+        /// How far the middle of `b` is from the middle of `a`, in the positive direction.
+        distance: Length,
+    },
+    /// The middles of the two parts are symmetric about a plane across the axis.
+    Symmetric {
+        /// The axis across the plane.
+        axis: Dim,
+        /// The coordinate of the plane along the axis.
+        plane: Length,
+    },
+    /// The roll of `b` is the roll of `a` plus some quarter turns.
+    Turn {
+        /// The quarter turns (0 to 3).
+        quarters: u8,
+    },
 }
 
 /// A part placed relative to another, along one axis.
@@ -228,21 +254,38 @@ fn direction_of(axis: Axis) -> (usize, i8) {
 }
 
 impl MateKind {
-    /// The word of the files for the kind: `gap`, `align` or `stack`.
+    /// The word of the files for the kind: `gap`, `align`, `stack`, `offset`, `symmetric` or
+    /// `turn`.
     pub fn name(self) -> &'static str {
         match self {
             MateKind::Gap { .. } => "gap",
             MateKind::Align { .. } => "align",
             MateKind::Stack => "stack",
+            MateKind::Offset { .. } => "offset",
+            MateKind::Symmetric { .. } => "symmetric",
+            MateKind::Turn { .. } => "turn",
         }
     }
 
-    /// The axis (0 for `x`, 1 for `y`, 2 for `z`) along which the mate places `b`.
+    /// Whether the kind came after the first three (`offset`, `symmetric` and `turn`): a recipe
+    /// that has one is written in version 6 of the mechanical domain.
+    pub fn is_newer(self) -> bool {
+        matches!(
+            self,
+            MateKind::Offset { .. } | MateKind::Symmetric { .. } | MateKind::Turn { .. }
+        )
+    }
+
+    /// The axis (0 for `x`, 1 for `y`, 2 for `z`) along which the mate places `b`; 3 for a turn,
+    /// which places `b` along no axis.
     pub fn axis_index(self) -> usize {
         match self {
             MateKind::Gap { direction, .. } => direction_of(direction).0,
-            MateKind::Align { axis, .. } => axis.index(),
+            MateKind::Align { axis, .. }
+            | MateKind::Offset { axis, .. }
+            | MateKind::Symmetric { axis, .. } => axis.index(),
             MateKind::Stack => 2,
+            MateKind::Turn { .. } => 3,
         }
     }
 }
@@ -266,6 +309,20 @@ impl Mate {
                 out.push(edge.name().to_string());
             }
             MateKind::Stack => out.push("stack".to_string()),
+            MateKind::Offset { axis, distance } => {
+                out.push("offset".to_string());
+                out.push(axis.name().to_string());
+                out.push(distance.get().to_string());
+            }
+            MateKind::Symmetric { axis, plane } => {
+                out.push("symmetric".to_string());
+                out.push(axis.name().to_string());
+                out.push(plane.get().to_string());
+            }
+            MateKind::Turn { quarters } => {
+                out.push("turn".to_string());
+                out.push(quarters.to_string());
+            }
         }
         out
     }
@@ -284,6 +341,21 @@ impl Mate {
                 edge: Edge::from_name(edge).ok_or("the edge of an alignment is not known")?,
             },
             [_, _, "stack"] => MateKind::Stack,
+            [_, _, "offset", axis, distance] => MateKind::Offset {
+                axis: Dim::from_name(axis).ok_or("the axis of an offset is not known")?,
+                distance: length_word(distance, "distance of an offset")?,
+            },
+            [_, _, "symmetric", axis, plane] => MateKind::Symmetric {
+                axis: Dim::from_name(axis).ok_or("the axis of a symmetry is not known")?,
+                plane: length_word(plane, "plane of a symmetry")?,
+            },
+            [_, _, "turn", quarters] => MateKind::Turn {
+                quarters: ["0", "1", "2", "3"]
+                    .iter()
+                    .position(|q| q == quarters)
+                    .and_then(|q| u8::try_from(q).ok())
+                    .ok_or("the quarter turns of a turn are not 0, 1, 2 or 3")?,
+            },
             _ => return Err("a mate is not understood".to_string()),
         };
         Ok(Mate {
@@ -293,8 +365,9 @@ impl Mate {
         })
     }
 
-    /// Whether the mate holds together by itself: it joins two different parts and a gap is not
-    /// larger than the largest dimension of the settings.
+    /// Whether the mate holds together by itself: it joins two different parts, a gap is not
+    /// larger than the largest dimension of the settings, and an offset or the plane of a symmetry
+    /// is not farther than it from the origin.
     pub fn check(&self, largest: Length) -> Result<(), CadError> {
         if self.a == self.b {
             return Err(mate_error("a part cannot be placed relative to itself"));
@@ -305,6 +378,21 @@ impl Mate {
                     "the distance of a gap must be from 0 to {} nm",
                     largest.get()
                 )));
+            }
+        }
+        if let MateKind::Offset { distance: v, .. } | MateKind::Symmetric { plane: v, .. } =
+            self.kind
+        {
+            if v.get().abs() > largest.get() {
+                return Err(mate_error(format!(
+                    "the distance of an offset or the plane of a symmetry must be from -{0} to {0} nm",
+                    largest.get()
+                )));
+            }
+        }
+        if let MateKind::Turn { quarters } = self.kind {
+            if quarters > 3 {
+                return Err(mate_error("the quarter turns of a turn are 0, 1, 2 or 3"));
             }
         }
         Ok(())
@@ -341,6 +429,26 @@ fn mated_position(kind: MateKind, a_min: i64, a_size: i64, b_size: i64) -> Resul
             }
         },
         MateKind::Stack => a_min + a_size,
+        MateKind::Offset { distance, .. } => {
+            let twice = 2 * a_min + a_size - b_size;
+            if twice % 2 != 0 {
+                return Err(mate_error(
+                    "the middles cannot be offset: they differ by half a nanometre",
+                ));
+            }
+            twice / 2 + i128::from(distance.get())
+        }
+        MateKind::Symmetric { plane, .. } => {
+            let twice = 4 * i128::from(plane.get()) - 2 * a_min - a_size - b_size;
+            if twice % 2 != 0 {
+                return Err(mate_error(
+                    "the middles cannot be symmetric: they differ by half a nanometre",
+                ));
+            }
+            twice / 2
+        }
+        // a turn places nothing along an axis; `place` never asks for a position
+        MateKind::Turn { .. } => a_min,
     };
     i64::try_from(v)
         .ok()
@@ -364,6 +472,8 @@ pub fn place(
     // for each axis, the mate that places each part
     let mut by_target: [BTreeMap<Id, &Mate>; 3] =
         [BTreeMap::new(), BTreeMap::new(), BTreeMap::new()];
+    // the mates that turn a part, which place it along no axis
+    let mut turns: BTreeMap<Id, &Mate> = BTreeMap::new();
     for mate in mates.values() {
         let name = |id: &Id| parts.get(id).map(|p| p.name.clone());
         let (Some(a), Some(b)) = (name(&mate.a), name(&mate.b)) else {
@@ -374,6 +484,12 @@ pub fn place(
                 "{a}: a part cannot be placed relative to itself"
             )));
         }
+        if let MateKind::Turn { .. } = mate.kind {
+            if turns.insert(mate.b, mate).is_some() {
+                return Err(mate_error(format!("{b} is turned by two mates")));
+            }
+            continue;
+        }
         let axis = mate.kind.axis_index();
         if by_target[axis].insert(mate.b, mate).is_some() {
             return Err(mate_error(format!(
@@ -382,7 +498,36 @@ pub fn place(
             )));
         }
     }
-    let sizes: BTreeMap<Id, [i64; 3]> = parts.iter().map(|(id, p)| (*id, p.extent().0)).collect();
+    // the turns first: the size of a part along the axes depends on its roll
+    let mut turned: BTreeSet<Id> = BTreeSet::new();
+    for start in turns.keys() {
+        let mut chain: Vec<Id> = Vec::new();
+        let mut seen: BTreeSet<Id> = BTreeSet::new();
+        let mut current = *start;
+        while let Some(mate) = turns.get(&current) {
+            if turned.contains(&current) {
+                break;
+            }
+            if !seen.insert(current) {
+                return Err(mate_error(format!(
+                    "{}: the mates turn each other in a cycle",
+                    parts[&current].name
+                )));
+            }
+            chain.push(current);
+            current = mate.a;
+        }
+        for b in chain.into_iter().rev() {
+            if let MateKind::Turn { quarters } = turns[&b].kind {
+                let roll = (placed[&turns[&b].a].orientation.roll + quarters) % 4;
+                if let Some(p) = placed.get_mut(&b) {
+                    p.orientation.roll = roll;
+                }
+            }
+            turned.insert(b);
+        }
+    }
+    let sizes: BTreeMap<Id, [i64; 3]> = placed.iter().map(|(id, p)| (*id, p.extent().0)).collect();
     for (axis, targets) in by_target.iter().enumerate() {
         let mut done: BTreeSet<Id> = BTreeSet::new();
         for start in targets.keys() {
@@ -1703,5 +1848,218 @@ interference_tolerance = thick
         // one over the other
         let over = place(&parts, &mates(vec![(1, align(1, 2, Dim::X, Edge::Center))])).unwrap();
         assert_eq!(interference(&over, &limits()).unwrap().conflicts.len(), 1);
+    }
+
+    fn kind_mate(a: u64, b: u64, kind: MateKind) -> Mate {
+        Mate {
+            a: id(a),
+            b: id(b),
+            kind,
+        }
+    }
+
+    #[test]
+    fn an_offset_puts_the_middles_a_signed_distance_apart() {
+        // a: 20 x 30 x 100 at (5, 6, 7); b: 20 x 30 x 40 typed at (100, 100, 100). The middle of
+        // a along z is at 57 mm and the one of b is 20 mm above its lower face
+        let parts = set(vec![
+            (1, bar("a", [5, 6, 7], 100)),
+            (2, bar("b", [100, 100, 100], 40)),
+        ]);
+        let run = |kind: MateKind| {
+            pos(
+                &place(&parts, &mates(vec![(9, kind_mate(1, 2, kind))])).unwrap(),
+                2,
+            )
+        };
+        let offset = |axis: Dim, d: i64| MateKind::Offset {
+            axis,
+            distance: mm(d),
+        };
+        // 57 + 30 - 20 = 67 mm, and 57 - 30 - 20 = 7 mm below
+        assert_eq!(run(offset(Dim::Z, 30)), [100 * MM, 100 * MM, 67 * MM]);
+        assert_eq!(run(offset(Dim::Z, -30)), [100 * MM, 100 * MM, 7 * MM]);
+        // across x the middle of a is at 15 mm and the one of b at 10 mm from its face: 15 - 10
+        assert_eq!(run(offset(Dim::X, 0)), [5 * MM, 100 * MM, 100 * MM]);
+        // the middles of parts that differ by half a nanometre cannot be offset
+        let odd = set(vec![
+            (1, bar("a", [0, 0, 0], 100)),
+            (
+                2,
+                at(
+                    "b",
+                    profile("bar-20x30", mm(20), mm(30), Length::ZERO),
+                    [mm(0), mm(0), mm(0)],
+                    Orientation::default(),
+                    Some(Length::new(100 * MM + 1).unwrap()),
+                ),
+            ),
+        ]);
+        let e = place(&odd, &mates(vec![(9, kind_mate(1, 2, offset(Dim::Z, 0)))])).unwrap_err();
+        assert_eq!(e.code(), "PHOENIX-CAD-046");
+        assert!(e.to_string().contains("half a nanometre"), "{e}");
+    }
+
+    #[test]
+    fn two_parts_can_be_symmetric_about_a_plane() {
+        // a occupies x from 5 to 25 mm (middle 15 mm); about the plane x = 100 mm the middle of b
+        // is at 185 mm, so b (20 mm wide) starts at 175 mm
+        let parts = set(vec![
+            (1, bar("a", [5, 6, 7], 100)),
+            (2, bar("b", [0, 50, 50], 40)),
+        ]);
+        let sym = |axis: Dim, plane: i64| MateKind::Symmetric {
+            axis,
+            plane: mm(plane),
+        };
+        let placed = place(&parts, &mates(vec![(9, kind_mate(1, 2, sym(Dim::X, 100)))])).unwrap();
+        assert_eq!(pos(&placed, 2), [175 * MM, 50 * MM, 50 * MM]);
+        // a plane through the middle of a puts b on the same middle
+        let placed = place(&parts, &mates(vec![(9, kind_mate(1, 2, sym(Dim::X, 15)))])).unwrap();
+        assert_eq!(pos(&placed, 2)[0], 5 * MM);
+        // along z: a is 100 mm long from 7 mm (middle 57 mm), b is 40 mm long; plane z = 0 puts the
+        // middle of b at -57 mm, so b starts at -77 mm
+        let placed = place(&parts, &mates(vec![(9, kind_mate(1, 2, sym(Dim::Z, 0)))])).unwrap();
+        assert_eq!(pos(&placed, 2)[2], -77 * MM);
+    }
+
+    #[test]
+    fn a_turn_gives_the_part_the_roll_of_the_other_plus_quarter_turns() {
+        // a: 20 x 30 x 100 rolled 0; b the same, typed with a roll of 2
+        let mut b = bar("b", [100, 100, 100], 40);
+        b.orientation.roll = 2;
+        let parts = set(vec![(1, bar("a", [0, 0, 0], 100)), (2, b)]);
+        let turn = |q: u8| kind_mate(1, 2, MateKind::Turn { quarters: q });
+        let placed = place(&parts, &mates(vec![(9, turn(1))])).unwrap();
+        assert_eq!(placed[&id(2)].orientation.roll, 1);
+        // a quarter turn swaps the 20 and the 30 mm across the length
+        assert_eq!(placed[&id(2)].extent().0, [30 * MM, 20 * MM, 40 * MM]);
+        // the position typed for the part is not touched
+        assert_eq!(pos(&placed, 2), [100 * MM, 100 * MM, 100 * MM]);
+        assert_eq!(
+            place(&parts, &mates(vec![(9, turn(0))])).unwrap()[&id(2)]
+                .orientation
+                .roll,
+            0
+        );
+        // and a gap after a turn uses the size the part has once turned: b stands against a on
+        // the side of +x, and the 30 mm of b are across x
+        let placed = place(
+            &parts,
+            &mates(vec![
+                (8, turn(1)),
+                (9, gap(1, 2, Axis::MinusX, Length::ZERO)),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(pos(&placed, 2)[0], -30 * MM);
+        // the roll of a part that is itself turned counts: b turned from a, c from b
+        let parts3 = set(vec![
+            (1, bar("a", [0, 0, 0], 100)),
+            (2, bar("b", [0, 0, 0], 40)),
+            (3, bar("c", [0, 0, 0], 40)),
+        ]);
+        let placed = place(
+            &parts3,
+            &mates(vec![
+                (8, kind_mate(2, 3, MateKind::Turn { quarters: 3 })),
+                (9, kind_mate(1, 2, MateKind::Turn { quarters: 2 })),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(placed[&id(2)].orientation.roll, 2);
+        assert_eq!(placed[&id(3)].orientation.roll, 1);
+    }
+
+    #[test]
+    fn two_turns_of_one_part_and_a_cycle_of_turns_are_refused() {
+        let parts = set(vec![
+            (1, bar("a", [0, 0, 0], 100)),
+            (2, bar("b", [0, 0, 0], 40)),
+            (3, bar("c", [0, 0, 0], 40)),
+        ]);
+        let turn = |a: u64, b: u64| kind_mate(a, b, MateKind::Turn { quarters: 1 });
+        let e = place(&parts, &mates(vec![(8, turn(1, 3)), (9, turn(2, 3))])).unwrap_err();
+        assert!(e.to_string().contains("turned by two mates"), "{e}");
+        let e = place(&parts, &mates(vec![(8, turn(1, 2)), (9, turn(2, 1))])).unwrap_err();
+        assert!(e.to_string().contains("in a cycle"), "{e}");
+        // a turn and a gap on the same part do not clash: they place different things
+        assert!(place(
+            &parts,
+            &mates(vec![
+                (8, turn(1, 2)),
+                (9, gap(1, 2, Axis::PlusZ, Length::ZERO))
+            ])
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn the_new_kinds_are_written_and_read_back_and_checked() {
+        let largest = mm(6000);
+        for kind in [
+            MateKind::Offset {
+                axis: Dim::Y,
+                distance: mm(-30),
+            },
+            MateKind::Symmetric {
+                axis: Dim::X,
+                plane: mm(100),
+            },
+            MateKind::Turn { quarters: 3 },
+        ] {
+            let m = kind_mate(1, 2, kind);
+            assert!(kind.is_newer());
+            let words = m.words();
+            let refs: Vec<&str> = words.iter().map(String::as_str).collect();
+            assert_eq!(Mate::from_words(&refs).unwrap(), m);
+            assert!(m.check(largest).is_ok());
+        }
+        for old in [
+            MateKind::Stack,
+            MateKind::Gap {
+                direction: Axis::PlusX,
+                distance: mm(1),
+            },
+        ] {
+            assert!(!old.is_newer());
+        }
+        // words that are not canonical or not known
+        let a = id(1).to_string();
+        let b = id(2).to_string();
+        for bad in [
+            vec![&a, &b, "offset", "w", "5"],
+            vec![&a, &b, "offset", "x", "05"],
+            vec![&a, &b, "symmetric", "x"],
+            vec![&a, &b, "turn", "4"],
+            vec![&a, &b, "turn", "01"],
+            vec![&a, &b, "turn"],
+        ] {
+            let words: Vec<&str> = bad.iter().map(|w| &**w).collect();
+            assert!(Mate::from_words(&words).is_err(), "{words:?}");
+        }
+        // too far, and too many quarter turns
+        let far = MateKind::Offset {
+            axis: Dim::Z,
+            distance: mm(6001),
+        };
+        assert!(kind_mate(1, 2, far).check(largest).is_err());
+        let far = MateKind::Symmetric {
+            axis: Dim::Z,
+            plane: mm(-6001),
+        };
+        assert!(kind_mate(1, 2, far).check(largest).is_err());
+        assert!(kind_mate(1, 2, MateKind::Turn { quarters: 4 })
+            .check(largest)
+            .is_err());
+        assert_eq!(MateKind::Turn { quarters: 1 }.axis_index(), 3);
+        assert_eq!(
+            MateKind::Offset {
+                axis: Dim::Y,
+                distance: mm(0)
+            }
+            .axis_index(),
+            1
+        );
     }
 }

@@ -294,6 +294,12 @@ pub enum Key {
     MateAxis,
     /// The faces an alignment puts on one plane.
     MateEdge,
+    /// How far the middles of the two parts of an offset are apart.
+    MateOffset,
+    /// The position of the plane of a symmetry.
+    MatePlane,
+    /// The roll of the placed part relative to the fixed one, for a turn, in degrees.
+    MateTurn,
     /// Where a part really is once its mates are applied (read only).
     PartPlaced,
     /// The parts that share volume with a part (read only).
@@ -1627,6 +1633,9 @@ impl Window {
                     ("gap", Msg::MateGap),
                     ("align", Msg::MateAlign),
                     ("stack", Msg::MateStack),
+                    ("offset", Msg::MateOffset),
+                    ("symmetric", Msg::MateSymmetric),
+                    ("turn", Msg::MateTurn),
                 ],
             ),
         ];
@@ -1665,6 +1674,34 @@ impl Window {
                 ));
             }
             MateKind::Stack => {}
+            MateKind::Offset { axis, distance } => {
+                out.push(text(
+                    Key::MateAxis,
+                    Msg::FieldMateAxis,
+                    axis.name().to_string(),
+                ));
+                out.push(self.length_field(
+                    Key::MateOffset,
+                    Msg::FieldMateOffset,
+                    distance,
+                    writable,
+                ));
+            }
+            MateKind::Symmetric { axis, plane } => {
+                out.push(text(
+                    Key::MateAxis,
+                    Msg::FieldMateAxis,
+                    axis.name().to_string(),
+                ));
+                out.push(self.length_field(Key::MatePlane, Msg::FieldMatePlane, plane, writable));
+            }
+            MateKind::Turn { quarters } => {
+                out.push(text(
+                    Key::MateTurn,
+                    Msg::FieldMateTurn,
+                    (u32::from(quarters) * 90).to_string(),
+                ));
+            }
         }
         if let Some(p) = self.built.enclosure.placed_parts().get(&mate.b) {
             out.push(Self::info_field(
@@ -1697,9 +1734,29 @@ impl Window {
             (Key::MateDistance, MateKind::Gap { distance, .. }) => {
                 *distance = self.parse_text(text)?;
             }
-            (Key::MateAxis, MateKind::Align { axis, .. }) => {
+            (
+                Key::MateAxis,
+                MateKind::Align { axis, .. }
+                | MateKind::Offset { axis, .. }
+                | MateKind::Symmetric { axis, .. },
+            ) => {
                 *axis =
                     Dim::from_name(word).ok_or_else(|| CadError::Reference(word.to_string()))?;
+            }
+            (Key::MateOffset, MateKind::Offset { distance, .. }) => {
+                *distance = self.parse_text(text)?;
+            }
+            (Key::MatePlane, MateKind::Symmetric { plane, .. }) => {
+                *plane = self.parse_text(text)?;
+            }
+            (Key::MateTurn, MateKind::Turn { quarters }) => {
+                let degrees = word
+                    .parse::<u32>()
+                    .map_err(|_| CadError::ValueOutOfRange("roll"))?;
+                if degrees % 90 != 0 || degrees > 270 {
+                    return Err(CadError::ValueOutOfRange("roll"));
+                }
+                *quarters = u8::try_from(degrees / 90).unwrap_or(0);
             }
             (Key::MateEdge, MateKind::Align { edge, .. }) => {
                 *edge =
@@ -7985,5 +8042,46 @@ mass: "
             fresh().panel_text(Panel::PartList, &PanelOptions::default()),
             Msg::PanelNoParts.tr(Lang::En)
         );
+    }
+
+    #[test]
+    fn the_newer_mates_have_their_fields_and_are_edited_like_the_others() {
+        let mut w = two_tubes_in_the_window();
+        w.add_step(NewStep::Mate);
+        assert!(!problem(&w), "{:?}", w.status);
+        // an offset along z: the middles of two parts in the same place coincide
+        set(&mut w, Key::MateKind, "offset");
+        assert!(!problem(&w), "{:?}", w.status);
+        assert_eq!(text_of(&w, Key::MateAxis), "z");
+        set(&mut w, Key::MateOffset, "10 mm");
+        assert!(!problem(&w), "{:?}", w.status);
+        assert_eq!(text_of(&w, Key::MateOffset), "10.000 mm");
+        set(&mut w, Key::MateAxis, "w");
+        assert!(problem(&w));
+        set(&mut w, Key::MateAxis, "x");
+        assert!(!problem(&w), "{:?}", w.status);
+        // a symmetry has its plane
+        set(&mut w, Key::MateKind, "symmetric");
+        assert!(!problem(&w), "{:?}", w.status);
+        set(&mut w, Key::MatePlane, "50 mm");
+        assert!(!problem(&w), "{:?}", w.status);
+        assert_eq!(text_of(&w, Key::MatePlane), "50.000 mm");
+        // a turn has its roll in degrees
+        set(&mut w, Key::MateKind, "turn");
+        assert!(!problem(&w), "{:?}", w.status);
+        assert_eq!(text_of(&w, Key::MateTurn), "90");
+        set(&mut w, Key::MateTurn, "45");
+        assert!(problem(&w));
+        set(&mut w, Key::MateTurn, "270");
+        assert!(!problem(&w), "{:?}", w.status);
+        assert_eq!(w.mech.version(), 6);
+        // the roll of the placed part is now the one of the fixed part plus three quarters
+        let rolls: Vec<u8> = w
+            .enclosure()
+            .placed_parts()
+            .values()
+            .map(|p| p.orientation.roll)
+            .collect();
+        assert!(rolls.contains(&3), "{rolls:?}");
     }
 }
