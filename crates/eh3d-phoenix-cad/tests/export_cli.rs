@@ -152,7 +152,7 @@ fn the_arguments_are_checked() {
     let (code, _, err) = run(&["export", EXAMPLE]);
     assert_eq!(code, 1);
     assert!(err.contains("needs --format"), "{err}");
-    let (code, _, err) = run(&["export", EXAMPLE, "--format", "obj"]);
+    let (code, _, err) = run(&["export", EXAMPLE, "--format", "xyz"]);
     assert_eq!(code, 1);
     assert!(err.contains("unknown format"), "{err}");
     let (code, _, err) = run(&["export", EXAMPLE, "--format", "stl", "--view", "top"]);
