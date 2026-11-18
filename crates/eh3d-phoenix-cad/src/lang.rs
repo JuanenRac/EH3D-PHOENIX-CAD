@@ -517,6 +517,13 @@ messages! {
     TbRevision => ["Revision", "Revisión", "Revision", "Révision", "Revisione", "改訂", "版本", "Revisão"],
     TbAuthor => ["Author", "Autor", "Autor", "Auteur", "Autore", "作成者", "作者", "Autor"],
     TbScale => ["Scale", "Escala", "Maßstab", "Échelle", "Scala", "縮尺", "比例", "Escala"],
+    RevAngle => ["turn: {0} degrees", "giro: {0} grados", "Drehung: {0} Grad", "rotation : {0} degrés", "rotazione: {0} gradi", "回転: {0} 度", "旋转角度：{0} 度", "rotação: {0} graus"],
+    RevArea => ["profile area: {0} mm2", "área del perfil: {0} mm2", "Fläche des Profils: {0} mm2", "aire du profil : {0} mm2", "area del profilo: {0} mm2", "断面積: {0} mm2", "轮廓面积：{0} mm2", "área do perfil: {0} mm2"],
+    RevVolume => ["volume: {0} mm3", "volumen: {0} mm3", "Volumen: {0} mm3", "volume : {0} mm3", "volume: {0} mm3", "体積: {0} mm3", "体积：{0} mm3", "volume: {0} mm3"],
+    RevSurface => ["surface: {0} mm2", "superficie: {0} mm2", "Oberfläche: {0} mm2", "surface : {0} mm2", "superficie: {0} mm2", "表面積: {0} mm2", "表面积：{0} mm2", "superfície: {0} mm2"],
+    RevAxial => ["along the axis: {0} to {1} mm", "a lo largo del eje: de {0} a {1} mm", "entlang der Achse: {0} bis {1} mm", "le long de l'axe : de {0} à {1} mm", "lungo l'asse: da {0} a {1} mm", "軸方向: {0} から {1} mm", "沿轴向：{0} 至 {1} mm", "ao longo do eixo: de {0} a {1} mm"],
+    RevRadius => ["distance from the axis: {0} to {1} mm", "distancia al eje: de {0} a {1} mm", "Abstand von der Achse: {0} bis {1} mm", "distance à l'axe : de {0} à {1} mm", "distanza dall'asse: da {0} a {1} mm", "軸からの距離: {0} から {1} mm", "到轴的距离：{0} 至 {1} mm", "distância ao eixo: de {0} a {1} mm"],
+    RevMass => ["mass of {0}: {1} g", "masa de {0}: {1} g", "Masse aus {0}: {1} g", "masse en {0} : {1} g", "massa in {0}: {1} g", "{0} の質量: {1} g", "{0} 的质量：{1} g", "massa de {0}: {1} g"],
 }
 
 impl Msg {

@@ -31,6 +31,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad holes PROJECT.phoenixproj [--tools] [--text] [--lang CODE] [--config FILE]            the schedule of the holes of the box for the person who drills (a tag, the face, the position, the diameter and the shape of each) as comma separated values, or with --tools the drills and cutters they need grouped by diameter and shape
   eh3d-phoenix-cad sketch-export PROJECT.phoenixproj|SKETCH.phoenixsketch --format dxf|svg [--sketch NAME] [--out FILE] [--overwrite] [--lang CODE] [--config FILE]   writes a sketch (the only one of the project, or the one named) as a flat drawing of its closed outlines for a laser or a router; never over a file that exists unless --overwrite is given
   eh3d-phoenix-cad balance PROJECT.phoenixproj [--lang CODE] [--config FILE]                     the mass of the placed parts and where their centre of mass is (exact for profiles, an estimate for screws and brackets, and the number of estimated parts is said)
+  eh3d-phoenix-cad revolve PROJECT.phoenixproj|SKETCH.phoenixsketch --axis x|y [--angle DEGREES] [--sketch NAME] [--material NAME] [--lang CODE] [--config FILE]   turns a sketch (the only one of the project, or the one named) about its first or second axis, by a full turn unless --angle says less, and prints the volume, the surface and the distances from the axis of the solid made and, with a material of the settings, its mass; the profile must not cross the axis
   eh3d-phoenix-cad library FILE.phoenixlib [--config FILE]                        reads a library of parts, checks it and lists its parts
   eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill [--view top|front|side] [--out FILE] [--overwrite] [--ascii|--binary] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), as a Wavefront file (obj) or as a 3MF package (3mf), the plan, front or side as a drawing (dxf, svg), the STEP file, the OpenSCAD-style script, the fit report or the bill of materials
   eh3d-phoenix-cad config                                                         every setting of the library, of the window and of the sketch with its default value, as a file for --config
@@ -295,6 +296,116 @@ fn run_holes(args: &[String]) -> Result<bool, String> {
     Ok(win.info.failed == 0)
 }
 
+/// The sketch that `sketch-export` and `revolve` are given: a sketch file, or the sketch of a
+/// project (the only one it has, or the one named), with the project when it is one and the
+/// settings.
+type ReadSketch = (
+    eh3d_phoenix_cad::sketch::Sketch,
+    Option<PathBuf>,
+    Settings,
+    UiSettings,
+    SketchSettings,
+);
+
+fn read_sketch(
+    file: &Path,
+    name: Option<&str>,
+    config: Option<&Path>,
+    lang: Lang,
+) -> Result<ReadSketch, String> {
+    let (settings, ui) = load_settings(config)?;
+    let solver = load_solver_settings(config)?;
+    let (sketch, project) = if shot::is_sketch_file(file) {
+        let sketch = eh3d_phoenix_cad::sketch::file::read_file(file, &solver)
+            .map_err(|e| format!("{}: {}", file.display(), error_text(&e, lang)))?;
+        (sketch, None)
+    } else {
+        let mut win =
+            Window::new(lang, settings.clone(), ui.clone()).map_err(|e| error_text(&e, lang))?;
+        win.sketch_settings = solver.clone();
+        if !win.open(file) {
+            return Err(format!("{}: {}", file.display(), win.status.text(lang)));
+        }
+        let sketch = win.find_sketch(name).map_err(|e| error_text(&e, lang))?;
+        (sketch, Some(file.to_path_buf()))
+    };
+    Ok((sketch, project, settings, ui, solver))
+}
+
+/// `revolve`: turns a sketch about one of its axes and prints the volume, the surface and, with a
+/// material of the settings, the mass of the solid.
+fn run_revolve(args: &[String]) -> Result<bool, String> {
+    let mut config: Option<PathBuf> = None;
+    let mut file: Option<PathBuf> = None;
+    let mut name: Option<String> = None;
+    let mut axis: Option<String> = None;
+    let mut turn: Option<String> = None;
+    let mut material: Option<String> = None;
+    let mut lang = Lang::En;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--config" => {
+                config = Some(PathBuf::from(
+                    iter.next().ok_or("--config needs a settings file")?,
+                ));
+            }
+            "--axis" => axis = Some(iter.next().ok_or("--axis needs x or y")?.clone()),
+            "--angle" => turn = Some(iter.next().ok_or("--angle needs degrees")?.clone()),
+            "--sketch" => name = Some(iter.next().ok_or("--sketch needs a name")?.clone()),
+            "--material" => {
+                material = Some(iter.next().ok_or("--material needs a name")?.clone());
+            }
+            "--lang" => {
+                let code = iter.next().ok_or("--lang needs a language code")?;
+                lang = Lang::from_code(code).ok_or("unknown language code")?;
+            }
+            other if other.starts_with("--") => return Err(format!("unknown option {other}")),
+            other => {
+                if file.is_some() {
+                    return Err("only one project or sketch can be turned".to_owned());
+                }
+                file = Some(PathBuf::from(other));
+            }
+        }
+    }
+    let file = file.ok_or("revolve needs a project or a sketch file")?;
+    let word = axis.as_deref().ok_or("revolve needs --axis")?;
+    let axis = eh3d_phoenix_cad::revolve::Axis::from_name(word)
+        .ok_or_else(|| format!("{word}: unknown axis (x or y)"))?;
+    let angle = match turn.as_deref() {
+        Some(text) => {
+            eh3d_phoenix_cad::units::parse_angle(text).map_err(|e| error_text(&e, lang))?
+        }
+        None => eh3d_phoenix_cad::units::Angle::from_deg(360).map_err(|e| error_text(&e, lang))?,
+    };
+    let (sketch, _, settings, _, solver) =
+        read_sketch(&file, name.as_deref(), config.as_deref(), lang)?;
+    let profile = eh3d_phoenix_cad::profile::Profile::from_sketch(
+        &sketch,
+        &eh3d_phoenix_cad::profile::ProfileLimits::from_settings(&solver),
+    )
+    .map_err(|e| error_text(&e, lang))?;
+    let turned = eh3d_phoenix_cad::revolve::revolve(&profile, axis, angle)
+        .map_err(|e| error_text(&e, lang))?;
+    let density = match material.as_deref() {
+        Some(word) => Some((
+            word,
+            *settings
+                .materials
+                .get(word)
+                .ok_or_else(|| format!("{word}: not a material of the settings"))?,
+        )),
+        None => None,
+    };
+    print!(
+        "{}",
+        eh3d_phoenix_cad::revolve::revolve_text(&turned, density, lang)
+            .map_err(|e| error_text(&e, lang))?
+    );
+    Ok(true)
+}
+
 /// `sketch-export`: writes a sketch of a project, or a sketch file, as a DXF or SVG drawing. The
 /// answer is whether the file was written. Nothing is written over a file that exists unless
 /// `--overwrite` is given.
@@ -337,24 +448,8 @@ fn run_sketch_export(args: &[String]) -> Result<bool, String> {
         "svg" => false,
         other => return Err(format!("{other}: unknown format (dxf or svg)")),
     };
-    let (settings, ui) = load_settings(config.as_deref())?;
-    let solver = load_solver_settings(config.as_deref())?;
-    let (sketch, project) = if shot::is_sketch_file(&file) {
-        let sketch = eh3d_phoenix_cad::sketch::file::read_file(&file, &solver)
-            .map_err(|e| format!("{}: {}", file.display(), error_text(&e, lang)))?;
-        (sketch, None)
-    } else {
-        let mut win =
-            Window::new(lang, settings.clone(), ui.clone()).map_err(|e| error_text(&e, lang))?;
-        win.sketch_settings = solver.clone();
-        if !win.open(&file) {
-            return Err(format!("{}: {}", file.display(), win.status.text(lang)));
-        }
-        let sketch = win
-            .find_sketch(name.as_deref())
-            .map_err(|e| error_text(&e, lang))?;
-        (sketch, Some(file.clone()))
-    };
+    let (sketch, project, settings, ui, solver) =
+        read_sketch(&file, name.as_deref(), config.as_deref(), lang)?;
     let text = eh3d_phoenix_cad::sketch_export::render_titled(
         &sketch,
         &solver,
@@ -524,6 +619,7 @@ fn run(args: &[String]) -> Result<bool, String> {
         "placements" => run_placements(rest),
         "holes" => run_holes(rest),
         "balance" => run_balance(rest),
+        "revolve" => run_revolve(rest),
         "sketch-export" => run_sketch_export(rest),
         "library" => run_library(rest),
         "export" => run_export(rest),
@@ -540,8 +636,8 @@ fn window_request(args: &[String]) -> Option<Result<shot::WindowArgs, String>> {
         None | Some("gui") => {}
         Some(
             "help" | "--help" | "-h" | "config" | "check" | "interference" | "bill" | "cutplan"
-            | "clearance" | "placements" | "holes" | "balance" | "sketch-export" | "library"
-            | "export",
+            | "clearance" | "placements" | "holes" | "balance" | "revolve" | "sketch-export"
+            | "library" | "export",
         ) => return None,
         Some(first) if first.starts_with("--") => {}
         Some(first) => {

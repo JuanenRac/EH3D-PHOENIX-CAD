@@ -185,6 +185,14 @@ The volume is the area of the profile (the polygon of the corners with the circu
 
 The STEP export and the model for fabrication **refuse** a box with an extrusion or a pocket (`PHOENIX-CAD-022`) and the script says in a comment that it does not draw them: none of them draws a shape that is not a box with holes yet. The 3D view and the plan draw the outline on the face and at the height or depth it goes to, joined by a line at each corner (an extrusion in the colour of the posts, a pocket in the one of the holes).
 
+## Turning a sketch about an axis
+
+`eh3d_phoenix_cad::revolve` gives the figures of the solid that a sketch makes when it is turned about its first axis (`x`) or its second axis (`y`) by an angle up to a full turn: a spacer, a knob, a washer. The command is `eh3d-phoenix-cad revolve PROJECT|SKETCH --axis x|y [--angle DEGREES] [--sketch NAME] [--material NAME] [--lang CODE]` (a full turn without `--angle`). It prints the area of the profile, the volume, the surface, the extent along the axis and the least and the greatest distance from the axis, and with a material of the settings (`[materials]`, as for the bill) the mass.
+
+* The volume is the angle times the first moment of the area about the axis, and the surface is the angle times the first moment of the boundary (the outer outlines and the holes) plus, for less than a full turn, the two flat ends of the profile (the theorems of Pappus). The moments of lines, arcs and circles are worked out in floating point with the circular segment of each arc (its area and its centroid), so the figures are rounded to a cubic or square nanometre and are not exact integers; they are checked against a rectangle, a torus, a sphere, a notch cut with a clockwise arc and a profile with a hole.
+* The profile must lie on one side of the axis and may touch it. One that crosses the axis would sweep through itself and is refused with `PHOENIX-CAD-036`; an angle that is not above zero and up to 360 degrees is refused with `PHOENIX-CAD-007`.
+* It gives figures only: there is no mesh, no STL file and no STEP file of the turned solid, the turn is not a step of the recipe of the box and the window has no panel for it yet.
+
 ## Codes
 
 `PHOENIX-CAD-031` element not valid, `-032` constraint not valid, `-033` over-constrained, `-034` solver did not converge, `-035` sketch file not valid (the sketch file and the domain of the project), `-036` profile not valid and `-037` extrusion or pocket not valid. See `ERROR_CODES.md`; the text of each is in the eight languages.

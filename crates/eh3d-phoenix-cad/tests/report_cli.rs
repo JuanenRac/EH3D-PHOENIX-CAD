@@ -144,3 +144,80 @@ fn the_answer_of_the_sketch_drawing_is_in_the_language_asked_for() {
     assert!(text.contains("outline.svg"), "{text}");
     assert!(fs::read_to_string(&out).unwrap().contains("<svg"));
 }
+
+const PLATE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/plate.phoenixproj");
+
+#[test]
+fn a_sketch_is_turned_about_an_axis_and_its_figures_are_printed() {
+    // the outline of the example sketch is 100 mm along x and 60 mm along y: it touches the axis
+    let (code, text, err) = run(&["revolve", SKETCH, "--axis", "x"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        text.starts_with("turn: 360 degrees\nprofile area: "),
+        "{text}"
+    );
+    assert!(text.contains("\nalong the axis: 0 to 100 mm\n"), "{text}");
+    assert!(
+        text.ends_with("distance from the axis: 0 to 60 mm\n"),
+        "{text}"
+    );
+    // about the second axis, a quarter turn, with a material of the settings, in German
+    let (code, text, err) = run(&[
+        "revolve",
+        PLATE,
+        "--axis",
+        "y",
+        "--angle",
+        "90",
+        "--material",
+        "PLA",
+        "--lang",
+        "de",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert!(text.starts_with("Drehung: 90 Grad\n"), "{text}");
+    assert!(
+        text.contains("\nentlang der Achse: 0 bis 60 mm\n"),
+        "{text}"
+    );
+    assert!(
+        text.ends_with(" g\n") && text.contains("Masse aus PLA: "),
+        "{text}"
+    );
+    // a full turn is the same as no angle
+    let (_, full, _) = run(&["revolve", SKETCH, "--axis", "x", "--angle", "360"]);
+    let (_, none, _) = run(&["revolve", SKETCH, "--axis", "x"]);
+    assert_eq!(full, none);
+}
+
+#[test]
+fn the_turn_of_a_sketch_refuses_what_it_cannot_do() {
+    for (args, why) in [
+        (vec!["revolve", SKETCH], "needs --axis"),
+        (vec!["revolve", SKETCH, "--axis", "z"], "unknown axis"),
+        (
+            vec!["revolve", SKETCH, "--axis", "x", "--angle", "0"],
+            "PHOENIX-CAD-007",
+        ),
+        (
+            vec!["revolve", SKETCH, "--axis", "x", "--angle", "361"],
+            "PHOENIX-CAD-007",
+        ),
+        (
+            vec!["revolve", SKETCH, "--axis", "x", "--material", "wood"],
+            "not a material",
+        ),
+        (
+            vec!["revolve", "--axis", "x"],
+            "needs a project or a sketch",
+        ),
+        (
+            vec!["revolve", SKETCH, "--axis", "x", "--lang", "xx"],
+            "unknown language",
+        ),
+    ] {
+        let (code, _, err) = run(&args);
+        assert_eq!(code, 1, "{args:?}");
+        assert!(err.contains(why), "{args:?}: {err}");
+    }
+}
