@@ -221,3 +221,101 @@ fn the_turn_of_a_sketch_refuses_what_it_cannot_do() {
         assert!(err.contains(why), "{args:?}: {err}");
     }
 }
+
+#[test]
+fn a_profile_is_swept_along_a_path_and_its_figures_are_printed() {
+    let dir = Scratch::new("sweep");
+    let profile = dir.file("profile.phoenixsketch");
+    fs::write(
+        &profile,
+        "phoenix-sketch 1\nname profile\nplane top 0 0 0\nnext 3 1\ne1 point 0 0\ne2 circle e1 3000000\n",
+    )
+    .unwrap();
+    let path = dir.file("path.phoenixsketch");
+    fs::write(
+        &path,
+        "phoenix-sketch 1\nname path\nplane top 0 0 0\nnext 4 1\ne1 point 0 0\ne2 point 0 100000000\ne3 line e1 e2\n",
+    )
+    .unwrap();
+    // a tube of 3 mm radius and 100 mm: 900 pi = 2827.433 mm3, the sides 600 pi and the ends 18 pi
+    let (code, text, err) = run(&["sweep", &profile, "--path", &path]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        text,
+        "path: 100.000 mm, pieces: 1\nprofile area: 28.274 mm2\nperimeter of the profile: 18.850 mm\nvolume: 2827.433 mm3\nsurface: 1941.504 mm2\n"
+    );
+    // in Spanish and with a material of the settings: 2827.433 mm3 of PLA at 1240 kg/m3
+    let (code, text, err) = run(&[
+        "sweep",
+        &profile,
+        "--path",
+        &path,
+        "--material",
+        "PLA",
+        "--lang",
+        "es",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        text.starts_with("camino: 100.000 mm, tramos: 1\n"),
+        "{text}"
+    );
+    assert!(text.ends_with("masa de PLA: 3.506 g\n"), "{text}");
+}
+
+#[test]
+fn the_sweep_refuses_what_it_cannot_do() {
+    let dir = Scratch::new("sweep-refused");
+    let profile = dir.file("profile.phoenixsketch");
+    fs::write(
+        &profile,
+        "phoenix-sketch 1\nname profile\nplane top 0 0 0\nnext 3 1\ne1 point 0 0\ne2 circle e1 3000000\n",
+    )
+    .unwrap();
+    let line = dir.file("line.phoenixsketch");
+    fs::write(
+        &line,
+        "phoenix-sketch 1
+name line
+plane top 0 0 0
+next 4 1
+e1 point 0 0
+e2 point 0 100000000
+e3 line e1 e2
+",
+    )
+    .unwrap();
+    let empty = dir.file("empty.phoenixsketch");
+    fs::write(
+        &empty,
+        "phoenix-sketch 1\nname empty\nplane top 0 0 0\nnext 1 1\n",
+    )
+    .unwrap();
+    for (args, why) in [
+        (vec!["sweep", profile.as_str()], "needs --path"),
+        (vec!["sweep", "--path", profile.as_str()], "needs a project"),
+        (
+            vec!["sweep", profile.as_str(), "--path", empty.as_str()],
+            "PHOENIX-CAD-036",
+        ),
+        (
+            vec![
+                "sweep",
+                profile.as_str(),
+                "--path",
+                line.as_str(),
+                "--material",
+                "wood",
+            ],
+            "not a material",
+        ),
+        (
+            vec!["sweep", profile.as_str(), "--path", line.as_str(), "--what"],
+            "unknown option",
+        ),
+    ] {
+        let (code, _, err) = run(&args);
+        assert_eq!(code, 1, "{args:?}");
+        assert!(err.contains(why), "{args:?}: {err}");
+    }
+}

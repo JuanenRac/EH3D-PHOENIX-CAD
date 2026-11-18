@@ -32,6 +32,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad sketch-export PROJECT.phoenixproj|SKETCH.phoenixsketch --format dxf|svg [--sketch NAME] [--out FILE] [--overwrite] [--lang CODE] [--config FILE]   writes a sketch (the only one of the project, or the one named) as a flat drawing of its closed outlines for a laser or a router; never over a file that exists unless --overwrite is given
   eh3d-phoenix-cad balance PROJECT.phoenixproj [--lang CODE] [--config FILE]                     the mass of the placed parts and where their centre of mass is (exact for profiles, an estimate for screws and brackets, and the number of estimated parts is said)
   eh3d-phoenix-cad revolve PROJECT.phoenixproj|SKETCH.phoenixsketch --axis x|y [--angle DEGREES] [--sketch NAME] [--material NAME] [--lang CODE] [--config FILE]   turns a sketch (the only one of the project, or the one named) about its first or second axis, by a full turn unless --angle says less, and prints the volume, the surface and the distances from the axis of the solid made and, with a material of the settings, its mass; the profile must not cross the axis
+  eh3d-phoenix-cad sweep PROFILE --path PATH [--profile-sketch NAME] [--path-sketch NAME] [--material NAME] [--lang CODE] [--config FILE]   sweeps the profile (a project or a sketch file, and the sketch of it) along the path (the lines and arcs of another sketch, or one circle) and prints the length of the path, the volume and the surface of the solid made and, with a material of the settings, its mass; the profile starts on the path, its first axis to the left of the way the path is walked from the free end of its first element
   eh3d-phoenix-cad library FILE.phoenixlib [--config FILE]                        reads a library of parts, checks it and lists its parts
   eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill [--view top|front|side] [--out FILE] [--overwrite] [--ascii|--binary] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), as a Wavefront file (obj) or as a 3MF package (3mf), the plan, front or side as a drawing (dxf, svg), the STEP file, the OpenSCAD-style script, the fit report or the bill of materials
   eh3d-phoenix-cad config                                                         every setting of the library, of the window and of the sketch with its default value, as a file for --config
@@ -406,6 +407,81 @@ fn run_revolve(args: &[String]) -> Result<bool, String> {
     Ok(true)
 }
 
+/// `sweep`: sweeps the profile of a sketch along the path of another and prints the length of the
+/// path, the volume, the surface and, with a material of the settings, the mass of the solid.
+fn run_sweep(args: &[String]) -> Result<bool, String> {
+    let mut config: Option<PathBuf> = None;
+    let mut file: Option<PathBuf> = None;
+    let mut path_file: Option<PathBuf> = None;
+    let mut profile_name: Option<String> = None;
+    let mut path_name: Option<String> = None;
+    let mut material: Option<String> = None;
+    let mut lang = Lang::En;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--config" => {
+                config = Some(PathBuf::from(
+                    iter.next().ok_or("--config needs a settings file")?,
+                ));
+            }
+            "--path" => {
+                path_file = Some(PathBuf::from(iter.next().ok_or("--path needs a file")?));
+            }
+            "--profile-sketch" => {
+                profile_name = Some(iter.next().ok_or("--profile-sketch needs a name")?.clone());
+            }
+            "--path-sketch" => {
+                path_name = Some(iter.next().ok_or("--path-sketch needs a name")?.clone());
+            }
+            "--material" => {
+                material = Some(iter.next().ok_or("--material needs a name")?.clone());
+            }
+            "--lang" => {
+                let code = iter.next().ok_or("--lang needs a language code")?;
+                lang = Lang::from_code(code).ok_or("unknown language code")?;
+            }
+            other if other.starts_with("--") => return Err(format!("unknown option {other}")),
+            other => {
+                if file.is_some() {
+                    return Err("only one profile can be swept".to_owned());
+                }
+                file = Some(PathBuf::from(other));
+            }
+        }
+    }
+    let file = file.ok_or("sweep needs a project or a sketch file for the profile")?;
+    let path_file = path_file.ok_or("sweep needs --path")?;
+    let (sketch, _, settings, _, solver) =
+        read_sketch(&file, profile_name.as_deref(), config.as_deref(), lang)?;
+    let (path_sketch, _, _, _, _) =
+        read_sketch(&path_file, path_name.as_deref(), config.as_deref(), lang)?;
+    let profile = eh3d_phoenix_cad::profile::Profile::from_sketch(
+        &sketch,
+        &eh3d_phoenix_cad::profile::ProfileLimits::from_settings(&solver),
+    )
+    .map_err(|e| error_text(&e, lang))?;
+    let path = eh3d_phoenix_cad::sweep::path_of(&path_sketch).map_err(|e| error_text(&e, lang))?;
+    let swept =
+        eh3d_phoenix_cad::sweep::sweep(&profile, &path).map_err(|e| error_text(&e, lang))?;
+    let density = match material.as_deref() {
+        Some(word) => Some((
+            word,
+            *settings
+                .materials
+                .get(word)
+                .ok_or_else(|| format!("{word}: not a material of the settings"))?,
+        )),
+        None => None,
+    };
+    print!(
+        "{}",
+        eh3d_phoenix_cad::sweep::sweep_text(&swept, density, lang)
+            .map_err(|e| error_text(&e, lang))?
+    );
+    Ok(true)
+}
+
 /// `sketch-export`: writes a sketch of a project, or a sketch file, as a DXF or SVG drawing. The
 /// answer is whether the file was written. Nothing is written over a file that exists unless
 /// `--overwrite` is given.
@@ -620,6 +696,7 @@ fn run(args: &[String]) -> Result<bool, String> {
         "holes" => run_holes(rest),
         "balance" => run_balance(rest),
         "revolve" => run_revolve(rest),
+        "sweep" => run_sweep(rest),
         "sketch-export" => run_sketch_export(rest),
         "library" => run_library(rest),
         "export" => run_export(rest),
@@ -636,8 +713,8 @@ fn window_request(args: &[String]) -> Option<Result<shot::WindowArgs, String>> {
         None | Some("gui") => {}
         Some(
             "help" | "--help" | "-h" | "config" | "check" | "interference" | "bill" | "cutplan"
-            | "clearance" | "placements" | "holes" | "balance" | "revolve" | "sketch-export"
-            | "library" | "export",
+            | "clearance" | "placements" | "holes" | "balance" | "revolve" | "sweep"
+            | "sketch-export" | "library" | "export",
         ) => return None,
         Some(first) if first.starts_with("--") => {}
         Some(first) => {

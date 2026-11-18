@@ -28,6 +28,7 @@
 //! * [`panels`]: the reports of the window (cutting plan, hole schedule and tools, clearance, placements, mass and centre of mass) as text in the eight languages, the state of their panels and the safe name of the file of a sketch drawing;
 //! * [`titleblock`]: the title block of a drawing (organisation, title, number, revision, author and scale in a table under the box), written into the DXF and SVG drawings when the settings ask for it, with the names of its cells in the eight languages;
 //! * [`revolve`]: the volume, the surface and the mass of the solid that a sketch makes when it is turned about one of its axes (by the theorems of Pappus, with the circular segments of its arcs), refused when the profile crosses the axis;
+//! * [`sweep`]: the volume and the surface of a profile swept along a path of lines and arcs of a sketch (a bend, a mitred corner, a closed path), by the theorems of Pappus with the first moments of the profile, refused when the path branches or the profile reaches the centre of a bend;
 //! * [`fins`]: sets of cooling fins that rise from a face (how many, how thick, how tall, how far apart, where they start and how long they run), checked against the limits of the settings, the edges and the holes of the face and the other sets, and an estimate, marked as one, of the heat they give to still air from a coefficient of the settings;
 //! * [`graph`]: the graph of dependencies between objects, with a deterministic order of calculation, refused cycles, a recalculation that reuses what did not change, and a Graphviz dump;
 //! * [`vars`]: named variables for the master dimensions, the binding of the parameters of an enclosure to them, and families of variants (small, medium, large);
@@ -122,6 +123,7 @@ pub mod sketch_ui;
 pub mod solid;
 pub mod step;
 pub mod store;
+pub mod sweep;
 pub mod titleblock;
 pub mod triangulate;
 pub mod uiconfig;

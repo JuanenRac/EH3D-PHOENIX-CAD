@@ -78,7 +78,7 @@ pub struct Revolved {
 }
 
 /// The area and the first moment about the axis of the region an outline bounds.
-fn outline_moments(o: &Outline, k: usize) -> (f64, f64) {
+pub(crate) fn outline_moments(o: &Outline, k: usize) -> (f64, f64) {
     if let Some((c, r)) = o.circle_of() {
         let area = PI * (r as f64) * (r as f64);
         let centre = if k == 0 { c.0 } else { c.1 };
@@ -128,7 +128,7 @@ fn outline_moments(o: &Outline, k: usize) -> (f64, f64) {
 }
 
 /// The radius, the angle walked (0 to a full turn) and the angle of the start of an arc.
-fn arc_figures(center: Pt, from: Pt, to: Pt, ccw: bool) -> (f64, f64, f64) {
+pub(crate) fn arc_figures(center: Pt, from: Pt, to: Pt, ccw: bool) -> (f64, f64, f64) {
     let (fx, fy) = ((from.0 - center.0) as f64, (from.1 - center.1) as f64);
     let (tx, ty) = ((to.0 - center.0) as f64, (to.1 - center.1) as f64);
     let r = fx.hypot(fy);
@@ -144,7 +144,7 @@ fn arc_figures(center: Pt, from: Pt, to: Pt, ccw: bool) -> (f64, f64, f64) {
 
 /// The smallest and the largest corner of the profile with the circles and the arcs themselves
 /// (the profile keeps the straight lines that stand for them, which sag a little inside).
-fn exact_bounds(profile: &Profile) -> (Pt, Pt) {
+pub(crate) fn exact_bounds(profile: &Profile) -> (Pt, Pt) {
     let (mut lo, mut hi) = ((f64::MAX, f64::MAX), (f64::MIN, f64::MIN));
     let mut take = |x: f64, y: f64| {
         lo = (lo.0.min(x), lo.1.min(y));
@@ -192,7 +192,7 @@ fn exact_bounds(profile: &Profile) -> (Pt, Pt) {
 }
 
 /// The integral of the distance from the axis along the boundary of an outline.
-fn boundary_moment(o: &Outline, k: usize) -> f64 {
+pub(crate) fn boundary_moment(o: &Outline, k: usize) -> f64 {
     if let Some((c, r)) = o.circle_of() {
         let centre = if k == 0 { c.0 } else { c.1 };
         return TAU * r as f64 * centre as f64;
@@ -288,7 +288,7 @@ pub fn revolve(profile: &Profile, axis: Axis, angle: Angle) -> Result<Revolved, 
 
 /// A volume or a surface in a unit that is `unit` nanometres to the power of the dimension, with
 /// three decimals.
-fn scaled(value: i128, unit: i128) -> String {
+pub(crate) fn scaled(value: i128, unit: i128) -> String {
     let milli = div_round_half_away(value, unit / 1000).unwrap_or(0);
     let sign = if milli < 0 { "-" } else { "" };
     let abs = milli.unsigned_abs();
@@ -296,7 +296,7 @@ fn scaled(value: i128, unit: i128) -> String {
 }
 
 /// A length in millimetres, without decimals that are zeros.
-fn length_text(nm: i64) -> String {
+pub(crate) fn length_text(nm: i64) -> String {
     crate::scad::mm_text(nm)
 }
 
