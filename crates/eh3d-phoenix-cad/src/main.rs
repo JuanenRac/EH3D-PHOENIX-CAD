@@ -28,6 +28,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad cutplan PROJECT.phoenixproj [--text] [--config FILE]            the cutting plan of the profiles placed in a project: the pieces of the cut list fitted into bars (the longest cut each profile comes in) with the kerf of the saw and the trimmed ends, as comma separated values or, with --text, as lines for a person
   eh3d-phoenix-cad clearance PROJECT.phoenixproj [--config FILE]                  lists, as comma separated values, the pairs of placed parts that do not touch and are closer than clearance.min_gap (exit 1 when there is one)
   eh3d-phoenix-cad placements PROJECT.phoenixproj [--explode PERCENT] [--config FILE]   where each placed part is (the corner and the size in millimetres and the turn) and the size of the whole assembly, as comma separated values; with --explode the parts are first pulled apart from the middle of the assembly by that percentage
+  eh3d-phoenix-cad holes PROJECT.phoenixproj [--tools] [--config FILE]            the schedule of the holes of the box for the person who drills (a tag, the face, the position, the diameter and the shape of each) as comma separated values, or with --tools the drills and cutters they need grouped by diameter and shape
   eh3d-phoenix-cad library FILE.phoenixlib [--config FILE]                        reads a library of parts, checks it and lists its parts
   eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill [--view top|front|side] [--out FILE] [--overwrite] [--ascii|--binary] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), as a Wavefront file (obj) or as a 3MF package (3mf), the plan, front or side as a drawing (dxf, svg), the STEP file, the OpenSCAD-style script, the fit report or the bill of materials
   eh3d-phoenix-cad config                                                         every setting of the library, of the window and of the sketch with its default value, as a file for --config
@@ -245,6 +246,22 @@ fn run_placements(args: &[String]) -> Result<bool, String> {
     Ok(win.info.failed == 0)
 }
 
+/// `holes`: reads a project and prints the schedule of the holes of the box, or with `--tools`
+/// the list of drills and cutters they need.
+fn run_holes(args: &[String]) -> Result<bool, String> {
+    let tools = args.iter().any(|a| a == "--tools");
+    let rest: Vec<String> = args.iter().filter(|a| *a != "--tools").cloned().collect();
+    let (file, config) = file_and_config(&rest, "project file")?;
+    let (settings, ui) = load_settings(config.as_deref())?;
+    let lang = Lang::En;
+    let mut win = Window::new(lang, settings, ui).map_err(|e| error_text(&e, lang))?;
+    if !win.open(&file) {
+        return Err(format!("{}: {}", file.display(), win.status.text(lang)));
+    }
+    print!("{}", win.holes_csv_text(tools));
+    Ok(win.info.failed == 0)
+}
+
 /// `library`: reads a library of parts, checks it against the settings and lists its parts.
 fn run_library(args: &[String]) -> Result<bool, String> {
     let (file, config) = file_and_config(args, "library file")?;
@@ -369,6 +386,7 @@ fn run(args: &[String]) -> Result<bool, String> {
         "cutplan" => run_cutplan(rest),
         "clearance" => run_clearance(rest),
         "placements" => run_placements(rest),
+        "holes" => run_holes(rest),
         "library" => run_library(rest),
         "export" => run_export(rest),
         "gui" => Err("this build has no window: build it with --features gui".to_owned()),
@@ -384,7 +402,7 @@ fn window_request(args: &[String]) -> Option<Result<shot::WindowArgs, String>> {
         None | Some("gui") => {}
         Some(
             "help" | "--help" | "-h" | "config" | "check" | "interference" | "bill" | "cutplan"
-            | "clearance" | "placements" | "library" | "export",
+            | "clearance" | "placements" | "holes" | "library" | "export",
         ) => return None,
         Some(first) if first.starts_with("--") => {}
         Some(first) => {

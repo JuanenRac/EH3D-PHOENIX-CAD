@@ -68,6 +68,10 @@ The three views look at the box from above (`top`: `x` to the right, `y` up), fr
 
 The DXF file is R12 text with the entities `LINE`, `CIRCLE` and `ARC` and the header variable `$INSUNITS` set to millimetres. The SVG file is scaled to `drawing.svg_width`; with `drawing.dimensions = 1` it has the width and the height of the box as dimension lines, the size of every hole as a label (`⌀6`, `⌀3 / ⌀8` for a countersink, `4×10` for a slot) and the scale in the corner. Posts, the lip and the inside of the box are not drawn, because they are not seen from outside. A drawing with more than `drawing.max_entities` entities is refused (`PHOENIX-CAD-050`). Neither format has been opened in a drawing program.
 
+## The hole schedule
+
+`eh3d_phoenix_cad::schedule` lists the holes of the box for the person who drills them: by face (front, back, left, right, top, bottom), then by position `u` and `v` from the lower left corner of the face as seen from outside, each with a tag `H1`, `H2`, ... that follows that order, so the same box always gives the same tags. The command `eh3d-phoenix-cad holes PROJECT` prints `tag,name,face,u_mm,v_mm,diameter_mm,style,detail` (the detail is the head of a countersink, the head and the depth of a counterbore, the height of a rectangle or the length and direction of a slot) and a line `total,N`. With `--tools` it prints the drills and cutters the job needs, `diameter_mm,style,detail,count`, the smallest diameter first. The positions are the nominal ones of the model, without the compensation of the printer (see the model for fabrication).
+
 ## Settings
 
 In `phoenix-cad.default.cfg` (the `config` command writes them):

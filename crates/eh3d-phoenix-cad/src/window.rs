@@ -1879,6 +1879,17 @@ impl Window {
         crate::placement::table(&placed).map(|t| crate::placement::table_csv(&t))
     }
 
+    /// The schedule of the holes of the box as comma separated values, or with `tools` the list of
+    /// drills and cutters they need (see [`crate::schedule`]).
+    pub fn holes_csv_text(&self, tools: bool) -> String {
+        let rows = crate::schedule::rows(&self.built.enclosure);
+        if tools {
+            crate::schedule::tools_csv(&rows)
+        } else {
+            crate::schedule::rows_csv(&rows)
+        }
+    }
+
     fn refresh_fields(&mut self) {
         self.fields = self.make_fields();
     }
@@ -6552,6 +6563,33 @@ total,0,
         // more than the settings allow is refused with the code of the part
         let err = w.placement_csv_text(Some(501)).unwrap_err();
         assert_eq!(err.code(), "PHOENIX-CAD-045");
+    }
+
+    #[test]
+    fn the_hole_schedule_of_a_project_lists_its_holes_and_its_tools() {
+        let w = example();
+        let csv = w.holes_csv_text(false);
+        let n = w.enclosure().holes().len();
+        assert!(
+            csv.ends_with(&format!(
+                "total,{n},,,,,,
+"
+            )),
+            "{csv}"
+        );
+        assert_eq!(csv.lines().count(), n + 2);
+        let tools = w.holes_csv_text(true);
+        assert!(tools.starts_with(
+            "diameter_mm,style,detail,count
+"
+        ));
+        assert!(
+            tools.ends_with(&format!(
+                "total,,,{n}
+"
+            )),
+            "{tools}"
+        );
     }
 
     #[test]
