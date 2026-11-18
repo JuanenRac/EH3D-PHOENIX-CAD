@@ -431,6 +431,84 @@ fn the_part_list_is_csv_for_a_program_and_text_for_a_person() {
 }
 
 #[test]
+fn the_bill_of_materials_has_the_mass_of_the_balance_and_a_cost_that_the_settings_decide() {
+    let (code, csv, err) = run(&["bom", FRAME]);
+    assert_eq!(code, 0, "{err}");
+    let rows: Vec<Vec<&str>> = csv.lines().map(|l| l.split(',').collect()).collect();
+    assert_eq!(rows[0][0..3], ["item", "name", "kind"]);
+    assert!(rows.iter().all(|r| r.len() == 17), "{csv}");
+    let n = rows.len();
+    assert_eq!(
+        [rows[n - 3][0], rows[n - 2][0], rows[n - 1][0]],
+        ["subtotal", "markup", "total"]
+    );
+    // the lines hold the 18 parts of the frame, and their mass is the mass of the balance
+    let pieces: u32 = rows[1..n - 3]
+        .iter()
+        .map(|r| r[8].parse::<u32>().unwrap())
+        .sum();
+    assert_eq!(pieces, 18);
+    assert_eq!(rows[n - 3][8], "18");
+    let (_, balance, _) = run(&["balance", FRAME]);
+    let grams = balance
+        .lines()
+        .find_map(|l| l.strip_prefix("mass: "))
+        .unwrap()
+        .trim_end_matches(" g")
+        .to_owned();
+    assert_eq!(rows[n - 3][11], grams, "{csv}");
+    // every material of the frame has a price in the shipped settings
+    assert!(rows[1..n - 3].iter().all(|r| r[16] == "yes"), "{csv}");
+    let milli = |text: &str| text.replace('.', "").parse::<i64>().unwrap();
+    let by_lines: i64 = rows[1..n - 3].iter().map(|r| milli(r[14])).sum();
+    assert_eq!(milli(rows[n - 3][14]), by_lines);
+    assert_eq!(milli(rows[n - 1][14]), by_lines);
+    // a settings file with what a piece costs and a markup changes the cost and not the mass
+    let dir = Scratch::new("bom");
+    let config = dir.file("cost.cfg");
+    fs::write(
+        &config,
+        "[cost]
+currency = USD
+per_piece = 1.5
+markup_percent = 20
+",
+    )
+    .unwrap();
+    let (code, priced, err) = run(&["bom", FRAME, "--config", &config]);
+    assert_eq!(code, 0, "{err}");
+    let rows: Vec<Vec<&str>> = priced.lines().map(|l| l.split(',').collect()).collect();
+    let n = rows.len();
+    let subtotal = milli(rows[n - 3][14]);
+    assert_eq!(subtotal, by_lines + 18 * 1_500);
+    assert_eq!(milli(rows[n - 2][14]), (subtotal * 20 + 50) / 100);
+    assert_eq!(
+        milli(rows[n - 1][14]),
+        subtotal + (subtotal * 20 + 50) / 100
+    );
+    assert_eq!(rows[n - 1][15], "USD");
+    assert_eq!(rows[n - 3][11], grams);
+    // the text is in the language that is asked for
+    let (code, text, _) = run(&["bom", FRAME, "--text", "--lang", "de"]);
+    assert_eq!(code, 0);
+    assert!(text.contains("Zwischensumme "), "{text}");
+    assert!(text.contains("Teile: 18, Volumen: "), "{text}");
+    let (code, _, _) = run(&["bom"]);
+    assert_eq!(code, 1);
+    // a price for a material the settings do not have is refused
+    fs::write(
+        &config,
+        "[material.unobtainium]
+price_per_kg = 1
+",
+    )
+    .unwrap();
+    let (code, _, err) = run(&["bom", FRAME, "--config", &config]);
+    assert_eq!(code, 1);
+    assert!(err.contains("unobtainium"), "{err}");
+}
+
+#[test]
 fn a_section_of_the_model_is_printed_and_written_as_a_drawing() {
     let (code, text, err) = run(&["section", BOX, "--axis", "z", "--at", "10"]);
     assert_eq!(code, 0, "{err}");

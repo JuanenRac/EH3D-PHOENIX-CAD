@@ -29,6 +29,7 @@
 //! * [`panels`]: the reports of the window (cutting plan, hole schedule and tools, clearance, placements, mass and centre of mass) as text in the eight languages, the state of their panels and the safe name of the file of a sketch drawing;
 //! * [`section`]: the section of the model by a plane across one of the axes, cut from the triangles of every solid (the box, the parts and the turned and swept bodies) into closed outlines with their area, as a DXF or SVG drawing and as a report;
 //! * [`titleblock`]: the title block of a drawing (organisation, title, number, revision, author and scale in a table under the box), written into the DXF and SVG drawings when the settings ask for it, with the names of its cells in the eight languages;
+//! * [`bom`]: the bill of materials with cost, the placed parts and the turned and swept bodies grouped into lines with quantity, material, mass and the cost worked out from the price of a kilogram of each material in the settings, with a markup, as comma separated values safe to open in a spreadsheet or as text in the eight languages;
 //! * [`partlist`]: the list of the placed parts with their properties (kind, material, density, volume, mass, corner and size of the box) and its totals, as comma separated values or as text in the eight languages;
 //! * [`revolve`]: the volume, the surface and the mass of the solid that a sketch makes when it is turned about one of its axes (by the theorems of Pappus, with the circular segments of its arcs), refused when the profile crosses the axis;
 //! * [`turned`]: a sketch turned about one of its axes kept in the model as a body of its own (its sketch, axis, angle, position and material), with its volume, mass, box, triangles and centre of mass, and its place in the bill, the balance and the files of triangles;
@@ -83,6 +84,7 @@
 pub mod assembly;
 pub mod balance;
 pub mod body;
+pub mod bom;
 pub mod browse;
 pub mod catalog;
 pub mod clearance;

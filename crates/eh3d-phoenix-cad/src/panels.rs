@@ -50,11 +50,13 @@ pub enum Panel {
     Section,
     /// A flat DXF drawing read into a sketch of the project.
     ImportDxf,
+    /// The bill of materials with the mass and the cost of each line.
+    Bom,
 }
 
 impl Panel {
     /// Every panel, in the order of the menu.
-    pub const ALL: [Panel; 10] = [
+    pub const ALL: [Panel; 11] = [
         Panel::CutPlan,
         Panel::Holes,
         Panel::Clearance,
@@ -65,6 +67,7 @@ impl Panel {
         Panel::Revolve,
         Panel::Section,
         Panel::ImportDxf,
+        Panel::Bom,
     ];
 
     /// The title of the panel, which is also the text of its menu entry.
@@ -80,6 +83,7 @@ impl Panel {
             Panel::Revolve => Msg::PanelRevolve,
             Panel::Section => Msg::PanelSection,
             Panel::ImportDxf => Msg::PanelImportDxf,
+            Panel::Bom => Msg::PanelBom,
         }
     }
 }

@@ -502,6 +502,75 @@ impl Config {
     }
 }
 
+/// How the bill of materials with cost is priced (`[cost]` and the `price_per_kg` of each
+/// `[material.*]`). Money is whole thousandths of the currency, so the sums are exact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CostSettings {
+    /// The code of the currency, two to eight capital letters (`EUR`); it is only written next to
+    /// the figures.
+    pub currency: String,
+    /// What each piece costs besides its material (cutting, drilling, handling), in thousandths.
+    pub per_piece_milli: u32,
+    /// The percentage added to the sum of the lines (waste, margin), from 0 to 1000.
+    pub markup_percent: u32,
+    /// The price of a kilogram of each material that has one, in thousandths; a material without
+    /// a price is left out of the cost and the bill says so.
+    pub prices_milli_per_kg: BTreeMap<String, u32>,
+}
+
+impl CostSettings {
+    /// The most that the markup can be set to, in percent.
+    pub const MARKUP_CAP: u32 = 1000;
+
+    /// The settings of the shipped file.
+    pub fn shipped() -> CostSettings {
+        Settings::defaults().cost
+    }
+
+    /// Reads and checks the keys of `[cost]` and the prices of the materials (`densities` are the
+    /// materials the settings know: a price for another one is refused).
+    pub fn from_config(
+        c: &Config,
+        densities: &BTreeMap<String, u32>,
+    ) -> Result<CostSettings, CadError> {
+        let currency = c
+            .get("cost.currency")
+            .ok_or_else(|| CadError::Config("cost.currency is missing".into()))?;
+        if !(2..=8).contains(&currency.len()) || !currency.bytes().all(|b| b.is_ascii_uppercase()) {
+            return Err(CadError::Config(
+                "cost.currency must be two to eight capital letters".into(),
+            ));
+        }
+        let markup_percent = c.number("cost.markup_percent")?;
+        if markup_percent > Self::MARKUP_CAP {
+            return Err(CadError::Config(format!(
+                "cost.markup_percent must be from 0 to {}",
+                Self::MARKUP_CAP
+            )));
+        }
+        let mut prices = BTreeMap::new();
+        for key in c.keys() {
+            if let Some(name) = key
+                .strip_prefix("material.")
+                .and_then(|rest| rest.strip_suffix(".price_per_kg"))
+            {
+                if !densities.contains_key(name) {
+                    return Err(CadError::Config(format!(
+                        "{key}: {name} is not a material of the settings"
+                    )));
+                }
+                prices.insert(name.to_string(), c.milli(key)?);
+            }
+        }
+        Ok(CostSettings {
+            currency: currency.to_string(),
+            per_piece_milli: c.milli("cost.per_piece")?,
+            markup_percent,
+            prices_milli_per_kg: prices,
+        })
+    }
+}
+
 /// The size of a metric screw and of the holes it needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Screw {
@@ -605,6 +674,8 @@ pub struct Settings {
     pub drawing: DrawingSettings,
     /// The settings of the cutting plan of the profiles.
     pub stock: StockSettings,
+    /// How the bill of materials is priced.
+    pub cost: CostSettings,
     /// The settings of the check of the room between parts.
     pub clearance: ClearanceSettings,
     /// The settings of the table of placements and of the exploded view.
@@ -891,6 +962,7 @@ impl Settings {
         let mesh = MeshSettings::from_config(c)?;
         let drawing = DrawingSettings::from_config(c)?;
         let stock = StockSettings::from_config(c)?;
+        let cost = CostSettings::from_config(c, &materials)?;
         let clearance = ClearanceSettings::from_config(c)?;
         let placement = PlacementSettings::from_config(c)?;
         let title_block = TitleBlockSettings::from_config(c)?;
@@ -914,6 +986,7 @@ impl Settings {
             mesh,
             drawing,
             stock,
+            cost,
             clearance,
             placement,
             title_block,
@@ -941,6 +1014,12 @@ mod tests {
         assert_eq!(names, vec!["M2", "M2.5", "M3", "M4", "M5", "M6", "M8"]);
         assert_eq!(s.materials["PLA"], 1240);
         assert!(s.materials.values().all(|d| *d > 0));
+        // every material of the shipped file has a price, to be replaced by the real one
+        assert_eq!(s.cost.currency, "EUR");
+        assert_eq!(s.cost.prices_milli_per_kg["PLA"], 20_000);
+        assert_eq!(s.cost.prices_milli_per_kg.len(), s.materials.len());
+        assert_eq!((s.cost.per_piece_milli, s.cost.markup_percent), (0, 0));
+        assert_eq!(CostSettings::shipped(), s.cost);
         assert_eq!(
             s.expr,
             ExprLimits {
@@ -950,6 +1029,62 @@ mod tests {
                 max_exponent: 64
             }
         );
+    }
+
+    #[test]
+    fn the_cost_is_read_in_thousandths_and_checked() {
+        let s = Settings::with_user_config(
+            "[cost]
+currency = USD
+per_piece = 0.5
+markup_percent = 15
+[material.PLA]
+price_per_kg = 18.25
+",
+        )
+        .unwrap();
+        assert_eq!(s.cost.currency, "USD");
+        assert_eq!((s.cost.per_piece_milli, s.cost.markup_percent), (500, 15));
+        assert_eq!(s.cost.prices_milli_per_kg["PLA"], 18_250);
+        assert_eq!(s.cost.prices_milli_per_kg["steel"], 2_000);
+        for bad in [
+            "[cost]
+currency = eur
+",
+            "[cost]
+currency = E
+",
+            "[cost]
+currency = ABCDEFGHI
+",
+            "[cost]
+markup_percent = 1001
+",
+            "[cost]
+per_piece = 1.2345
+",
+            "[cost]
+per_piece = -1
+",
+            "[material.PLA]
+price_per_kg = -1
+",
+            "[material.PLA]
+price_per_kg = cheap
+",
+            "[material.unobtainium]
+price_per_kg = 1
+",
+        ] {
+            assert!(Settings::with_user_config(bad).is_err(), "{bad}");
+        }
+        // 1000 percent is the most
+        assert!(Settings::with_user_config(
+            "[cost]
+markup_percent = 1000
+"
+        )
+        .is_ok());
     }
 
     #[test]

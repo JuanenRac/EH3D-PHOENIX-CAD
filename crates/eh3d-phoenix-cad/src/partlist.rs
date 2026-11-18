@@ -215,7 +215,7 @@ pub fn csv(l: &List) -> String {
         let _ = writeln!(
             out,
             "{},{},{},{},{},{},{},{},{},{},{},{},{}",
-            r.name,
+            crate::bom::cell(&r.name),
             if r.turned {
                 "turned"
             } else if r.swept {
@@ -223,8 +223,8 @@ pub fn csv(l: &List) -> String {
             } else {
                 r.kind.name()
             },
-            r.part,
-            r.material,
+            crate::bom::cell(&r.part),
+            crate::bom::cell(&r.material),
             r.density,
             scaled(r.volume_nm3, NM3_PER_MM3),
             mass_g_text(r.mass_ug),
@@ -511,6 +511,30 @@ mod tests {
                 .unwrap_err()
                 .code(),
             "PHOENIX-CAD-045"
+        );
+    }
+
+    #[test]
+    fn a_name_that_could_be_a_formula_or_break_a_row_is_quoted_in_the_values() {
+        let parts = set(vec![
+            (1, cube("=1+1,\"x\"", "steel", 0)),
+            (2, cube("plain", "steel", 20)),
+        ]);
+        let l = list(&parts, &densities()).unwrap();
+        let text = csv(&l);
+        assert!(
+            text.contains(
+                "
+\"'=1+1,\"\"x\"\"\",profile,cube,steel,"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "
+plain,profile,cube,steel,"
+            ),
+            "{text}"
         );
     }
 }

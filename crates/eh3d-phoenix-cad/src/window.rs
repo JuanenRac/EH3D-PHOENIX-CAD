@@ -2277,6 +2277,22 @@ impl Window {
         )
     }
 
+    /// The bill of materials with cost of the placed parts and the turned and swept bodies, priced
+    /// with the settings (see [`crate::bom`]).
+    pub fn bom(&self) -> Result<crate::bom::Bom, CadError> {
+        crate::bom::from_list(&self.part_list()?, &self.settings.cost)
+    }
+
+    /// The bill of materials with cost as comma separated values.
+    pub fn bom_csv(&self) -> Result<String, CadError> {
+        self.bom().map(|b| crate::bom::csv(&b))
+    }
+
+    /// The bill of materials with cost as lines of text in the language of the window.
+    pub fn bom_text(&self) -> Result<String, CadError> {
+        self.bom().map(|b| crate::bom::text_in(&b, self.lang))
+    }
+
     /// The list of the placed parts as comma separated values.
     pub fn part_list_csv(&self) -> Result<String, CadError> {
         self.part_list().map(|l| crate::partlist::csv(&l))
@@ -2311,7 +2327,7 @@ impl Window {
         use crate::panels::{self, Panel};
         let lang = self.lang;
         let needs_parts = matches!(panel, Panel::CutPlan | Panel::Clearance | Panel::Placements);
-        let needs_bodies = matches!(panel, Panel::PartList | Panel::Balance);
+        let needs_bodies = matches!(panel, Panel::PartList | Panel::Balance | Panel::Bom);
         let no_parts = self.built.enclosure.parts().is_empty();
         let no_bodies = no_parts
             && self.built.enclosure.turned().is_empty()
@@ -2346,6 +2362,7 @@ impl Window {
                 crate::placement::table(&placed).map(|t| panels::placements_text_in(&t, lang))
             }),
             Panel::PartList => self.part_list().map(|l| crate::partlist::text_in(&l, lang)),
+            Panel::Bom => self.bom().map(|b| crate::bom::text_in(&b, lang)),
             Panel::Balance => self.balance().map(|b| panels::balance_text_in(&b, lang)),
             Panel::Section | Panel::ImportDxf => Ok(String::new()),
             Panel::SketchExport | Panel::Revolve => Ok(if self.mech.sketches.is_empty() {
@@ -8390,6 +8407,57 @@ mass: "
         assert!(dxf.contains("1\nAna\n"));
         let svg = w.export_text(Format::SvgFront).unwrap();
         assert!(svg.contains(">Número de plano</text>"));
+    }
+
+    #[test]
+    fn the_bill_with_cost_is_a_panel_that_follows_the_settings_and_the_language() {
+        use crate::panels::{Panel, PanelOptions};
+        let mut w = fresh();
+        assert!(w.open(&frame_path()), "{:?}", w.status);
+        let bom = w.bom().unwrap();
+        // the pieces and the mass are the ones of the list and of the balance
+        assert_eq!(bom.pieces, 18);
+        assert_eq!(bom.mass_ug, w.balance().unwrap().mass_ug);
+        assert_eq!(bom.mass_ug, w.part_list().unwrap().mass_ug);
+        assert_eq!(bom.unpriced, 0);
+        let csv = w.bom_csv().unwrap();
+        assert!(csv.starts_with("item,name,kind,material,"), "{csv}");
+        assert_eq!(csv.lines().count(), 1 + bom.lines.len() + 3);
+        let text = w.panel_text(Panel::Bom, &PanelOptions::default());
+        assert_eq!(text, w.bom_text().unwrap());
+        assert!(text.contains("subtotal "), "{text}");
+        w.lang = Lang::Fr;
+        assert!(w
+            .panel_text(Panel::Bom, &PanelOptions::default())
+            .contains("sous-total "));
+        // a price in the settings changes the cost and nothing else
+        let before = bom.total_milli;
+        assert!(before > 0);
+        let mut settings = Settings::defaults();
+        settings.cost.markup_percent = 100;
+        let mut pricier = Window::new(Lang::En, settings, UiSettings::defaults()).unwrap();
+        assert!(pricier.open(&frame_path()), "{:?}", pricier.status);
+        let doubled = pricier.bom().unwrap();
+        assert_eq!(doubled.mass_ug, bom.mass_ug);
+        assert_eq!(doubled.subtotal_milli, bom.subtotal_milli);
+        assert_eq!(doubled.total_milli, 2 * bom.subtotal_milli);
+        // a material without a price is said to have none, and the cost leaves it out
+        let mut settings = Settings::defaults();
+        settings.cost.prices_milli_per_kg.clear();
+        let mut free = Window::new(Lang::En, settings, UiSettings::defaults()).unwrap();
+        assert!(free.open(&frame_path()), "{:?}", free.status);
+        let none = free.bom().unwrap();
+        assert_eq!(none.total_milli, 0);
+        assert_eq!(none.unpriced, none.lines.len());
+        assert!(free
+            .bom_text()
+            .unwrap()
+            .contains("no price for the material of"));
+        // a new project has no part
+        assert_eq!(
+            fresh().panel_text(Panel::Bom, &PanelOptions::default()),
+            Msg::PanelNoParts.tr(Lang::En)
+        );
     }
 
     #[test]
