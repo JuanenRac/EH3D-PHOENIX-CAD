@@ -2012,13 +2012,47 @@ impl Window {
                 crate::placement::table(&placed).map(|t| panels::placements_text_in(&t, lang))
             }),
             Panel::Balance => self.balance().map(|b| panels::balance_text_in(&b, lang)),
-            Panel::SketchExport => Ok(if self.mech.sketches.is_empty() {
+            Panel::SketchExport | Panel::Revolve => Ok(if self.mech.sketches.is_empty() {
                 Msg::PanelNoSketch.tr(lang).to_string()
             } else {
                 String::new()
             }),
         };
         text.unwrap_or_else(|e| error_text(&e, lang))
+    }
+
+    /// The figures of a sketch of the project turned about one of its axes as lines of text in the
+    /// language of the window (see [`crate::revolve`]). The angle is typed in degrees and the
+    /// material, when there is one, is a name of the settings; a refusal is written as the text
+    /// of its error.
+    pub fn revolve_panel_text(
+        &self,
+        sketch: &str,
+        axis: crate::revolve::Axis,
+        angle: &str,
+        material: Option<&str>,
+    ) -> String {
+        let lang = self.lang;
+        let figures = || -> Result<String, CadError> {
+            let found = self.find_sketch(Some(sketch))?;
+            let angle = crate::units::parse_angle(angle)?;
+            let profile = crate::profile::Profile::from_sketch(
+                &found,
+                &ProfileLimits::from_settings(&self.sketch_settings),
+            )?;
+            let turned = crate::revolve::revolve(&profile, axis, angle)?;
+            let density = match material {
+                Some(name) => Some((
+                    name,
+                    *self.settings.materials.get(name).ok_or_else(|| {
+                        CadError::UnknownName(format!("{name} is not a material of the settings"))
+                    })?,
+                )),
+                None => None,
+            };
+            crate::revolve::revolve_text(&turned, density, lang)
+        };
+        figures().unwrap_or_else(|e| error_text(&e, lang))
     }
 
     /// Writes a sketch of the project as a DXF or SVG drawing in a file next to the project (see
@@ -7014,6 +7048,73 @@ total,0,
 CONTORNO
 "
         ));
+    }
+
+    #[test]
+    fn the_revolve_panel_turns_a_sketch_of_the_project_and_tells_a_refusal_in_the_language() {
+        use crate::panels::{Panel, PanelOptions};
+        use crate::revolve::Axis as TurnAxis;
+        let mut w = fresh();
+        let none = PanelOptions::default();
+        assert_eq!(
+            w.panel_text(Panel::Revolve, &none),
+            Msg::PanelNoSketch.tr(Lang::En)
+        );
+        w.keep_sketch(plate());
+        assert_eq!(w.panel_text(Panel::Revolve, &none), "");
+        // 40 x 25 mm from the axis with a hole of 3 mm radius at 12 mm: 2 pi (12500 - 108 pi)
+        let full = w.revolve_panel_text("plate", TurnAxis::X, "360", None);
+        assert!(
+            full.contains(
+                "volume: 76407.982 mm3
+"
+            ),
+            "{full}"
+        );
+        assert!(!full.contains("mass of"), "{full}");
+        let half = w.revolve_panel_text("plate", TurnAxis::X, " 180 ", None);
+        assert!(
+            half.contains(
+                "volume: 38203.991 mm3
+"
+            ),
+            "{half}"
+        );
+        let with = w.revolve_panel_text("plate", TurnAxis::X, "360", Some("PLA"));
+        assert!(
+            with.ends_with(
+                "mass of PLA: 94.746 g
+"
+            ),
+            "{with}"
+        );
+        w.lang = Lang::Es;
+        let es = w.revolve_panel_text("plate", TurnAxis::X, "360", None);
+        assert!(
+            es.contains(
+                "volumen: 76407.982 mm3
+"
+            ),
+            "{es}"
+        );
+        w.lang = Lang::En;
+        // what is refused is written as the text of its error
+        let missing = w.revolve_panel_text("nothing", TurnAxis::X, "360", None);
+        assert!(missing.starts_with("PHOENIX-CAD-014"), "{missing}");
+        let bad = w.revolve_panel_text("plate", TurnAxis::X, "a turn", None);
+        assert!(bad.starts_with("PHOENIX-CAD-008"), "{bad}");
+        let zero = w.revolve_panel_text("plate", TurnAxis::X, "0", None);
+        assert!(zero.starts_with("PHOENIX-CAD-007"), "{zero}");
+        let glue = w.revolve_panel_text("plate", TurnAxis::X, "360", Some("glue"));
+        assert!(glue.starts_with("PHOENIX-CAD-014"), "{glue}");
+        let mut across =
+            Sketch::new("across", crate::sketch::SketchPlane::on_face(Face::Front)).unwrap();
+        across
+            .add_rectangle((mm_len(-5), mm_len(-5)), (mm_len(5), mm_len(5)))
+            .unwrap();
+        w.keep_sketch(across);
+        let crossing = w.revolve_panel_text("across", TurnAxis::X, "360", None);
+        assert!(crossing.starts_with("PHOENIX-CAD-036"), "{crossing}");
     }
 
     #[test]

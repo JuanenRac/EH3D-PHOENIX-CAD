@@ -20,6 +20,7 @@ use crate::enclosure::{Face, HoleStyle, Id};
 use crate::lang::{fill, Lang, Msg};
 use crate::nesting::Plan;
 use crate::placement::Table;
+use crate::revolve::Axis;
 use crate::scad::mm_text;
 use crate::schedule::{self, HoleRow};
 use crate::uiconfig::PanelSettings;
@@ -40,17 +41,20 @@ pub enum Panel {
     Balance,
     /// A sketch written as a DXF or SVG drawing.
     SketchExport,
+    /// The figures of a sketch turned about one of its axes.
+    Revolve,
 }
 
 impl Panel {
     /// Every panel, in the order of the menu.
-    pub const ALL: [Panel; 6] = [
+    pub const ALL: [Panel; 7] = [
         Panel::CutPlan,
         Panel::Holes,
         Panel::Clearance,
         Panel::Placements,
         Panel::Balance,
         Panel::SketchExport,
+        Panel::Revolve,
     ];
 
     /// The title of the panel, which is also the text of its menu entry.
@@ -62,6 +66,7 @@ impl Panel {
             Panel::Placements => Msg::PanelPlacements,
             Panel::Balance => Msg::PanelBalance,
             Panel::SketchExport => Msg::PanelSketchExport,
+            Panel::Revolve => Msg::PanelRevolve,
         }
     }
 }
@@ -127,6 +132,12 @@ pub struct PanelState {
     pub file: String,
     /// Whether a file that exists is written over.
     pub overwrite: bool,
+    /// The axis the sketch of the revolve panel is turned about.
+    pub revolve_axis: Axis,
+    /// The angle being typed for the revolve panel, in degrees.
+    pub revolve_angle: String,
+    /// The material of the revolve panel; empty means none, and then no mass is given.
+    pub revolve_material: String,
 }
 
 impl PanelState {
@@ -141,6 +152,9 @@ impl PanelState {
             format: settings.sketch_format,
             file: String::new(),
             overwrite,
+            revolve_axis: settings.revolve_axis,
+            revolve_angle: settings.revolve_angle.to_string(),
+            revolve_material: String::new(),
         }
     }
 
@@ -631,6 +645,9 @@ mod tests {
         assert_eq!(st.open, None);
         assert_eq!(st.options(), PanelOptions::default());
         assert!(!st.overwrite);
+        assert_eq!(st.revolve_axis, Axis::X);
+        assert_eq!(st.revolve_angle, "360");
+        assert!(st.revolve_material.is_empty());
         let mut st = PanelState::new(&s, true);
         assert!(st.overwrite);
         st.explode = true;

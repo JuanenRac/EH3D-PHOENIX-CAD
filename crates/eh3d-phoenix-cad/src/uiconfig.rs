@@ -173,6 +173,10 @@ pub struct PanelSettings {
     pub explode_percent: u32,
     /// The format the drawing of a sketch starts with.
     pub sketch_format: SketchFormat,
+    /// The axis the revolve panel starts with.
+    pub revolve_axis: crate::revolve::Axis,
+    /// The turn, in whole degrees, the revolve panel starts with.
+    pub revolve_angle: u32,
 }
 
 impl PanelSettings {
@@ -421,6 +425,7 @@ impl ExportSettings {
 impl PanelSettings {
     fn from_config(c: &Config) -> Result<PanelSettings, CadError> {
         let name = word(c, "panels.sketch_format")?;
+        let axis = word(c, "panels.revolve_axis")?;
         Ok(PanelSettings {
             holes_tools: count(c, "panels.holes_tools", 0, 1)? == 1,
             explode: count(c, "panels.explode", 0, 1)? == 1,
@@ -433,6 +438,10 @@ impl PanelSettings {
             sketch_format: SketchFormat::from_name(name).ok_or_else(|| {
                 CadError::Config(format!("panels.sketch_format: {name} is not dxf or svg"))
             })?,
+            revolve_axis: crate::revolve::Axis::from_name(axis).ok_or_else(|| {
+                CadError::Config(format!("panels.revolve_axis: {axis} is not x or y"))
+            })?,
+            revolve_angle: count(c, "panels.revolve_angle", 1, 360)?,
         })
     }
 }
@@ -550,6 +559,8 @@ mod tests {
         assert!(!s.panels.explode);
         assert_eq!(s.panels.explode_percent, 50);
         assert_eq!(s.panels.sketch_format, SketchFormat::Dxf);
+        assert_eq!(s.panels.revolve_axis, crate::revolve::Axis::X);
+        assert_eq!(s.panels.revolve_angle, 360);
         assert_eq!((n.pattern_count, n.pattern_step), (4, mm(10)));
         assert_eq!(n.pattern_radius, mm(5));
         assert_eq!(n.pattern_angle, Angle::from_deg(90).unwrap());
@@ -596,9 +607,13 @@ holes_tools = 1
 explode = 1
 explode_percent = 120
 sketch_format = svg
+revolve_axis = y
+revolve_angle = 90
 ",
         )
         .unwrap();
+        assert_eq!(s.panels.revolve_axis, crate::revolve::Axis::Y);
+        assert_eq!(s.panels.revolve_angle, 90);
         assert!(s.panels.holes_tools);
         assert!(s.panels.explode);
         assert_eq!(s.panels.explode_percent, 120);
@@ -619,6 +634,15 @@ explode_percent = -1
 ",
             "[panels]
 sketch_format = pdf
+",
+            "[panels]
+revolve_axis = z
+",
+            "[panels]
+revolve_angle = 0
+",
+            "[panels]
+revolve_angle = 361
 ",
         ] {
             assert!(UiSettings::with_user_config(bad).is_err(), "{bad}");

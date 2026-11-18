@@ -843,6 +843,7 @@ impl App {
         };
         let lang = self.win.lang;
         let names = self.win.sketch_names();
+        let materials: Vec<String> = self.win.settings.materials.keys().cloned().collect();
         if self.panels.sketch >= names.len() {
             self.panels.sketch = 0;
         }
@@ -870,6 +871,60 @@ impl App {
                                 );
                             });
                         }
+                    }
+                    Panel::Revolve if !names.is_empty() => {
+                        ui.horizontal(|ui| {
+                            ui.label(Msg::FieldSketch.tr(lang));
+                            egui::ComboBox::from_id_salt("panel-revolve-sketch")
+                                .selected_text(names[self.panels.sketch].clone())
+                                .show_ui(ui, |ui| {
+                                    for (i, n) in names.iter().enumerate() {
+                                        ui.selectable_value(&mut self.panels.sketch, i, n.as_str());
+                                    }
+                                });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(Msg::PanelAxis.tr(lang));
+                            ui.selectable_value(
+                                &mut self.panels.revolve_axis,
+                                crate::revolve::Axis::X,
+                                "x",
+                            );
+                            ui.selectable_value(
+                                &mut self.panels.revolve_axis,
+                                crate::revolve::Axis::Y,
+                                "y",
+                            );
+                            ui.label(Msg::PanelAngle.tr(lang));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.panels.revolve_angle)
+                                    .desired_width(60.0),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(Msg::PanelMaterial.tr(lang));
+                            let shown = if self.panels.revolve_material.is_empty() {
+                                Msg::PanelNoMaterial.tr(lang).to_string()
+                            } else {
+                                self.panels.revolve_material.clone()
+                            };
+                            egui::ComboBox::from_id_salt("panel-revolve-material")
+                                .selected_text(shown)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.panels.revolve_material,
+                                        String::new(),
+                                        Msg::PanelNoMaterial.tr(lang),
+                                    );
+                                    for m in &materials {
+                                        ui.selectable_value(
+                                            &mut self.panels.revolve_material,
+                                            m.clone(),
+                                            m.as_str(),
+                                        );
+                                    }
+                                });
+                        });
                     }
                     _ => {}
                 }
@@ -906,7 +961,18 @@ impl App {
                         }
                     }
                 } else {
-                    text = self.win.panel_text(panel, &self.panels.options());
+                    text = if panel == Panel::Revolve && !names.is_empty() {
+                        let material = (!self.panels.revolve_material.is_empty())
+                            .then_some(self.panels.revolve_material.as_str());
+                        self.win.revolve_panel_text(
+                            &names[self.panels.sketch],
+                            self.panels.revolve_axis,
+                            &self.panels.revolve_angle,
+                            material,
+                        )
+                    } else {
+                        self.win.panel_text(panel, &self.panels.options())
+                    };
                     if ui.button(Msg::ReportCopy.tr(lang)).clicked() {
                         copy = true;
                     }

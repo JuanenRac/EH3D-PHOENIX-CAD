@@ -191,7 +191,7 @@ The STEP export and the model for fabrication **refuse** a box with an extrusion
 
 * The volume is the angle times the first moment of the area about the axis, and the surface is the angle times the first moment of the boundary (the outer outlines and the holes) plus, for less than a full turn, the two flat ends of the profile (the theorems of Pappus). The moments of lines, arcs and circles are worked out in floating point with the circular segment of each arc (its area and its centroid), so the figures are rounded to a cubic or square nanometre and are not exact integers; they are checked against a rectangle, a torus, a sphere, a notch cut with a clockwise arc and a profile with a hole.
 * The profile must lie on one side of the axis and may touch it. One that crosses the axis would sweep through itself and is refused with `PHOENIX-CAD-036`; an angle that is not above zero and up to 360 degrees is refused with `PHOENIX-CAD-007`.
-* It gives figures only: there is no mesh, no STL file and no STEP file of the turned solid, the turn is not a step of the recipe of the box and the window has no panel for it yet.
+* It gives figures only: there is no mesh, no STL file and no STEP file of the turned solid, the turn is not a step of the recipe of the box. The Reports menu of the window has a panel for it: it asks for the sketch, the axis, the angle and a material and shows the same lines in the language of the window (`[panels]` `revolve_axis` and `revolve_angle` of the window settings are what it starts with).
 
 ## Codes
 
