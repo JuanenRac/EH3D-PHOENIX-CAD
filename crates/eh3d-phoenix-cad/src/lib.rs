@@ -20,6 +20,7 @@
 //! * [`assembly`]: simple assemblies of the parts of the catalog: mates that place a part relative to another along one axis (a gap, an alignment or a stack, solved in whole nanometres, a chain solved from its free end, a cycle refused) and the check of which parts share volume (bounding boxes, then the exact shapes of profiles, brackets and screws, with a screw through the hole of a bracket allowed when its shank fits), with a report of the pairs in conflict;
 //! * [`nesting`]: the cutting plan of the profiles: the pieces of the cut list fitted into bars with the kerf of the saw and the trimmed ends, longest piece first into the bar with the least room left, with the offcuts and how much of the bars is used;
 //! * [`interchange`]: the solids of the model as a Wavefront OBJ file and as a 3MF package (a zip file without compression, the model as XML), in millimetres and with the same bytes for the same model;
+//! * [`clearance`]: the check of the room between the placed parts: the pairs that do not touch and are closer than a minimum, from the distance between their bounding boxes compared as squares in integers;
 //! * [`fins`]: sets of cooling fins that rise from a face (how many, how thick, how tall, how far apart, where they start and how long they run), checked against the limits of the settings, the edges and the holes of the face and the other sets, and an estimate, marked as one, of the heat they give to still air from a coefficient of the settings;
 //! * [`graph`]: the graph of dependencies between objects, with a deterministic order of calculation, refused cycles, a recalculation that reuses what did not change, and a Graphviz dump;
 //! * [`vars`]: named variables for the master dimensions, the binding of the parameters of an enclosure to them, and families of variants (small, medium, large);
@@ -70,6 +71,7 @@ pub mod assembly;
 pub mod body;
 pub mod browse;
 pub mod catalog;
+pub mod clearance;
 pub mod config;
 pub mod datum;
 pub mod drag;

@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 
 use crate::assembly::AssemblyLimits;
 use crate::catalog::CatalogLimits;
+use crate::clearance::ClearanceSettings;
 use crate::enclosure::{Face, Hole, HoleStyle};
 use crate::expr::{parse, Constants, ExprLimits, Value};
 use crate::nesting::StockSettings;
@@ -556,6 +557,8 @@ pub struct Settings {
     pub drawing: DrawingSettings,
     /// The settings of the cutting plan of the profiles.
     pub stock: StockSettings,
+    /// The settings of the check of the room between parts.
+    pub clearance: ClearanceSettings,
     /// The named values that expressions can use: the sizes of the screws, the compensation of the
     /// printer and the `[constants]` of the settings.
     pub constants: Constants,
@@ -836,6 +839,7 @@ impl Settings {
         let mesh = MeshSettings::from_config(c)?;
         let drawing = DrawingSettings::from_config(c)?;
         let stock = StockSettings::from_config(c)?;
+        let clearance = ClearanceSettings::from_config(c)?;
         let constants = build_constants(c, &screws, &printer, counterbore_extra, &expr)?;
         Ok(Settings {
             backups,
@@ -856,6 +860,7 @@ impl Settings {
             mesh,
             drawing,
             stock,
+            clearance,
             constants,
         })
     }

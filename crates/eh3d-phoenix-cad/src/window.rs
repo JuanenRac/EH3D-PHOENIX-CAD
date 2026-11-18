@@ -1847,6 +1847,26 @@ impl Window {
             .map(|plan| crate::nesting::plan_text(&plan))
     }
 
+    /// The pairs of placed parts that do not touch and are closer than the minimum of the
+    /// settings (see [`crate::clearance`]), with the parts where the mates put them.
+    pub fn clearance_report(&self) -> Result<crate::clearance::Report, CadError> {
+        let placed =
+            crate::assembly::place(self.built.enclosure.parts(), self.built.enclosure.mates())?;
+        crate::clearance::find(&placed, &self.settings.clearance)
+    }
+
+    /// The pairs that are too close as comma separated values.
+    pub fn clearance_csv_text(&self) -> Result<String, CadError> {
+        let placed =
+            crate::assembly::place(self.built.enclosure.parts(), self.built.enclosure.mates())?;
+        let report = crate::clearance::find(&placed, &self.settings.clearance)?;
+        Ok(crate::clearance::report_csv(
+            &report,
+            &placed,
+            &self.settings.clearance,
+        ))
+    }
+
     fn refresh_fields(&mut self) {
         self.fields = self.make_fields();
     }
@@ -6468,6 +6488,40 @@ mod tests {
 total,,0,,0,,
 "
         );
+    }
+
+    #[test]
+    fn the_clearance_of_the_placed_parts_is_listed_from_the_minimum_of_the_settings() {
+        let mut w = fresh();
+        assert!(w.open(&assembly_path()), "{:?}", w.status);
+        // the shipped minimum finds nothing in the example
+        assert!(w.clearance_report().unwrap().pairs.is_empty());
+        assert_eq!(
+            w.clearance_csv_text().unwrap(),
+            "part_a,part_b,distance_mm
+total,0,
+"
+        );
+        // a wide minimum finds pairs, the closest first, and the csv counts them
+        w.settings.clearance.min_gap = Length::from_mm(500).unwrap();
+        let report = w.clearance_report().unwrap();
+        assert!(!report.pairs.is_empty());
+        assert!(report
+            .pairs
+            .windows(2)
+            .all(|p| p[0].distance_sq <= p[1].distance_sq));
+        let csv = w.clearance_csv_text().unwrap();
+        assert!(
+            csv.ends_with(&format!(
+                "total,{},
+",
+                report.pairs.len()
+            )),
+            "{csv}"
+        );
+        // and a minimum of zero turns the check off
+        w.settings.clearance.min_gap = Length::ZERO;
+        assert!(w.clearance_report().unwrap().pairs.is_empty());
     }
 
     #[test]

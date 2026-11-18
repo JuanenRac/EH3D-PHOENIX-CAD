@@ -64,6 +64,10 @@ step 0 aligned add-mate 018bcfe5-6800-7004-8000-000000000004 018bcfe5-6800-7001-
 
 After the id of the mate come the id of the fixed part, the id of the part it places and the kind with its values; a distance is a whole number of nanometres from zero up.
 
+## Clearance between parts
+
+`eh3d_phoenix_cad::clearance` lists the pairs of placed parts that do not touch and are closer than `clearance.min_gap` (2 mm by default; 0 turns the check off), for example to keep room for a tool, a cable or a screw. The distance between two parts is the distance between their bounding boxes: along each axis the gap is zero when the ranges overlap, and the distance is the root of the sum of the squares of the three gaps, compared as squares in integers. A pair that touches (a stack, a gap of zero) is placed so on purpose and a pair that overlaps belongs to the interference check, so neither is listed. The parts are the ones the mates give. The command `eh3d-phoenix-cad clearance PROJECT` prints `part_a,part_b,distance_mm` with the closest pair first (at most `clearance.max_pairs` lines) and a line `total,N,`, and exits with 1 when there is a pair.
+
 ## Settings
 
 The keys of `[assembly]` in `phoenix-cad.default.cfg`: `max_mates` (1 to 100000), `hole_clearance` (0 to 1000 mm), `max_report_pairs` (1 to 100000) and `interference_tolerance` (0 to 1000 mm, 0 by default: how deep two bounding boxes may overlap, along their smallest overlap, and still be left out of the check; the pairs left out are counted in `Report::tolerated` and are not listed). The keys `mate_kind`, `mate_direction`, `mate_distance`, `mate_axis` and `mate_edge` of `[new_step]` in `phoenix-cad-window.default.cfg` say how a mate added from the window starts. Every value is checked when the file is read.
