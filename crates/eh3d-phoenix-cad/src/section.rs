@@ -204,6 +204,74 @@ impl Section {
     }
 }
 
+/// The hatching of a section: lines at 45 degrees, `spacing_mm` apart measured across them,
+/// clipped to the material (the area inside an outer outline and outside its holes, by the
+/// even-odd rule over all the outlines, so a hole is not hatched and a part inside a hole is).
+/// Refused with `PHOENIX-CAD-050` when the lines would be more than `limit`.
+pub fn hatch(
+    section: &Section,
+    spacing_mm: f64,
+    limit: usize,
+) -> Result<Vec<(Layer, Entity)>, CadError> {
+    let mm = |v: f64| v / 1_000_000.0;
+    if spacing_mm <= 0.0 || section.contours.is_empty() {
+        return Ok(Vec::new());
+    }
+    // lines of constant s = x + y, one step apart: the step is the spacing across the lines
+    let step = spacing_mm * std::f64::consts::SQRT_2;
+    let (mut lo, mut hi) = (f64::MAX, f64::MIN);
+    for p in section.contours.iter().flat_map(|c| &c.points) {
+        let s = mm(p.0) + mm(p.1);
+        lo = lo.min(s);
+        hi = hi.max(s);
+    }
+    let first = (lo / step).floor() as i64 + 1;
+    let last = (hi / step).ceil() as i64 - 1;
+    if last < first {
+        return Ok(Vec::new());
+    }
+    if (last - first + 1) as usize > limit {
+        return Err(CadError::ExportLimit(format!(
+            "the hatching would have {} lines, more than the {limit} the settings allow",
+            last - first + 1
+        )));
+    }
+    let mut out = Vec::new();
+    for n in first..=last {
+        let s = n as f64 * step;
+        // where the line crosses an edge of an outline; an edge counts when its ends are on
+        // different sides, the lower end being on the line's side (half open), so a corner on
+        // the line is counted once or twice consistently
+        let mut crossings: Vec<f64> = Vec::new();
+        for c in &section.contours {
+            for (i, p) in c.points.iter().enumerate() {
+                let q = c.points[(i + 1) % c.points.len()];
+                let (a, b) = (mm(p.0) + mm(p.1), mm(q.0) + mm(q.1));
+                if (a <= s) == (b <= s) {
+                    continue;
+                }
+                let t = (s - a) / (b - a);
+                crossings.push(mm(p.0) + t * (mm(q.0) - mm(p.0)));
+            }
+        }
+        crossings.sort_by(f64::total_cmp);
+        for pair in crossings.windows(2).step_by(2) {
+            if pair[1] - pair[0] > 1e-9 {
+                out.push((
+                    Layer::Hatch,
+                    Entity::Line((pair[0], s - pair[0]), (pair[1], s - pair[1])),
+                ));
+            }
+        }
+        if out.len() > limit {
+            return Err(CadError::ExportLimit(format!(
+                "the hatching has more than the {limit} lines the settings allow"
+            )));
+        }
+    }
+    Ok(out)
+}
+
 /// The drawing of a section: every outline as lines on the layer `CONTORNO`, in millimetres.
 pub fn drawing_of(section: &Section) -> Drawing {
     let mm = |v: f64| v / 1_000_000.0;
@@ -243,7 +311,7 @@ pub fn render_titled(
     name: &str,
     lang: Lang,
 ) -> Result<String, CadError> {
-    let d = drawing_of(section);
+    let mut d = drawing_of(section);
     if d.entities.is_empty() {
         return Err(CadError::Export(
             "the plane does not cut the model, so there is nothing to draw".into(),
@@ -256,6 +324,10 @@ pub fn render_titled(
             drawing.max_entities
         )));
     }
+    // the hatching comes after the outlines and counts with them against the limit
+    let room = drawing.max_entities as usize - d.entities.len();
+    let spacing = drawing.hatch_spacing.get() as f64 / 1_000_000.0;
+    d.entities.extend(hatch(section, spacing, room)?);
     Ok(match (title.enabled, dxf) {
         (false, true) => d.to_dxf(),
         (false, false) => d.to_svg(drawing),
@@ -353,6 +425,81 @@ mod tests {
         assert_eq!(s.segments(), 8);
     }
 
+    fn length(e: &Entity) -> f64 {
+        match *e {
+            Entity::Line(a, b) => ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt(),
+            _ => 0.0,
+        }
+    }
+
+    #[test]
+    fn the_material_of_a_section_is_hatched_at_45_degrees_and_the_hole_is_not() {
+        // the frame of the box: 104 x 64 mm outside, 100 x 60 mm inside, from the corner (0, 0)
+        let s = section_of(&model(), Dim::Z, 15);
+        let lines = hatch(&s, 2.0, 100_000).unwrap();
+        assert!(lines.len() > 50, "{}", lines.len());
+        let mut total = 0.0;
+        for (layer, e) in &lines {
+            assert_eq!(*layer, Layer::Hatch);
+            let Entity::Line(a, b) = *e else {
+                panic!("not a line: {e:?}");
+            };
+            // every line runs at 45 degrees: x + y is the same at both ends
+            assert!((a.0 + a.1 - (b.0 + b.1)).abs() < 1e-6, "{e:?}");
+            let mid = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+            // inside the outer outline and outside the hole (the space inside the walls)
+            assert!(
+                mid.0 > 0.0 && mid.0 < 104.0 && mid.1 > 0.0 && mid.1 < 64.0,
+                "{e:?}"
+            );
+            let in_cavity = mid.0 > 2.0 && mid.0 < 102.0 && mid.1 > 2.0 && mid.1 < 62.0;
+            assert!(!in_cavity, "{e:?}");
+            total += length(e);
+        }
+        // lines 2 mm apart across a material of 656 mm2 are about 328 mm long together
+        assert!((total - 328.0).abs() < 33.0, "{total}");
+        // a larger spacing has fewer lines, and none at all with a spacing of nothing
+        let sparse = hatch(&s, 8.0, 100_000).unwrap();
+        assert!(sparse.len() < lines.len() / 2);
+        assert!(hatch(&s, 0.0, 100_000).unwrap().is_empty());
+        // a section that cuts nothing has nothing to hatch
+        let none = section_of(&model(), Dim::Z, 500);
+        assert!(hatch(&none, 2.0, 100_000).unwrap().is_empty());
+        // more lines than the limit are refused
+        let err = hatch(&s, 0.3, 10).unwrap_err();
+        assert_eq!(err.code(), "PHOENIX-CAD-050");
+        // the same section always gives the same lines
+        assert_eq!(hatch(&s, 2.0, 100_000).unwrap(), lines);
+    }
+
+    #[test]
+    fn the_hatching_is_a_layer_of_the_files_that_the_settings_turn_off() {
+        let s = section_of(&model(), Dim::Z, 15);
+        let settings = Settings::defaults();
+        let off = TitleBlockSettings::off();
+        let dxf = render_titled(&s, &settings.drawing, true, &off, "box", Lang::En).unwrap();
+        assert!(dxf.contains("2\nLAYER\n70\n4\n"), "{dxf}");
+        assert!(dxf.contains("2\nRAYADO\n70\n0\n62\n8\n"));
+        let hatched = dxf.matches("0\nLINE\n8\nRAYADO\n").count();
+        assert!(hatched > 50, "{hatched}");
+        assert_eq!(dxf.matches("0\nLINE\n8\nCONTORNO\n").count(), 8);
+        let svg = render_titled(&s, &settings.drawing, false, &off, "box", Lang::En).unwrap();
+        assert!(svg.contains("<g id=\"RAYADO\""), "{svg}");
+        // the hatching counts against the limit of lines of the drawing
+        let mut tight = settings.drawing;
+        tight.max_entities = 40;
+        let err = render_titled(&s, &tight, true, &off, "box", Lang::En).unwrap_err();
+        assert_eq!(err.code(), "PHOENIX-CAD-050");
+        // with a spacing of nothing the files are the ones they were: the outline alone
+        let mut bare = settings.drawing;
+        bare.hatch_spacing = Length::ZERO;
+        let plain = render_titled(&s, &bare, true, &off, "box", Lang::En).unwrap();
+        assert!(!plain.contains("RAYADO"));
+        assert!(plain.contains("2\nLAYER\n70\n3\n"));
+        let plain_svg = render_titled(&s, &bare, false, &off, "box", Lang::En).unwrap();
+        assert!(!plain_svg.contains("RAYADO"));
+    }
+
     #[test]
     fn the_other_two_planes_turn_the_same_way() {
         // across x: the floor, the lid and the two walls; the box is 64 wide and 35 tall outside
@@ -448,7 +595,10 @@ mod tests {
         let s = section_of(&model(), Dim::Z, 15);
         let settings = Settings::defaults();
         let off = TitleBlockSettings::off();
-        let dxf = render_titled(&s, &settings.drawing, true, &off, "box", Lang::En).unwrap();
+        // the outline alone, without the hatching that the shipped settings add
+        let mut outline = settings.drawing;
+        outline.hatch_spacing = Length::ZERO;
+        let dxf = render_titled(&s, &outline, true, &off, "box", Lang::En).unwrap();
         assert!(dxf.contains("CONTORNO"), "{dxf}");
         assert_eq!(dxf.matches("\nLINE\n").count(), 8, "{dxf}");
         let svg = render_titled(&s, &settings.drawing, false, &off, "box", Lang::En).unwrap();
@@ -469,7 +619,7 @@ mod tests {
             assert_eq!(text_in(&s, l).lines().count(), 4, "{}", l.code());
         }
         // more lines than the settings allow are refused
-        let mut small = settings.drawing;
+        let mut small = outline;
         small.max_entities = 8;
         assert!(render_titled(&s, &small, true, &off, "box", Lang::En).is_ok());
         small.max_entities = 7;

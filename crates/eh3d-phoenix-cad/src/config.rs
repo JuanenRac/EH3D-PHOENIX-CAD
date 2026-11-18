@@ -346,6 +346,9 @@ pub struct DrawingSettings {
     pub hole_dimensions: bool,
     /// The most dimensions of the positions of the holes in one view; more is refused.
     pub max_dimensions: u32,
+    /// The distance between the hatching lines of a section drawing, measured across them; zero
+    /// leaves the hatching out.
+    pub hatch_spacing: Length,
 }
 
 impl DrawingSettings {
@@ -387,6 +390,15 @@ impl DrawingSettings {
                 _ => Err(CadError::Config(format!("{key} must be 0 or 1"))),
             }
         };
+        let hatch_spacing = c.length("drawing.hatch_spacing")?;
+        if hatch_spacing.get() < 0
+            || (hatch_spacing.get() > 0 && hatch_spacing.get() < 200_000)
+            || hatch_spacing.get() > 100_000_000
+        {
+            return Err(CadError::Config(
+                "drawing.hatch_spacing must be 0 or from 0.2 mm to 100 mm".into(),
+            ));
+        }
         let max_dimensions = c.number("drawing.max_dimensions")?;
         if !(1..=Self::DIMENSIONS_CAP).contains(&max_dimensions) {
             return Err(CadError::Config(format!(
@@ -402,6 +414,7 @@ impl DrawingSettings {
             dxf_dimensions: flag("drawing.dxf_dimensions")?,
             hole_dimensions: flag("drawing.hole_dimensions")?,
             max_dimensions,
+            hatch_spacing,
         })
     }
 }
@@ -1489,14 +1502,16 @@ markup_percent = 1000
                 dxf_dimensions: true,
                 hole_dimensions: true,
                 max_dimensions: 40,
+                hatch_spacing: Length::new(2_000_000).unwrap(),
             }
         );
         let own = Settings::with_user_config(
-            "[mesh]\ncircle_segments = 720\nmax_triangles = 12\nstl_binary = 0\nvolume_tolerance_ppm = 100000\n[drawing]\nmax_entities = 8\nsvg_width = 10 mm\ndimensions = 0\naxis_overshoot = 0 mm\ndxf_dimensions = 0\nhole_dimensions = 0\nmax_dimensions = 1\n",
+            "[mesh]\ncircle_segments = 720\nmax_triangles = 12\nstl_binary = 0\nvolume_tolerance_ppm = 100000\n[drawing]\nmax_entities = 8\nsvg_width = 10 mm\ndimensions = 0\naxis_overshoot = 0 mm\ndxf_dimensions = 0\nhole_dimensions = 0\nmax_dimensions = 1\nhatch_spacing = 0 mm\n",
         )
         .unwrap();
         assert!(!own.drawing.dxf_dimensions && !own.drawing.hole_dimensions);
         assert_eq!(own.drawing.max_dimensions, 1);
+        assert_eq!(own.drawing.hatch_spacing, Length::ZERO);
         assert_eq!(own.mesh.circle_segments, 720);
         assert!(!own.mesh.binary);
         assert_eq!(own.mesh.max_triangles, 12);
@@ -1524,6 +1539,9 @@ markup_percent = 1000
             "[drawing]\ndxf_dimensions = 2\n",
             "[drawing]\nhole_dimensions = yes\n",
             "[drawing]\nmax_dimensions = 0\n",
+            "[drawing]\nhatch_spacing = 0.1 mm\n",
+            "[drawing]\nhatch_spacing = 101 mm\n",
+            "[drawing]\nhatch_spacing = -1 mm\n",
             "[drawing]\nmax_dimensions = 1001\n",
             "[drawing]\naxis_overshoot = -1 mm\n",
             "[drawing]\naxis_overshoot = 1001 mm\n",

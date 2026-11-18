@@ -83,6 +83,8 @@ pub enum Layer {
     Holes,
     /// The centre lines.
     Axes,
+    /// The hatching of a section.
+    Hatch,
 }
 
 impl Layer {
@@ -92,6 +94,7 @@ impl Layer {
             Layer::Outline => "CONTORNO",
             Layer::Holes => "AGUJEROS",
             Layer::Axes => "EJES",
+            Layer::Hatch => "RAYADO",
         }
     }
 
@@ -101,6 +104,7 @@ impl Layer {
             Layer::Outline => 7,
             Layer::Holes => 5,
             Layer::Axes => 1,
+            Layer::Hatch => 8,
         }
     }
 
@@ -110,6 +114,7 @@ impl Layer {
             Layer::Outline => "#111111",
             Layer::Holes => "#1f4fd8",
             Layer::Axes => "#d03030",
+            Layer::Hatch => "#8a8a8a",
         }
     }
 }
@@ -574,9 +579,14 @@ impl Drawing {
         put(0, "TABLE");
         put(2, "LAYER");
         let dimensioned = self.dxf_dimensions && !self.notes.is_empty();
-        let layers = 3 + usize::from(block.is_some()) + usize::from(dimensioned);
+        let hatched = self.count(Layer::Hatch) > 0;
+        let layers =
+            3 + usize::from(hatched) + usize::from(block.is_some()) + usize::from(dimensioned);
         put(70, &layers.to_string());
-        for layer in [Layer::Outline, Layer::Holes, Layer::Axes] {
+        for layer in [Layer::Outline, Layer::Holes, Layer::Axes, Layer::Hatch] {
+            if layer == Layer::Hatch && !hatched {
+                continue;
+            }
             put(0, "LAYER");
             put(2, layer.name());
             put(70, "0");
@@ -775,7 +785,10 @@ impl Drawing {
             num(width),
             num(height)
         );
-        for layer in [Layer::Outline, Layer::Holes, Layer::Axes] {
+        for layer in [Layer::Outline, Layer::Holes, Layer::Axes, Layer::Hatch] {
+            if layer == Layer::Hatch && self.count(Layer::Hatch) == 0 {
+                continue;
+            }
             let dash = if layer == Layer::Axes {
                 format!(
                     " stroke-dasharray=\"{} {}\"",
