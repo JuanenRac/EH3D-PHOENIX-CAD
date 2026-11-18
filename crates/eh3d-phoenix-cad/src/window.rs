@@ -2322,7 +2322,7 @@ impl Window {
             }),
             Panel::PartList => self.part_list().map(|l| crate::partlist::text_in(&l, lang)),
             Panel::Balance => self.balance().map(|b| panels::balance_text_in(&b, lang)),
-            Panel::Section => Ok(String::new()),
+            Panel::Section | Panel::ImportDxf => Ok(String::new()),
             Panel::SketchExport | Panel::Revolve => Ok(if self.mech.sketches.is_empty() {
                 Msg::PanelNoSketch.tr(lang).to_string()
             } else {
@@ -3625,6 +3625,63 @@ impl Window {
             Err(e) => {
                 self.status = Status::Error(e);
                 false
+            }
+        }
+    }
+
+    /// Reads a flat DXF drawing and puts the sketch it makes in the project (see
+    /// [`crate::dxf_import`]): the lines, circles and arcs of the drawing, on the face and in the
+    /// unit (`mm`, `cm`, `m` or `in`) that are given, under the name given or, when that is empty,
+    /// under the name of the file. One entry of the history. On success the text says what was
+    /// read and what was left out, in the language of the window; a refusal is in the status bar
+    /// and the project is as it was.
+    pub fn import_dxf(
+        &mut self,
+        path: &Path,
+        name: &str,
+        face: Face,
+        unit: &str,
+    ) -> Option<String> {
+        if self.read_only_refusal() {
+            return None;
+        }
+        let Some(unit_nm) = crate::dxf_import::unit_nm(unit) else {
+            self.status = Status::Error(CadError::SketchFile(format!(
+                "{unit} is not a unit of a drawing (mm, cm, m or in)"
+            )));
+            return None;
+        };
+        let name = match name.trim() {
+            "" => path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            typed => typed.to_string(),
+        };
+        let read = store::load_limited(path, u64::from(self.ui.export.max_kib) * 1024)
+            .and_then(|bytes| {
+                String::from_utf8(bytes)
+                    .map_err(|_| CadError::SketchFile("the drawing is not text".into()))
+            })
+            .and_then(|text| {
+                crate::dxf_import::from_dxf(
+                    &text,
+                    &name,
+                    crate::sketch::SketchPlane::on_face(face),
+                    unit_nm,
+                    ProfileLimits::from_settings(&self.sketch_settings).join_nm,
+                    self.settings.drawing.max_entities as usize,
+                )
+            });
+        match read {
+            Ok(imported) => {
+                let report = crate::dxf_import::report_text(&imported, self.lang);
+                self.keep_sketch(imported.sketch);
+                (!self.status.is_problem()).then_some(report)
+            }
+            Err(e) => {
+                self.status = Status::Error(e);
+                None
             }
         }
     }
@@ -5777,6 +5834,118 @@ mod tests {
             assert!(!opened.save_to(&broken));
             assert_eq!(std::fs::read(&broken).unwrap(), before, "{what}");
         }
+    }
+
+    /// The text of a DXF drawing of a square of the side given, in the units of the drawing.
+    fn square_dxf(side: f64) -> String {
+        let line = |x1: f64, y1: f64, x2: f64, y2: f64| {
+            format!("0\nLINE\n8\n0\n10\n{x1}\n20\n{y1}\n30\n0\n11\n{x2}\n21\n{y2}\n31\n0\n")
+        };
+        format!(
+            "0\nSECTION\n2\nENTITIES\n{}{}{}{}0\nTEXT\n8\n0\n1\nnote\n0\nENDSEC\n0\nEOF\n",
+            line(0.0, 0.0, side, 0.0),
+            line(side, 0.0, side, side),
+            line(side, side, 0.0, side),
+            line(0.0, side, 0.0, 0.0)
+        )
+    }
+
+    #[test]
+    fn a_dxf_drawing_is_imported_as_a_sketch_in_the_unit_and_on_the_face_that_are_chosen() {
+        let dir = Scratch::new("dxf");
+        let file = dir.0.join("bracket.dxf");
+        std::fs::write(&file, square_dxf(10.0)).unwrap();
+        let mut w = fresh();
+        let report = w.import_dxf(&file, "", Face::Top, "mm").expect("imported");
+        assert_eq!(
+            report,
+            "read: 4 lines, 0 circles, 0 arcs\nleft out: TEXT x 1"
+        );
+        assert_eq!(w.sketch_names(), ["bracket"]);
+        assert!(w.dirty && w.can_undo());
+        assert_eq!(w.active_sketch.as_deref(), Some("bracket"));
+        let found = w.find_sketch(Some("bracket")).unwrap();
+        assert_eq!(found.plane().face, Face::Top);
+        let limits = ProfileLimits::from_settings(&w.sketch_settings);
+        let area = |s: &Sketch| {
+            crate::profile::Profile::from_sketch(s, &limits)
+                .unwrap()
+                .area_nm2()
+        };
+        // 10 x 10 mm
+        assert!((area(&found) - 1.0e14).abs() < 1.0e6, "{}", area(&found));
+        // a name typed wins over the name of the file, and the unit scales the drawing
+        let report = w.import_dxf(&file, " inches ", Face::Front, "in");
+        assert!(report.is_some(), "{:?}", w.status);
+        let inches = w.find_sketch(Some("inches")).unwrap();
+        // 10 in = 254 mm
+        assert!(
+            (area(&inches) - 6.4516e16).abs() < 1.0e9,
+            "{}",
+            area(&inches)
+        );
+        assert_eq!(inches.plane().face, Face::Front);
+        // the report is in the language of the window
+        w.lang = Lang::De;
+        let report = w.import_dxf(&file, "zwei", Face::Front, "cm").unwrap();
+        assert!(report.starts_with("gelesen: 4 Linien"), "{report}");
+        // one undo takes the last sketch away
+        w.undo();
+        assert_eq!(w.sketch_names(), ["bracket", "inches"]);
+    }
+
+    #[test]
+    fn a_drawing_that_cannot_be_imported_leaves_the_project_as_it_was() {
+        let dir = Scratch::new("dxf-bad");
+        let good = dir.0.join("good.dxf");
+        std::fs::write(&good, square_dxf(10.0)).unwrap();
+        std::fs::write(dir.0.join("bad.dxf"), "this is not a drawing\n").unwrap();
+        std::fs::write(dir.0.join("binary.dxf"), [0xff, 0xfe, 0x00, 0x80]).unwrap();
+        let mut w = fresh();
+        let code = |w: &Window| match &w.status {
+            Status::Error(e) => e.code(),
+            other => panic!("not an error: {other:?}"),
+        };
+        assert!(w
+            .import_dxf(&dir.0.join("bad.dxf"), "", Face::Front, "mm")
+            .is_none());
+        assert_eq!(code(&w), "PHOENIX-CAD-035");
+        assert!(w
+            .import_dxf(&dir.0.join("binary.dxf"), "", Face::Front, "mm")
+            .is_none());
+        assert_eq!(code(&w), "PHOENIX-CAD-035");
+        assert!(w
+            .import_dxf(&dir.0.join("missing.dxf"), "", Face::Front, "mm")
+            .is_none());
+        assert!(w.import_dxf(&good, "", Face::Front, "furlong").is_none());
+        assert_eq!(code(&w), "PHOENIX-CAD-035");
+        // a name that a sketch cannot have is refused
+        assert!(w
+            .import_dxf(&good, "two words", Face::Front, "mm")
+            .is_none());
+        assert!(w.sketch_names().is_empty() && !w.dirty && !w.can_undo());
+        // a file larger than the limit of the files is refused too
+        let mut small = fresh();
+        small.ui.export.max_kib = 1;
+        std::fs::write(dir.0.join("big.dxf"), vec![b' '; 2048]).unwrap();
+        assert!(small
+            .import_dxf(&dir.0.join("big.dxf"), "", Face::Front, "mm")
+            .is_none());
+        assert!(small.sketch_names().is_empty());
+        // a project that was opened read-only is not changed
+        let mut locked = fresh();
+        locked.read_only = true;
+        assert!(locked.import_dxf(&good, "", Face::Front, "mm").is_none());
+        assert!(locked.sketch_names().is_empty());
+    }
+
+    #[test]
+    fn the_panel_of_the_import_has_no_report_of_its_own() {
+        use crate::panels::{Panel, PanelOptions};
+        assert_eq!(
+            fresh().panel_text(Panel::ImportDxf, &PanelOptions::default()),
+            ""
+        );
     }
 
     #[test]

@@ -18,8 +18,42 @@
 use std::collections::BTreeMap;
 use std::f64::consts::PI;
 
+use crate::lang::{fill, Lang, Msg};
 use crate::sketch::{ElementId, Sketch, SketchPlane};
 use crate::{CadError, Length};
+
+/// The units of a drawing that the commands and the window know, by the word that names them.
+pub const UNITS: [&str; 4] = ["mm", "cm", "m", "in"];
+
+/// The nanometres of one unit of a drawing, by the word that names the unit (`mm`, `cm`, `m` or
+/// `in`); `None` for any other word.
+pub fn unit_nm(word: &str) -> Option<i64> {
+    match word {
+        "mm" => Some(1_000_000),
+        "cm" => Some(10_000_000),
+        "m" => Some(1_000_000_000),
+        "in" => Some(25_400_000),
+        _ => None,
+    }
+}
+
+/// What was read as lines of text in the language: how many lines, circles and arcs, then one
+/// line for each kind of entity that was left out.
+pub fn report_text(import: &Import, lang: Lang) -> String {
+    let mut out = fill(
+        Msg::DxfRead.tr(lang),
+        &[
+            &import.lines.to_string(),
+            &import.circles.to_string(),
+            &import.arcs.to_string(),
+        ],
+    );
+    for (what, count) in &import.skipped {
+        out.push('\n');
+        out.push_str(&fill(Msg::DxfSkipped.tr(lang), &[what, &count.to_string()]));
+    }
+    out
+}
 
 /// What was read.
 #[derive(Debug, Clone, PartialEq)]
@@ -610,5 +644,25 @@ mod tests {
         assert_eq!(b.regions.len(), a.regions.len());
         assert_eq!(b.regions[0].holes.len(), 1);
         assert_eq!(b.bounds(), a.bounds());
+    }
+
+    #[test]
+    fn the_units_are_named_by_a_word_and_the_report_is_in_the_language() {
+        assert_eq!(unit_nm("mm"), Some(1_000_000));
+        assert_eq!(unit_nm("cm"), Some(10_000_000));
+        assert_eq!(unit_nm("m"), Some(1_000_000_000));
+        assert_eq!(unit_nm("in"), Some(25_400_000));
+        assert_eq!(unit_nm("ft"), None);
+        assert!(UNITS.iter().all(|u| unit_nm(u).is_some()));
+        let text = dxf(&format!("{}0\nTEXT\n8\n0\n1\nhello\n", rectangle()));
+        let imported = read(&text).unwrap();
+        assert_eq!(
+            report_text(&imported, Lang::En),
+            "read: 4 lines, 0 circles, 0 arcs\nleft out: TEXT x 1"
+        );
+        assert_eq!(
+            report_text(&imported, Lang::Es),
+            "leído: 4 líneas, 0 círculos, 0 arcos\nomitido: TEXT x 1"
+        );
     }
 }

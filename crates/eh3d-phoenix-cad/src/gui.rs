@@ -7,6 +7,7 @@ use crate::body::StepState;
 use crate::browse::{self, Browser};
 use crate::catalog;
 use crate::config::Settings;
+use crate::enclosure::Face;
 use crate::export::Format;
 use crate::lang::{Lang, Msg};
 use crate::panels::{default_drawing_name, Panel, PanelState, SketchFormat};
@@ -20,8 +21,8 @@ use crate::sketch_ui::{
 };
 use crate::uiconfig::UiSettings;
 use crate::window::{
-    error_text, format_msg, Input, Mark, MeasureTool, NewStep, Selection, ViewKind, Window,
-    PROJECT_EXTENSIONS,
+    error_text, face_msg, format_msg, Input, Mark, MeasureTool, NewStep, Selection, ViewKind,
+    Window, PROJECT_EXTENSIONS,
 };
 use eframe::egui::{
     self, Color32, FontData, FontDefinitions, FontFamily, Pos2, Rect, Stroke, Vec2,
@@ -52,6 +53,9 @@ const SKETCH_EXTENSIONS: [&str; 1] = [sketch_file::EXTENSION];
 /// The extensions of the library files that the window opens.
 const LIBRARY_EXTENSIONS: [&str; 1] = [catalog::EXTENSION];
 
+/// The extensions of the drawings that the window imports into a sketch.
+const DXF_EXTENSIONS: [&str; 1] = ["dxf"];
+
 enum Outcome {
     Cancel,
     Pick(PathBuf),
@@ -70,6 +74,8 @@ struct Dialog {
     overwrite: bool,
     /// Whether the files are libraries of parts (otherwise they are projects or sketches).
     library: bool,
+    /// Whether the files are DXF drawings to import (the choice goes to the import panel).
+    dxf: bool,
 }
 
 struct App {
@@ -137,6 +143,7 @@ impl App {
             export: None,
             overwrite: false,
             library: false,
+            dxf: false,
         });
     }
 
@@ -149,6 +156,20 @@ impl App {
             export: None,
             overwrite: false,
             library: true,
+            dxf: false,
+        });
+    }
+
+    /// Asks which DXF drawing to import; the file chosen goes to the import panel.
+    fn open_dxf_dialog(&mut self) {
+        self.dialog = Some(Dialog {
+            browser: Browser::new(self.folder(), &DXF_EXTENSIONS),
+            save: None,
+            sketch: false,
+            export: None,
+            overwrite: false,
+            library: false,
+            dxf: true,
         });
     }
 
@@ -163,6 +184,7 @@ impl App {
             export: Some(format),
             overwrite: self.win.export_overwrite,
             library: false,
+            dxf: false,
         });
     }
 
@@ -180,6 +202,7 @@ impl App {
             export: None,
             overwrite: false,
             library: false,
+            dxf: false,
         });
     }
 
@@ -220,6 +243,9 @@ impl App {
                 }
                 if ui.button(Msg::OpenLibrary.tr(lang)).clicked() {
                     self.open_library_dialog();
+                }
+                if ui.button(Msg::PanelImportDxf.tr(lang)).clicked() {
+                    self.panels.open = Some(Panel::ImportDxf);
                 }
                 let can_save = !self.win.read_only;
                 if ui
@@ -853,6 +879,8 @@ impl App {
         let mut open = true;
         let mut copy = false;
         let mut write = false;
+        let mut choose = false;
+        let mut import = false;
         let mut text = String::new();
         let title = panel.title().tr(lang).trim_end_matches("...");
         egui::Window::new(title)
@@ -929,6 +957,52 @@ impl App {
                                 });
                         });
                     }
+                    Panel::ImportDxf => {
+                        ui.horizontal(|ui| {
+                            ui.label(Msg::PanelImportFile.tr(lang));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.panels.import_file)
+                                    .desired_width(320.0),
+                            );
+                            if ui.button(Msg::PanelImportChoose.tr(lang)).clicked() {
+                                choose = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(Msg::PanelImportName.tr(lang));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.panels.import_name)
+                                    .desired_width(160.0),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(Msg::PanelImportFace.tr(lang));
+                            egui::ComboBox::from_id_salt("panel-import-face")
+                                .selected_text(face_msg(self.panels.import_face).tr(lang))
+                                .show_ui(ui, |ui| {
+                                    for face in Face::ALL {
+                                        ui.selectable_value(
+                                            &mut self.panels.import_face,
+                                            face,
+                                            face_msg(face).tr(lang),
+                                        );
+                                    }
+                                });
+                            ui.label(Msg::PanelImportUnit.tr(lang));
+                            for unit in crate::dxf_import::UNITS {
+                                ui.selectable_value(
+                                    &mut self.panels.import_unit,
+                                    unit.to_string(),
+                                    unit,
+                                );
+                            }
+                        });
+                        if self.panels.import_file.trim().is_empty() {
+                            ui.label(egui::RichText::new(Msg::PanelImportNone.tr(lang)).color(DIM));
+                        } else if ui.button(Msg::PanelImportDo.tr(lang)).clicked() {
+                            import = true;
+                        }
+                    }
                     Panel::Section => {
                         ui.horizontal(|ui| {
                             ui.label(Msg::PanelSectionAxis.tr(lang));
@@ -999,7 +1073,9 @@ impl App {
                         }
                     }
                 } else {
-                    text = if panel == Panel::Section {
+                    text = if panel == Panel::ImportDxf {
+                        self.panels.import_report.clone()
+                    } else if panel == Panel::Section {
                         self.win
                             .section_panel_text(self.panels.section_axis, &self.panels.section_at)
                     } else if panel == Panel::Revolve && !names.is_empty() {
@@ -1028,6 +1104,18 @@ impl App {
                     });
                 }
             });
+        if choose {
+            self.open_dxf_dialog();
+        }
+        if import {
+            let file = PathBuf::from(self.panels.import_file.trim());
+            let name = self.panels.import_name.clone();
+            let unit = self.panels.import_unit.clone();
+            self.panels.import_report = self
+                .win
+                .import_dxf(&file, &name, self.panels.import_face, &unit)
+                .unwrap_or_default();
+        }
         if copy {
             ctx.copy_text(text);
             self.win.report_copied();
@@ -1076,6 +1164,10 @@ impl App {
                 // or by the person: an order to write over is for one file
                 let done = if let Some(format) = dialog.export {
                     self.win.export_to(format, &path, dialog.overwrite)
+                } else if dialog.dxf {
+                    self.panels.import_file = path.display().to_string();
+                    self.panels.open = Some(Panel::ImportDxf);
+                    true
                 } else if dialog.library {
                     self.win.open_library(&path)
                 } else {
@@ -1138,6 +1230,7 @@ fn show_dialog(ctx: &egui::Context, d: &mut Dialog, lang: Lang) -> Option<Outcom
     let mut open = true;
     let title = match (d.sketch, d.save.is_some()) {
         _ if d.export.is_some() => Msg::ExportTitle,
+        _ if d.dxf => Msg::ImportDxfTitle,
         _ if d.library => Msg::OpenLibraryTitle,
         (false, true) => Msg::SaveTitle,
         (false, false) => Msg::OpenTitle,
@@ -1148,6 +1241,8 @@ fn show_dialog(ctx: &egui::Context, d: &mut Dialog, lang: Lang) -> Option<Outcom
     let export_extensions: Vec<&str> = export_extension.into_iter().collect();
     let extensions: &[&str] = if d.export.is_some() {
         &export_extensions
+    } else if d.dxf {
+        &DXF_EXTENSIONS
     } else if d.library {
         &LIBRARY_EXTENSIONS
     } else if d.sketch {
@@ -1365,6 +1460,7 @@ impl App {
             export: None,
             overwrite: false,
             library: false,
+            dxf: false,
         });
     }
 
@@ -1383,6 +1479,7 @@ impl App {
             export: None,
             overwrite: false,
             library: false,
+            dxf: false,
         });
     }
 

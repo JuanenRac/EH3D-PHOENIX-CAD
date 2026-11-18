@@ -48,11 +48,13 @@ pub enum Panel {
     Revolve,
     /// The section of the model by a plane, with its drawing.
     Section,
+    /// A flat DXF drawing read into a sketch of the project.
+    ImportDxf,
 }
 
 impl Panel {
     /// Every panel, in the order of the menu.
-    pub const ALL: [Panel; 9] = [
+    pub const ALL: [Panel; 10] = [
         Panel::CutPlan,
         Panel::Holes,
         Panel::Clearance,
@@ -62,6 +64,7 @@ impl Panel {
         Panel::SketchExport,
         Panel::Revolve,
         Panel::Section,
+        Panel::ImportDxf,
     ];
 
     /// The title of the panel, which is also the text of its menu entry.
@@ -76,6 +79,7 @@ impl Panel {
             Panel::SketchExport => Msg::PanelSketchExport,
             Panel::Revolve => Msg::PanelRevolve,
             Panel::Section => Msg::PanelSection,
+            Panel::ImportDxf => Msg::PanelImportDxf,
         }
     }
 }
@@ -151,6 +155,16 @@ pub struct PanelState {
     pub section_axis: Dim,
     /// The position of the plane being typed for the section panel.
     pub section_at: String,
+    /// The path of the DXF drawing being typed for the import panel.
+    pub import_file: String,
+    /// The name being typed for the sketch of the import panel; empty means the name of the file.
+    pub import_name: String,
+    /// The face the sketch of the import panel is made on.
+    pub import_face: Face,
+    /// The unit of the drawing of the import panel (`mm`, `cm`, `m` or `in`).
+    pub import_unit: String,
+    /// What the last import read, as text in the language it was made in; empty before one.
+    pub import_report: String,
 }
 
 impl PanelState {
@@ -170,6 +184,11 @@ impl PanelState {
             revolve_material: String::new(),
             section_axis: settings.section_axis,
             section_at: crate::scad::mm_text(settings.section_position.get()),
+            import_file: String::new(),
+            import_name: String::new(),
+            import_face: settings.import_face,
+            import_unit: settings.import_unit.clone(),
+            import_report: String::new(),
         }
     }
 
@@ -664,6 +683,12 @@ mod tests {
         assert_eq!(st.revolve_angle, "360");
         assert!(st.revolve_material.is_empty());
         assert_eq!((st.section_axis, st.section_at.as_str()), (Dim::Z, "0"));
+        assert!(st.import_file.is_empty() && st.import_name.is_empty());
+        assert_eq!(
+            (st.import_face, st.import_unit.as_str()),
+            (Face::Front, "mm")
+        );
+        assert!(st.import_report.is_empty());
         let mut st = PanelState::new(&s, true);
         assert!(st.overwrite);
         st.explode = true;

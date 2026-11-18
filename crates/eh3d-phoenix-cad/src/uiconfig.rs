@@ -200,6 +200,10 @@ pub struct PanelSettings {
     pub section_axis: crate::assembly::Dim,
     /// The position of the plane the section panel starts with.
     pub section_position: Length,
+    /// The unit the panel that imports a DXF drawing starts with: `mm`, `cm`, `m` or `in`.
+    pub import_unit: String,
+    /// The face the sketch of an imported DXF drawing starts on.
+    pub import_face: crate::enclosure::Face,
 }
 
 impl PanelSettings {
@@ -460,6 +464,8 @@ impl PanelSettings {
         let name = word(c, "panels.sketch_format")?;
         let axis = word(c, "panels.revolve_axis")?;
         let section_axis = word(c, "panels.section_axis")?;
+        let import_unit = word(c, "panels.import_unit")?;
+        let import_face = word(c, "panels.import_face")?;
         Ok(PanelSettings {
             holes_tools: count(c, "panels.holes_tools", 0, 1)? == 1,
             explode: count(c, "panels.explode", 0, 1)? == 1,
@@ -482,6 +488,16 @@ impl PanelSettings {
                 ))
             })?,
             section_position: c.length("panels.section_position")?,
+            import_unit: crate::dxf_import::unit_nm(import_unit)
+                .map(|_| import_unit.to_string())
+                .ok_or_else(|| {
+                    CadError::Config(format!(
+                        "panels.import_unit: {import_unit} is not mm, cm, m or in"
+                    ))
+                })?,
+            import_face: crate::enclosure::Face::from_name(import_face).ok_or_else(|| {
+                CadError::Config(format!("panels.import_face: {import_face} is not a face"))
+            })?,
         })
     }
 }
@@ -603,6 +619,8 @@ mod tests {
         assert_eq!(s.panels.revolve_angle, 360);
         assert_eq!(s.panels.section_axis, crate::assembly::Dim::Z);
         assert_eq!(s.panels.section_position, mm(0));
+        assert_eq!(s.panels.import_unit, "mm");
+        assert_eq!(s.panels.import_face, crate::enclosure::Face::Front);
         assert_eq!((n.pattern_count, n.pattern_step), (4, mm(10)));
         assert_eq!(n.pattern_radius, mm(5));
         assert_eq!(n.pattern_angle, Angle::from_deg(90).unwrap());
@@ -671,9 +689,13 @@ explode_percent = 120
 sketch_format = svg
 revolve_axis = y
 revolve_angle = 90
+import_unit = in
+import_face = top
 ",
         )
         .unwrap();
+        assert_eq!(s.panels.import_unit, "in");
+        assert_eq!(s.panels.import_face, crate::enclosure::Face::Top);
         assert_eq!(s.panels.revolve_axis, crate::revolve::Axis::Y);
         assert_eq!(s.panels.revolve_angle, 90);
         assert!(s.panels.holes_tools);
@@ -702,6 +724,12 @@ revolve_axis = z
 ",
             "[panels]
 section_axis = w
+",
+            "[panels]
+import_unit = ft
+",
+            "[panels]
+import_face = middle
 ",
             "[panels]
 revolve_angle = 0
