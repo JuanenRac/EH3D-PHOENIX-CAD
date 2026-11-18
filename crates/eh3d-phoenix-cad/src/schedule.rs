@@ -33,6 +33,8 @@ pub struct HoleRow {
     pub style: &'static str,
     /// What else makes the shape, in words with millimetres.
     pub detail: String,
+    /// The shape itself, so that its words can be written in any language.
+    pub shape: HoleStyle,
 }
 
 /// The word of a style of hole.
@@ -93,6 +95,7 @@ pub fn rows(enclosure: &Enclosure) -> Vec<HoleRow> {
             diameter: h.diameter.get(),
             style: style_name(&h.style),
             detail: detail_of(&h.style),
+            shape: h.style,
         })
         .collect()
 }

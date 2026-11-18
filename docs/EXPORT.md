@@ -91,7 +91,15 @@ In `phoenix-cad.default.cfg` (the `config` command writes them):
 | `drawing.dimensions` | 1 | dimensions and labels in the SVG drawing |
 | `drawing.axis_overshoot` | 3 mm | how far the centre lines go past what they mark |
 
-In `phoenix-cad-window.default.cfg`: `export.format` (the format the dialog starts with: `script`, `step`, `stl`, `dxf-top`, `dxf-front`, `dxf-side`, `svg-top`, `svg-front`, `svg-side`, `report` or `bill`), `export.overwrite` and `export.max_kib`.
+In `phoenix-cad-window.default.cfg`: `export.format` (the format the dialog starts with: `script`, `step`, `stl`, `dxf-top`, `dxf-front`, `dxf-side`, `svg-top`, `svg-front`, `svg-side`, `report`, `bill`, `obj` or `3mf`), `export.overwrite` and `export.max_kib`.
+
+## The reports in the window and in the eight languages
+
+The **Reports** menu of the window opens one panel for each report that the commands print: the cutting plan (`cutplan`), the hole schedule and the list of drills and cutters (`holes`), the clearance between parts (`clearance`), the placements with the exploded view (`placements`), the mass and the centre of mass (`balance`) and the drawing of a sketch (`sketch-export`). A panel shows its report as text that can be selected and copied, in the language of the window; the choices in it (drills and cutters instead of holes, how far the parts are pulled apart, the sketch, DXF or SVG, the name of the file and the box to write over it) are applied at once. The drawing of a sketch is written next to the project that is open under a name typed in the panel: the name must be a file name and not a folder, `..` or a drive, and a file that exists, the project that is open and a name that belongs to a project or a sketch are refused as in every export (`PHOENIX-CAD-040` and `PHOENIX-CAD-041`).
+
+The commands print comma separated values for a program to read, the same text in every language. For a person, `cutplan`, `clearance`, `placements` and `holes` take `--text` (the cutting plan always had it) and the five reports and `sketch-export` take `--lang CODE` (`en`, `es`, `de`, `fr`, `it`, `ja`, `zh` or `pt`); without it they are in English, so that a report is the same text on every computer. The words of every report are in `eh3d_phoenix_cad::lang` and the layout of the lines in `eh3d_phoenix_cad::panels`; the numbers are the ones of the comma separated values.
+
+In `phoenix-cad-window.default.cfg`, section `[panels]`: `panels.holes_tools` (1 starts the hole panel with the drills and cutters, 0 with the holes), `panels.explode` (1 starts the placements panel with the parts pulled apart), `panels.explode_percent` (50 by default, up to 10000; the library setting `placement.max_explode_percent` is the most that is accepted) and `panels.sketch_format` (`dxf` or `svg`). The box to write over a file starts as `export.overwrite` says.
 
 ## Codes
 

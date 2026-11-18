@@ -12,6 +12,7 @@ use crate::enclosure::{Enclosure, EnclosureParams, Face};
 use crate::export::Format;
 use crate::fins::FinAxis;
 use crate::mount::BoreKind;
+use crate::panels::SketchFormat;
 use crate::units::{parse_angle, Angle, Unit};
 use crate::{CadError, Length};
 
@@ -160,6 +161,27 @@ pub struct ExportSettings {
     pub max_kib: u32,
 }
 
+/// How the panels of the Reports menu start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PanelSettings {
+    /// Whether the hole panel starts by listing the drills and cutters instead of the holes.
+    pub holes_tools: bool,
+    /// Whether the placements panel starts with the parts pulled apart.
+    pub explode: bool,
+    /// The percentage the exploded view starts with (the settings of the library limit how far
+    /// it may go).
+    pub explode_percent: u32,
+    /// The format the drawing of a sketch starts with.
+    pub sketch_format: SketchFormat,
+}
+
+impl PanelSettings {
+    /// The settings of the shipped file.
+    pub fn shipped() -> PanelSettings {
+        UiSettings::defaults().panels
+    }
+}
+
 /// The settings of the window with their types.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UiSettings {
@@ -197,6 +219,8 @@ pub struct UiSettings {
     pub measure: MeasureSettings,
     /// How the files written from the window are made.
     pub export: ExportSettings,
+    /// How the panels of the Reports menu start.
+    pub panels: PanelSettings,
 }
 
 fn missing(key: &str) -> CadError {
@@ -394,6 +418,25 @@ impl ExportSettings {
     }
 }
 
+impl PanelSettings {
+    fn from_config(c: &Config) -> Result<PanelSettings, CadError> {
+        let name = word(c, "panels.sketch_format")?;
+        Ok(PanelSettings {
+            holes_tools: count(c, "panels.holes_tools", 0, 1)? == 1,
+            explode: count(c, "panels.explode", 0, 1)? == 1,
+            explode_percent: count(
+                c,
+                "panels.explode_percent",
+                0,
+                crate::placement::EXPLODE_CAP_PERCENT,
+            )?,
+            sketch_format: SketchFormat::from_name(name).ok_or_else(|| {
+                CadError::Config(format!("panels.sketch_format: {name} is not dxf or svg"))
+            })?,
+        })
+    }
+}
+
 impl UiSettings {
     /// The defaults that ship with the crate.
     pub fn defaults() -> UiSettings {
@@ -454,6 +497,7 @@ impl UiSettings {
             drag: DragSettings::from_config(c)?,
             measure: MeasureSettings::from_config(c)?,
             export: ExportSettings::from_config(c)?,
+            panels: PanelSettings::from_config(c)?,
         })
     }
 }
@@ -502,6 +546,10 @@ mod tests {
         assert_eq!(s.export.format, Format::Script);
         assert!(!s.export.overwrite);
         assert_eq!(s.export.max_kib, 65_536);
+        assert!(!s.panels.holes_tools);
+        assert!(!s.panels.explode);
+        assert_eq!(s.panels.explode_percent, 50);
+        assert_eq!(s.panels.sketch_format, SketchFormat::Dxf);
         assert_eq!((n.pattern_count, n.pattern_step), (4, mm(10)));
         assert_eq!(n.pattern_radius, mm(5));
         assert_eq!(n.pattern_angle, Angle::from_deg(90).unwrap());
@@ -538,6 +586,50 @@ mod tests {
             })
         );
         assert_eq!(n.mate_of("glue"), None);
+    }
+
+    #[test]
+    fn the_panels_are_read_and_checked() {
+        let s = UiSettings::with_user_config(
+            "[panels]
+holes_tools = 1
+explode = 1
+explode_percent = 120
+sketch_format = svg
+",
+        )
+        .unwrap();
+        assert!(s.panels.holes_tools);
+        assert!(s.panels.explode);
+        assert_eq!(s.panels.explode_percent, 120);
+        assert_eq!(s.panels.sketch_format, SketchFormat::Svg);
+        assert_eq!(PanelSettings::shipped(), UiSettings::defaults().panels);
+        for bad in [
+            "[panels]
+holes_tools = 2
+",
+            "[panels]
+explode = yes
+",
+            "[panels]
+explode_percent = 10001
+",
+            "[panels]
+explode_percent = -1
+",
+            "[panels]
+sketch_format = pdf
+",
+        ] {
+            assert!(UiSettings::with_user_config(bad).is_err(), "{bad}");
+        }
+        // 10 000 percent is the most
+        assert!(UiSettings::with_user_config(
+            "[panels]
+explode_percent = 10000
+"
+        )
+        .is_ok());
     }
 
     #[test]

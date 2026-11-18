@@ -8,6 +8,7 @@ use crate::catalog;
 use crate::config::Settings;
 use crate::export::Format;
 use crate::lang::{Lang, Msg};
+use crate::panels::{default_drawing_name, Panel, PanelState, SketchFormat};
 use crate::scene::{Kind, Line2};
 use crate::shot::{ShotRequest, ShotTheme, StartView, PATIENCE_FRAMES};
 use crate::sketch::file as sketch_file;
@@ -94,12 +95,16 @@ struct App {
     ignore_drag: bool,
     /// Whether the window with the text of the fit report is open.
     report_open: bool,
+    /// The panels of the Reports menu: which one is open and what is chosen in it.
+    panels: PanelState,
 }
 
 impl App {
     fn new(win: Window, sketch: SketchEditor, workspace: StartView) -> App {
+        let panels = PanelState::new(&win.ui.panels, win.ui.export.overwrite);
         App {
             win,
+            panels,
             fit_next: !sketch.sketch.elements().is_empty(),
             sketch,
             workspace,
@@ -239,6 +244,14 @@ impl App {
                     if ui.button(Msg::ReportShow.tr(lang)).clicked() {
                         self.report_open = true;
                         ui.close();
+                    }
+                });
+                ui.menu_button(Msg::ReportsMenu.tr(lang), |ui| {
+                    for panel in Panel::ALL {
+                        if ui.button(panel.title().tr(lang)).clicked() {
+                            self.panels.open = Some(panel);
+                            ui.close();
+                        }
                     }
                 });
                 ui.separator();
@@ -818,6 +831,113 @@ impl App {
             self.export_dialog(Format::Report);
         }
         self.report_open = open;
+    }
+
+    /// The window of the open panel of the Reports menu: its choices and its report as text that
+    /// can be selected and copied, in the language of the window. The panel of the drawing of a
+    /// sketch writes a file next to the project instead (never over one that exists unless its box
+    /// is ticked).
+    fn panel_window(&mut self, ctx: &egui::Context) {
+        let Some(panel) = self.panels.open else {
+            return;
+        };
+        let lang = self.win.lang;
+        let names = self.win.sketch_names();
+        if self.panels.sketch >= names.len() {
+            self.panels.sketch = 0;
+        }
+        let mut open = true;
+        let mut copy = false;
+        let mut write = false;
+        let mut text = String::new();
+        let title = panel.title().tr(lang).trim_end_matches("...");
+        egui::Window::new(title)
+            .open(&mut open)
+            .default_size([620.0, 320.0])
+            .show(ctx, |ui| {
+                match panel {
+                    Panel::Holes => {
+                        ui.checkbox(&mut self.panels.holes_tools, Msg::PanelHolesTools.tr(lang));
+                    }
+                    Panel::Placements => {
+                        ui.checkbox(&mut self.panels.explode, Msg::PanelExplode.tr(lang));
+                        if self.panels.explode {
+                            ui.horizontal(|ui| {
+                                ui.label(Msg::PanelExplodePercent.tr(lang));
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.panels.explode_text)
+                                        .desired_width(60.0),
+                                );
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+                if panel == Panel::SketchExport {
+                    if names.is_empty() {
+                        ui.label(egui::RichText::new(Msg::PanelNoSketch.tr(lang)).color(DIM));
+                    } else {
+                        ui.horizontal(|ui| {
+                            ui.label(Msg::FieldSketch.tr(lang));
+                            egui::ComboBox::from_id_salt("panel-sketch")
+                                .selected_text(names[self.panels.sketch].clone())
+                                .show_ui(ui, |ui| {
+                                    for (i, n) in names.iter().enumerate() {
+                                        ui.selectable_value(&mut self.panels.sketch, i, n.as_str());
+                                    }
+                                });
+                            ui.label(Msg::PanelFormat.tr(lang));
+                            ui.selectable_value(&mut self.panels.format, SketchFormat::Dxf, "DXF");
+                            ui.selectable_value(&mut self.panels.format, SketchFormat::Svg, "SVG");
+                        });
+                        let suggested =
+                            default_drawing_name(&names[self.panels.sketch], self.panels.format);
+                        ui.horizontal(|ui| {
+                            ui.label(Msg::FileName.tr(lang));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.panels.file)
+                                    .hint_text(suggested.as_str())
+                                    .desired_width(260.0),
+                            );
+                        });
+                        ui.checkbox(&mut self.panels.overwrite, Msg::ExportOverwrite.tr(lang));
+                        if ui.button(Msg::PanelWrite.tr(lang)).clicked() {
+                            write = true;
+                        }
+                    }
+                } else {
+                    text = self.win.panel_text(panel, &self.panels.options());
+                    if ui.button(Msg::ReportCopy.tr(lang)).clicked() {
+                        copy = true;
+                    }
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        // a text that is shown and can be selected but not changed
+                        let mut shown: &str = text.as_str();
+                        ui.add(
+                            egui::TextEdit::multiline(&mut shown)
+                                .font(egui::TextStyle::Monospace)
+                                .desired_width(f32::INFINITY),
+                        );
+                    });
+                }
+            });
+        if copy {
+            ctx.copy_text(text);
+            self.win.report_copied();
+        } else if write {
+            let sketch = names[self.panels.sketch].clone();
+            let format = self.panels.format;
+            let file = if self.panels.file.trim().is_empty() {
+                default_drawing_name(&sketch, format)
+            } else {
+                self.panels.file.clone()
+            };
+            self.win
+                .write_sketch_drawing(&sketch, format, &file, self.panels.overwrite);
+        }
+        if !open {
+            self.panels.open = None;
+        }
     }
 
     fn dialog_window(&mut self, ctx: &egui::Context) {
@@ -1857,6 +1977,7 @@ impl eframe::App for App {
             }
         }
         self.report_window(&ctx);
+        self.panel_window(&ctx);
         self.dialog_window(&ctx);
         self.shot_tick(&ctx);
     }

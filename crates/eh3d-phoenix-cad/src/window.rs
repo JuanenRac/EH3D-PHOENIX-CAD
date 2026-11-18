@@ -1841,10 +1841,10 @@ impl Window {
             .map(|plan| crate::nesting::plan_csv(&plan, &self.settings.stock))
     }
 
-    /// The cutting plan as lines of text.
+    /// The cutting plan as lines of text in the language of the window.
     pub fn stock_text(&self) -> Result<String, CadError> {
         self.stock_plan()
-            .map(|plan| crate::nesting::plan_text(&plan))
+            .map(|plan| crate::panels::cutplan_text_in(&plan, self.lang))
     }
 
     /// The pairs of placed parts that do not touch and are closer than the minimum of the
@@ -1853,6 +1853,18 @@ impl Window {
         let placed =
             crate::assembly::place(self.built.enclosure.parts(), self.built.enclosure.mates())?;
         crate::clearance::find(&placed, &self.settings.clearance)
+    }
+
+    /// The pairs that are too close as lines of text in the language of the window.
+    pub fn clearance_text(&self) -> Result<String, CadError> {
+        let placed = self.placed_parts()?;
+        let report = crate::clearance::find(&placed, &self.settings.clearance)?;
+        Ok(crate::panels::clearance_text_in(
+            &report,
+            &placed,
+            &self.settings.clearance,
+            self.lang,
+        ))
     }
 
     /// The pairs that are too close as comma separated values.
@@ -1877,6 +1889,27 @@ impl Window {
             placed = crate::placement::explode(&placed, percent, &self.settings.placement)?;
         }
         crate::placement::table(&placed).map(|t| crate::placement::table_csv(&t))
+    }
+
+    /// The table of placements as lines of text in the language of the window, with the parts
+    /// pulled apart by `explode` percent when it is given.
+    pub fn placement_text(&self, explode: Option<u32>) -> Result<String, CadError> {
+        let mut placed = self.placed_parts()?;
+        if let Some(percent) = explode {
+            placed = crate::placement::explode(&placed, percent, &self.settings.placement)?;
+        }
+        crate::placement::table(&placed).map(|t| crate::panels::placements_text_in(&t, self.lang))
+    }
+
+    /// The schedule of the holes of the box as lines of text in the language of the window, or
+    /// with `tools` the drills and cutters they need.
+    pub fn holes_text(&self, tools: bool) -> String {
+        let rows = crate::schedule::rows(&self.built.enclosure);
+        if tools {
+            crate::panels::tools_text_in(&rows, self.lang)
+        } else {
+            crate::panels::holes_text_in(&rows, self.lang)
+        }
     }
 
     /// The schedule of the holes of the box as comma separated values, or with `tools` the list of
@@ -1917,9 +1950,120 @@ impl Window {
         crate::balance::balance(&placed, &self.settings.materials)
     }
 
-    /// The balance of the placed parts as lines of text.
+    /// The balance of the placed parts as lines of text in the language of the window.
     pub fn balance_text(&self) -> Result<String, CadError> {
-        self.balance().map(|b| crate::balance::balance_text(&b))
+        self.balance()
+            .map(|b| crate::panels::balance_text_in(&b, self.lang))
+    }
+
+    /// The parts placed in the model with the mates applied.
+    fn placed_parts(&self) -> Result<std::collections::BTreeMap<Id, PartInstance>, CadError> {
+        crate::assembly::place(self.built.enclosure.parts(), self.built.enclosure.mates())
+    }
+
+    /// The report of a panel of the Reports menu as text in the language of the window (see
+    /// [`crate::panels`]). A model with no part placed says so for the reports about parts; a
+    /// refusal of the library is written as the text of its error. The panel of the drawing of a
+    /// sketch has no report: it says only when the project has no sketch.
+    pub fn panel_text(
+        &self,
+        panel: crate::panels::Panel,
+        options: &crate::panels::PanelOptions,
+    ) -> String {
+        use crate::panels::{self, Panel};
+        let lang = self.lang;
+        let needs_parts = matches!(
+            panel,
+            Panel::CutPlan | Panel::Clearance | Panel::Placements | Panel::Balance
+        );
+        if needs_parts && self.built.enclosure.parts().is_empty() {
+            return Msg::PanelNoParts.tr(lang).to_string();
+        }
+        let text = match panel {
+            Panel::CutPlan => self
+                .stock_plan()
+                .map(|plan| panels::cutplan_text_in(&plan, lang)),
+            Panel::Holes => {
+                let rows = crate::schedule::rows(&self.built.enclosure);
+                Ok(if options.holes_tools {
+                    panels::tools_text_in(&rows, lang)
+                } else {
+                    panels::holes_text_in(&rows, lang)
+                })
+            }
+            Panel::Clearance => self.placed_parts().and_then(|placed| {
+                crate::clearance::find(&placed, &self.settings.clearance).map(|report| {
+                    panels::clearance_text_in(&report, &placed, &self.settings.clearance, lang)
+                })
+            }),
+            Panel::Placements => self.placed_parts().and_then(|placed| {
+                let placed = match options.explode {
+                    Some(percent) => {
+                        crate::placement::explode(&placed, percent, &self.settings.placement)?
+                    }
+                    None => placed,
+                };
+                crate::placement::table(&placed).map(|t| panels::placements_text_in(&t, lang))
+            }),
+            Panel::Balance => self.balance().map(|b| panels::balance_text_in(&b, lang)),
+            Panel::SketchExport => Ok(if self.mech.sketches.is_empty() {
+                Msg::PanelNoSketch.tr(lang).to_string()
+            } else {
+                String::new()
+            }),
+        };
+        text.unwrap_or_else(|e| error_text(&e, lang))
+    }
+
+    /// Writes a sketch of the project as a DXF or SVG drawing in a file next to the project (see
+    /// [`crate::sketch_export`]). The file is only a name: one that holds a folder is refused, and
+    /// so is a file that exists unless `overwrite` is true. The status bar says what happened.
+    pub fn write_sketch_drawing(
+        &mut self,
+        sketch: &str,
+        format: crate::panels::SketchFormat,
+        file: &str,
+        overwrite: bool,
+    ) -> bool {
+        match self.sketch_drawing_file(sketch, format, file, overwrite) {
+            Ok((name, bytes)) => {
+                self.status = Status::Done(Msg::Exported, vec![name, bytes.to_string()]);
+                true
+            }
+            Err(e) => {
+                self.status = Status::Error(e);
+                false
+            }
+        }
+    }
+
+    fn sketch_drawing_file(
+        &self,
+        sketch: &str,
+        format: crate::panels::SketchFormat,
+        file: &str,
+        overwrite: bool,
+    ) -> Result<(String, usize), CadError> {
+        let found = self.find_sketch(Some(sketch))?;
+        let text = crate::sketch_export::render(
+            &found,
+            &self.sketch_settings,
+            &self.settings.drawing,
+            format.is_dxf(),
+        )?;
+        let target = crate::panels::drawing_target(self.path.as_deref(), file)?;
+        let bytes = export::write_file(
+            &target,
+            &text,
+            overwrite,
+            self.path.as_deref(),
+            self.ui.export.max_kib,
+        )?;
+        let name = target
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        Ok((name, bytes))
     }
 
     fn refresh_fields(&mut self) {
@@ -6622,6 +6766,179 @@ total,0,
             )),
             "{tools}"
         );
+    }
+
+    #[test]
+    fn each_panel_gives_its_report_in_the_language_of_the_window() {
+        use crate::panels::{Panel, PanelOptions};
+        let mut w = fresh();
+        assert!(w.open(&frame_path()), "{:?}", w.status);
+        let none = PanelOptions::default();
+        let plan = w.panel_text(Panel::CutPlan, &none);
+        assert!(plan.contains(" bars of "), "{plan}");
+        assert!(plan.ends_with(" bars in all\n"), "{plan}");
+        assert_eq!(plan, w.stock_text().unwrap());
+        let balance = w.panel_text(Panel::Balance, &none);
+        assert!(balance.starts_with("parts: 18\nmass: "), "{balance}");
+        assert_eq!(balance, w.balance_text().unwrap());
+        let clearance = w.panel_text(Panel::Clearance, &none);
+        assert!(
+            clearance.contains("pairs closer than 2 mm: "),
+            "{clearance}"
+        );
+        assert_eq!(clearance, w.clearance_text().unwrap());
+        let places = w.panel_text(Panel::Placements, &none);
+        // a line for each of the 18 parts and the box of the assembly
+        assert_eq!(places.lines().count(), 19, "{places}");
+        assert!(places
+            .lines()
+            .last()
+            .unwrap()
+            .starts_with("parts: 18; box: "));
+        // the same panels in Spanish and in German say the same numbers with other words
+        w.lang = Lang::Es;
+        assert!(w
+            .panel_text(Panel::Balance, &none)
+            .starts_with("piezas: 18\nmasa: "));
+        assert!(w.panel_text(Panel::CutPlan, &none).contains(" barras de "));
+        assert!(w
+            .panel_text(Panel::Clearance, &none)
+            .contains("pares a menos de 2 mm: "));
+        w.lang = Lang::De;
+        assert!(w
+            .panel_text(Panel::Placements, &none)
+            .contains("Quader: Ecke "));
+        assert!(w.panel_text(Panel::CutPlan, &none).contains(" Stangen zu "));
+    }
+
+    #[test]
+    fn the_exploded_view_of_the_panel_follows_the_percentage_and_the_limit() {
+        use crate::panels::{Panel, PanelOptions};
+        let mut w = fresh();
+        assert!(w.open(&assembly_path()), "{:?}", w.status);
+        let plain = w.panel_text(Panel::Placements, &PanelOptions::default());
+        let apart = w.panel_text(
+            Panel::Placements,
+            &PanelOptions {
+                holes_tools: false,
+                explode: Some(50),
+            },
+        );
+        assert_ne!(plain, apart);
+        assert_eq!(plain.lines().count(), apart.lines().count());
+        assert_eq!(apart, w.placement_text(Some(50)).unwrap());
+        // 0 percent leaves the parts where they are
+        let zero = w.panel_text(
+            Panel::Placements,
+            &PanelOptions {
+                holes_tools: false,
+                explode: Some(0),
+            },
+        );
+        assert_eq!(zero, plain);
+        // more than the settings allow is the text of the refusal, in the language of the window
+        let over = w.panel_text(
+            Panel::Placements,
+            &PanelOptions {
+                holes_tools: false,
+                explode: Some(501),
+            },
+        );
+        assert!(over.starts_with("PHOENIX-CAD-045 "), "{over}");
+    }
+
+    #[test]
+    fn the_hole_panel_lists_the_holes_or_the_tools_and_a_new_project_has_nothing_to_report() {
+        use crate::panels::{Panel, PanelOptions};
+        let mut w = example();
+        let n = w.enclosure().holes().len();
+        let holes = w.panel_text(Panel::Holes, &PanelOptions::default());
+        assert_eq!(holes.lines().count(), n + 1, "{holes}");
+        assert!(holes.ends_with(&format!("holes: {n}\n")), "{holes}");
+        assert_eq!(holes, w.holes_text(false));
+        let tools = w.panel_text(
+            Panel::Holes,
+            &PanelOptions {
+                holes_tools: true,
+                explode: None,
+            },
+        );
+        assert!(tools.ends_with(&format!("holes: {n}\n")), "{tools}");
+        assert!(tools.lines().count() <= holes.lines().count());
+        w.lang = Lang::De;
+        assert!(w
+            .panel_text(Panel::Holes, &PanelOptions::default())
+            .ends_with(&format!("Bohrungen: {n}\n")));
+        // a new project has no part and no sketch
+        let new = fresh();
+        let none = PanelOptions::default();
+        for panel in [
+            Panel::CutPlan,
+            Panel::Clearance,
+            Panel::Placements,
+            Panel::Balance,
+        ] {
+            assert_eq!(
+                new.panel_text(panel, &none),
+                Msg::PanelNoParts.tr(Lang::En),
+                "{panel:?}"
+            );
+        }
+        assert_eq!(
+            new.panel_text(Panel::SketchExport, &none),
+            Msg::PanelNoSketch.tr(Lang::En)
+        );
+        assert_eq!(new.panel_text(Panel::Holes, &none), "holes: 0\n");
+    }
+
+    #[test]
+    fn a_sketch_is_written_as_a_drawing_next_to_the_project_and_never_over_a_file() {
+        use crate::panels::SketchFormat;
+        let dir = Scratch::new("sketch-drawing");
+        let plate = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/examples/plate.phoenixproj"
+        ));
+        let copy = dir.0.join("plate.phoenixproj");
+        std::fs::copy(&plate, &copy).unwrap();
+        let mut w = fresh();
+        assert!(w.open(&copy), "{:?}", w.status);
+        let name = w.sketch_names()[0].clone();
+        assert!(
+            w.write_sketch_drawing(&name, SketchFormat::Dxf, "outline.dxf", false),
+            "{:?}",
+            w.status
+        );
+        let text = std::fs::read_to_string(dir.0.join("outline.dxf")).unwrap();
+        assert!(text.contains("CONTORNO"));
+        assert!(w
+            .status
+            .text(Lang::En)
+            .starts_with("Exported outline.dxf ("));
+        let code = |w: &Window| match &w.status {
+            Status::Error(e) => e.code(),
+            _ => "none",
+        };
+        // the same name again is refused and the file is kept
+        assert!(!w.write_sketch_drawing(&name, SketchFormat::Svg, "outline.dxf", false));
+        assert_eq!(code(&w), "PHOENIX-CAD-040");
+        assert_eq!(
+            std::fs::read_to_string(dir.0.join("outline.dxf")).unwrap(),
+            text
+        );
+        // with the box ticked it is replaced, now by the SVG drawing
+        assert!(w.write_sketch_drawing(&name, SketchFormat::Svg, "outline.dxf", true));
+        assert!(std::fs::read_to_string(dir.0.join("outline.dxf"))
+            .unwrap()
+            .contains("<svg"));
+        // a name that holds a folder, the project itself and a sketch that is not there
+        assert!(!w.write_sketch_drawing(&name, SketchFormat::Dxf, "../outline.dxf", true));
+        assert_eq!(code(&w), "PHOENIX-CAD-041");
+        assert!(!w.write_sketch_drawing(&name, SketchFormat::Dxf, "plate.phoenixproj", true));
+        assert_eq!(code(&w), "PHOENIX-CAD-041");
+        assert!(!w.write_sketch_drawing("nothing", SketchFormat::Dxf, "x.dxf", true));
+        assert_eq!(code(&w), "PHOENIX-CAD-014");
+        assert!(!dir.0.join("x.dxf").exists());
     }
 
     #[test]

@@ -25,6 +25,7 @@
 //! * [`schedule`]: the hole schedule for the person who drills: every hole by face and position with a stable tag, its diameter and shape, and the list of tools grouped by diameter and shape;
 //! * [`sketch_export`]: a sketch as a flat DXF or SVG drawing of its closed outlines (outer outlines and holes on their own layers, lines, arcs and circles kept as such), for a laser or a router;
 //! * [`balance`]: the mass of the placed parts and their centre of mass, in integers (exact for profiles, an estimate from the middle of the box for screws and brackets, and the report counts the estimated ones);
+//! * [`panels`]: the reports of the window (cutting plan, hole schedule and tools, clearance, placements, mass and centre of mass) as text in the eight languages, the state of their panels and the safe name of the file of a sketch drawing;
 //! * [`fins`]: sets of cooling fins that rise from a face (how many, how thick, how tall, how far apart, where they start and how long they run), checked against the limits of the settings, the edges and the holes of the face and the other sets, and an estimate, marked as one, of the heat they give to still air from a coefficient of the settings;
 //! * [`graph`]: the graph of dependencies between objects, with a deterministic order of calculation, refused cycles, a recalculation that reuses what did not change, and a Graphviz dump;
 //! * [`vars`]: named variables for the master dimensions, the binding of the parameters of an enclosure to them, and families of variants (small, medium, large);
@@ -100,6 +101,7 @@ pub mod messages;
 pub mod mount;
 pub mod names;
 pub mod nesting;
+pub mod panels;
 pub mod parametric;
 pub mod pattern;
 pub mod placement;

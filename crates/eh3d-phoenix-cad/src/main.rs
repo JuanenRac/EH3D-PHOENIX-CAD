@@ -6,7 +6,7 @@ use eh3d_phoenix_cad::catalog;
 use eh3d_phoenix_cad::config::{Settings, DEFAULT_CONFIG};
 use eh3d_phoenix_cad::drawing::View;
 use eh3d_phoenix_cad::export::Format;
-use eh3d_phoenix_cad::lang::Lang;
+use eh3d_phoenix_cad::lang::{Lang, Msg};
 use eh3d_phoenix_cad::shot;
 use eh3d_phoenix_cad::sketch::settings::SketchSettings;
 #[cfg(feature = "gui")]
@@ -25,17 +25,17 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad check PROJECT.phoenixproj [--lang CODE] [--config FILE]       reads a project, builds the box (with the extrusions and pockets of its sketches) and prints its measures, the fit of the board and the state of every step
   eh3d-phoenix-cad interference PROJECT.phoenixproj [--lang CODE] [--config FILE]  reads a project, puts the parts where their mates place them and lists the pairs of parts that share volume (touching is not sharing; a screw through the hole of a bracket is allowed)
   eh3d-phoenix-cad bill PROJECT.phoenixproj [--config FILE]                       the bill of materials of the parts placed in a project (profiles cut to a length, screws and brackets) as comma separated values, with the volume and the mass for the density of each material
-  eh3d-phoenix-cad cutplan PROJECT.phoenixproj [--text] [--config FILE]            the cutting plan of the profiles placed in a project: the pieces of the cut list fitted into bars (the longest cut each profile comes in) with the kerf of the saw and the trimmed ends, as comma separated values or, with --text, as lines for a person
-  eh3d-phoenix-cad clearance PROJECT.phoenixproj [--config FILE]                  lists, as comma separated values, the pairs of placed parts that do not touch and are closer than clearance.min_gap (exit 1 when there is one)
-  eh3d-phoenix-cad placements PROJECT.phoenixproj [--explode PERCENT] [--config FILE]   where each placed part is (the corner and the size in millimetres and the turn) and the size of the whole assembly, as comma separated values; with --explode the parts are first pulled apart from the middle of the assembly by that percentage
-  eh3d-phoenix-cad holes PROJECT.phoenixproj [--tools] [--config FILE]            the schedule of the holes of the box for the person who drills (a tag, the face, the position, the diameter and the shape of each) as comma separated values, or with --tools the drills and cutters they need grouped by diameter and shape
-  eh3d-phoenix-cad sketch-export PROJECT.phoenixproj|SKETCH.phoenixsketch --format dxf|svg [--sketch NAME] [--out FILE] [--overwrite] [--config FILE]   writes a sketch (the only one of the project, or the one named) as a flat drawing of its closed outlines for a laser or a router; never over a file that exists unless --overwrite is given
-  eh3d-phoenix-cad balance PROJECT.phoenixproj [--config FILE]                     the mass of the placed parts and where their centre of mass is (exact for profiles, an estimate for screws and brackets, and the number of estimated parts is said)
+  eh3d-phoenix-cad cutplan PROJECT.phoenixproj [--text] [--lang CODE] [--config FILE]            the cutting plan of the profiles placed in a project: the pieces of the cut list fitted into bars (the longest cut each profile comes in) with the kerf of the saw and the trimmed ends, as comma separated values or, with --text, as lines for a person
+  eh3d-phoenix-cad clearance PROJECT.phoenixproj [--text] [--lang CODE] [--config FILE]                  lists, as comma separated values, the pairs of placed parts that do not touch and are closer than clearance.min_gap (exit 1 when there is one)
+  eh3d-phoenix-cad placements PROJECT.phoenixproj [--explode PERCENT] [--text] [--lang CODE] [--config FILE]   where each placed part is (the corner and the size in millimetres and the turn) and the size of the whole assembly, as comma separated values; with --explode the parts are first pulled apart from the middle of the assembly by that percentage
+  eh3d-phoenix-cad holes PROJECT.phoenixproj [--tools] [--text] [--lang CODE] [--config FILE]            the schedule of the holes of the box for the person who drills (a tag, the face, the position, the diameter and the shape of each) as comma separated values, or with --tools the drills and cutters they need grouped by diameter and shape
+  eh3d-phoenix-cad sketch-export PROJECT.phoenixproj|SKETCH.phoenixsketch --format dxf|svg [--sketch NAME] [--out FILE] [--overwrite] [--lang CODE] [--config FILE]   writes a sketch (the only one of the project, or the one named) as a flat drawing of its closed outlines for a laser or a router; never over a file that exists unless --overwrite is given
+  eh3d-phoenix-cad balance PROJECT.phoenixproj [--lang CODE] [--config FILE]                     the mass of the placed parts and where their centre of mass is (exact for profiles, an estimate for screws and brackets, and the number of estimated parts is said)
   eh3d-phoenix-cad library FILE.phoenixlib [--config FILE]                        reads a library of parts, checks it and lists its parts
   eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill [--view top|front|side] [--out FILE] [--overwrite] [--ascii|--binary] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), as a Wavefront file (obj) or as a 3MF package (3mf), the plan, front or side as a drawing (dxf, svg), the STEP file, the OpenSCAD-style script, the fit report or the bill of materials
   eh3d-phoenix-cad config                                                         every setting of the library, of the window and of the sketch with its default value, as a file for --config
 
---open FILE is the same as giving the file by itself; a sketch file opens the window on the sketch. --lang takes en, es, de, fr, it, ja, zh or pt; without it the language of the system is used.
+--open FILE is the same as giving the file by itself; a sketch file opens the window on the sketch. --lang takes en, es, de, fr, it, ja, zh or pt; without it the language of the system is used (the reports cutplan, clearance, placements, holes and balance and the answer of sketch-export are in English unless --lang is given; with --text the first four are lines for a person in that language instead of comma separated values).
 --shot writes a PNG file of the window (the exit code is 0 when it was written, 1 when it was not and 2 when the arguments are wrong); the window keeps no settings in that mode.
 --config FILE reads a settings file over the defaults: it only needs the keys it changes (see the output of config).
 check exits with 0 when every step was applied and the board fits, and with 1 when a step was refused or the board does not fit.
@@ -159,6 +159,33 @@ fn file_and_config(args: &[String], what: &str) -> Result<(PathBuf, Option<PathB
     Ok((file, config))
 }
 
+/// Takes `--lang CODE` out of the arguments of a command that prints a report. English without
+/// it, so that a report is the same text on every computer.
+fn take_lang(args: &[String]) -> Result<(Lang, Vec<String>), String> {
+    let mut lang = Lang::En;
+    let mut rest = Vec::new();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--lang" {
+            let code = iter.next().ok_or("--lang needs a language code")?;
+            lang = Lang::from_code(code).ok_or("unknown language code")?;
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    Ok((lang, rest))
+}
+
+/// Opens the project that a report is asked for, with the settings file and the language.
+fn open_for_report(file: &Path, config: Option<&Path>, lang: Lang) -> Result<Window, String> {
+    let (settings, ui) = load_settings(config)?;
+    let mut win = Window::new(lang, settings, ui).map_err(|e| error_text(&e, lang))?;
+    if !win.open(file) {
+        return Err(format!("{}: {}", file.display(), win.status.text(lang)));
+    }
+    Ok(win)
+}
+
 /// `bill`: reads a project and prints the bill of materials of the parts placed in it.
 fn run_bill(args: &[String]) -> Result<bool, String> {
     let (file, config) = file_and_config(args, "project file")?;
@@ -175,15 +202,11 @@ fn run_bill(args: &[String]) -> Result<bool, String> {
 
 /// `cutplan`: reads a project and prints the cutting plan of the profiles placed in it.
 fn run_cutplan(args: &[String]) -> Result<bool, String> {
+    let (lang, args) = take_lang(args)?;
     let text = args.iter().any(|a| a == "--text");
     let rest: Vec<String> = args.iter().filter(|a| *a != "--text").cloned().collect();
     let (file, config) = file_and_config(&rest, "project file")?;
-    let (settings, ui) = load_settings(config.as_deref())?;
-    let lang = Lang::En;
-    let mut win = Window::new(lang, settings, ui).map_err(|e| error_text(&e, lang))?;
-    if !win.open(&file) {
-        return Err(format!("{}: {}", file.display(), win.status.text(lang)));
-    }
+    let win = open_for_report(&file, config.as_deref(), lang)?;
     let out = if text {
         win.stock_text()
     } else {
@@ -197,17 +220,18 @@ fn run_cutplan(args: &[String]) -> Result<bool, String> {
 /// `clearance`: reads a project and prints the pairs of placed parts that do not touch and are
 /// closer than the minimum of the settings. The answer is whether there are none.
 fn run_clearance(args: &[String]) -> Result<bool, String> {
-    let (file, config) = file_and_config(args, "project file")?;
-    let (settings, ui) = load_settings(config.as_deref())?;
-    let lang = Lang::En;
-    let mut win = Window::new(lang, settings, ui).map_err(|e| error_text(&e, lang))?;
-    if !win.open(&file) {
-        return Err(format!("{}: {}", file.display(), win.status.text(lang)));
+    let (lang, args) = take_lang(args)?;
+    let text = args.iter().any(|a| a == "--text");
+    let rest: Vec<String> = args.iter().filter(|a| *a != "--text").cloned().collect();
+    let (file, config) = file_and_config(&rest, "project file")?;
+    let win = open_for_report(&file, config.as_deref(), lang)?;
+    let out = if text {
+        win.clearance_text()
+    } else {
+        win.clearance_csv_text()
     }
-    print!(
-        "{}",
-        win.clearance_csv_text().map_err(|e| error_text(&e, lang))?
-    );
+    .map_err(|e| error_text(&e, lang))?;
+    print!("{out}");
     let none = win
         .clearance_report()
         .map_err(|e| error_text(&e, lang))?
@@ -219,11 +243,15 @@ fn run_clearance(args: &[String]) -> Result<bool, String> {
 /// `placements`: reads a project and prints where each placed part is and the size of the
 /// assembly, optionally with the parts pulled apart (`--explode PERCENT`).
 fn run_placements(args: &[String]) -> Result<bool, String> {
+    let (lang, args) = take_lang(args)?;
     let mut explode: Option<u32> = None;
+    let mut text = false;
     let mut rest: Vec<String> = Vec::new();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
-        if arg == "--explode" {
+        if arg == "--text" {
+            text = true;
+        } else if arg == "--explode" {
             let value = iter.next().ok_or("--explode needs a percentage")?;
             explode = Some(
                 value
@@ -235,32 +263,35 @@ fn run_placements(args: &[String]) -> Result<bool, String> {
         }
     }
     let (file, config) = file_and_config(&rest, "project file")?;
-    let (settings, ui) = load_settings(config.as_deref())?;
-    let lang = Lang::En;
-    let mut win = Window::new(lang, settings, ui).map_err(|e| error_text(&e, lang))?;
-    if !win.open(&file) {
-        return Err(format!("{}: {}", file.display(), win.status.text(lang)));
+    let win = open_for_report(&file, config.as_deref(), lang)?;
+    let out = if text {
+        win.placement_text(explode)
+    } else {
+        win.placement_csv_text(explode)
     }
-    let csv = win
-        .placement_csv_text(explode)
-        .map_err(|e| error_text(&e, lang))?;
-    print!("{csv}");
+    .map_err(|e| error_text(&e, lang))?;
+    print!("{out}");
     Ok(win.info.failed == 0)
 }
 
 /// `holes`: reads a project and prints the schedule of the holes of the box, or with `--tools`
 /// the list of drills and cutters they need.
 fn run_holes(args: &[String]) -> Result<bool, String> {
+    let (lang, args) = take_lang(args)?;
     let tools = args.iter().any(|a| a == "--tools");
-    let rest: Vec<String> = args.iter().filter(|a| *a != "--tools").cloned().collect();
+    let text = args.iter().any(|a| a == "--text");
+    let rest: Vec<String> = args
+        .iter()
+        .filter(|a| *a != "--tools" && *a != "--text")
+        .cloned()
+        .collect();
     let (file, config) = file_and_config(&rest, "project file")?;
-    let (settings, ui) = load_settings(config.as_deref())?;
-    let lang = Lang::En;
-    let mut win = Window::new(lang, settings, ui).map_err(|e| error_text(&e, lang))?;
-    if !win.open(&file) {
-        return Err(format!("{}: {}", file.display(), win.status.text(lang)));
+    let win = open_for_report(&file, config.as_deref(), lang)?;
+    if text {
+        print!("{}", win.holes_text(tools));
+    } else {
+        print!("{}", win.holes_csv_text(tools));
     }
-    print!("{}", win.holes_csv_text(tools));
     Ok(win.info.failed == 0)
 }
 
@@ -274,6 +305,7 @@ fn run_sketch_export(args: &[String]) -> Result<bool, String> {
     let mut word: Option<String> = None;
     let mut name: Option<String> = None;
     let mut overwrite = false;
+    let mut lang = Lang::En;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -286,6 +318,10 @@ fn run_sketch_export(args: &[String]) -> Result<bool, String> {
             "--sketch" => name = Some(iter.next().ok_or("--sketch needs a name")?.clone()),
             "--out" => out = Some(PathBuf::from(iter.next().ok_or("--out needs a file")?)),
             "--overwrite" => overwrite = true,
+            "--lang" => {
+                let code = iter.next().ok_or("--lang needs a language code")?;
+                lang = Lang::from_code(code).ok_or("unknown language code")?;
+            }
             other if other.starts_with("--") => return Err(format!("unknown option {other}")),
             other => {
                 if file.is_some() {
@@ -301,7 +337,6 @@ fn run_sketch_export(args: &[String]) -> Result<bool, String> {
         "svg" => false,
         other => return Err(format!("{other}: unknown format (dxf or svg)")),
     };
-    let lang = Lang::En;
     let (settings, ui) = load_settings(config.as_deref())?;
     let solver = load_solver_settings(config.as_deref())?;
     let (sketch, project) = if shot::is_sketch_file(&file) {
@@ -337,19 +372,21 @@ fn run_sketch_export(args: &[String]) -> Result<bool, String> {
         ui.export.max_kib,
     )
     .map_err(|e| error_text(&e, lang))?;
-    println!("{}: {written} bytes", target.display());
+    println!(
+        "{}",
+        eh3d_phoenix_cad::lang::fill(
+            Msg::Exported.tr(lang),
+            &[&target.display().to_string(), &written.to_string()]
+        )
+    );
     Ok(true)
 }
 
 /// `balance`: reads a project and prints the mass of its placed parts and their centre of mass.
 fn run_balance(args: &[String]) -> Result<bool, String> {
-    let (file, config) = file_and_config(args, "project file")?;
-    let (settings, ui) = load_settings(config.as_deref())?;
-    let lang = Lang::En;
-    let mut win = Window::new(lang, settings, ui).map_err(|e| error_text(&e, lang))?;
-    if !win.open(&file) {
-        return Err(format!("{}: {}", file.display(), win.status.text(lang)));
-    }
+    let (lang, args) = take_lang(args)?;
+    let (file, config) = file_and_config(&args, "project file")?;
+    let win = open_for_report(&file, config.as_deref(), lang)?;
     print!("{}", win.balance_text().map_err(|e| error_text(&e, lang))?);
     Ok(win.info.failed == 0)
 }

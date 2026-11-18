@@ -153,7 +153,7 @@ pub fn find(
     Ok(Report { pairs })
 }
 
-fn name_of(parts: &BTreeMap<Id, PartInstance>, id: &Id) -> String {
+pub(crate) fn name_of(parts: &BTreeMap<Id, PartInstance>, id: &Id) -> String {
     parts
         .get(id)
         .map_or_else(|| id.to_string(), |p| p.name.clone())
