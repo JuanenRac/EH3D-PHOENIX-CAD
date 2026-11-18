@@ -66,7 +66,7 @@ After the id of the mate come the id of the fixed part, the id of the part it pl
 
 ## Settings
 
-The keys of `[assembly]` in `phoenix-cad.default.cfg`: `max_mates` (1 to 100000), `hole_clearance` (0 to 1000 mm) and `max_report_pairs` (1 to 100000). The keys `mate_kind`, `mate_direction`, `mate_distance`, `mate_axis` and `mate_edge` of `[new_step]` in `phoenix-cad-window.default.cfg` say how a mate added from the window starts. Every value is checked when the file is read.
+The keys of `[assembly]` in `phoenix-cad.default.cfg`: `max_mates` (1 to 100000), `hole_clearance` (0 to 1000 mm), `max_report_pairs` (1 to 100000) and `interference_tolerance` (0 to 1000 mm, 0 by default: how deep two bounding boxes may overlap, along their smallest overlap, and still be left out of the check; the pairs left out are counted in `Report::tolerated` and are not listed). The keys `mate_kind`, `mate_direction`, `mate_distance`, `mate_axis` and `mate_edge` of `[new_step]` in `phoenix-cad-window.default.cfg` say how a mate added from the window starts. Every value is checked when the file is read.
 
 ## Examples
 

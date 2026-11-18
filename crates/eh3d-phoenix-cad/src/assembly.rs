@@ -67,6 +67,9 @@ pub struct AssemblyLimits {
     pub hole_clearance: Length,
     /// The most pairs a report lists.
     pub max_report_pairs: usize,
+    /// How deep two bounding boxes may overlap, along their smallest overlap, and still not be
+    /// in conflict (zero: any overlap is checked).
+    pub interference_tolerance: Length,
 }
 
 impl AssemblyLimits {
@@ -91,7 +94,15 @@ impl AssemblyLimits {
                 CLEARANCE_CAP_NM / 1_000_000
             )));
         }
+        let tolerance = c.length("assembly.interference_tolerance")?;
+        if tolerance.get() < 0 || tolerance.get() > CLEARANCE_CAP_NM {
+            return Err(CadError::Config(format!(
+                "assembly.interference_tolerance must be from 0 to {} mm",
+                CLEARANCE_CAP_NM / 1_000_000
+            )));
+        }
         Ok(AssemblyLimits {
+            interference_tolerance: tolerance,
             max_mates: bounded("assembly.max_mates", MATES_CAP)?,
             hole_clearance: clearance,
             max_report_pairs: bounded("assembly.max_report_pairs", PAIRS_CAP)?,
@@ -770,6 +781,9 @@ pub struct Report {
     pub passes: usize,
     /// How many of those are not in conflict although the boxes overlap (the shapes are clear).
     pub clear: usize,
+    /// How many pairs of boxes overlap by no more than the tolerance of the settings and are
+    /// left out of the other counts.
+    pub tolerated: usize,
 }
 
 impl Report {
@@ -822,6 +836,7 @@ pub fn interference(
     boxes.sort_by_key(|(id, (lo, _))| (lo[0], *id));
     let shapes: BTreeMap<Id, Vec<Piece>> = parts.iter().map(|(id, p)| (*id, pieces(p))).collect();
     let clearance = i128::from(limits.hole_clearance.get());
+    let tolerance = limits.interference_tolerance.get();
     let mut report = Report::default();
     for (i, (ia, ba)) in boxes.iter().enumerate() {
         for (ib, bb) in &boxes[i + 1..] {
@@ -829,6 +844,14 @@ pub fn interference(
                 break;
             }
             if !share_volume(ba, bb) {
+                continue;
+            }
+            let depth = (0..3)
+                .map(|k| ba.1[k].min(bb.1[k]) - ba.0[k].max(bb.0[k]))
+                .min()
+                .unwrap_or(0);
+            if depth <= tolerance {
+                report.tolerated += 1;
                 continue;
             }
             report.boxes_overlapping += 1;
@@ -1233,6 +1256,59 @@ mod tests {
             "[assembly]\nmax_mates = 100000\nhole_clearance = 1000 mm\nmax_report_pairs = 100000\n",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn an_overlap_within_the_tolerance_is_left_out_and_a_deeper_one_is_not() {
+        // 1 mm of overlap along x between two bars of 20 x 30 x 100 mm
+        let over = set(vec![
+            (1, bar("a", [0, 0, 0], 100)),
+            (2, bar("b", [19, 0, 0], 100)),
+        ]);
+        let mut l = limits();
+        assert_eq!(l.interference_tolerance, Length::ZERO);
+        assert_eq!(interference(&over, &l).unwrap().conflicts.len(), 1);
+        // a tolerance of exactly the depth leaves the pair out and counts it
+        l.interference_tolerance = mm(1);
+        let r = interference(&over, &l).unwrap();
+        assert!(r.conflicts.is_empty());
+        assert_eq!((r.tolerated, r.boxes_overlapping), (1, 0));
+        // a nanometre less than the depth does not
+        l.interference_tolerance = Length::new(MM - 1).unwrap();
+        let r = interference(&over, &l).unwrap();
+        assert_eq!((r.conflicts.len(), r.tolerated), (1, 0));
+        // the depth is the smallest overlap of the three axes: 1 mm along x, whole along y and z
+        l.interference_tolerance = mm(1);
+        let deep = set(vec![
+            (1, bar("a", [0, 0, 0], 100)),
+            (2, bar("b", [10, 10, 10], 100)),
+        ]);
+        assert_eq!(interference(&deep, &l).unwrap().conflicts.len(), 1);
+    }
+
+    #[test]
+    fn the_tolerance_is_read_from_the_settings_and_checked() {
+        let s = crate::config::Settings::with_user_config(
+            "[assembly]
+interference_tolerance = 0.05 mm
+",
+        )
+        .unwrap();
+        assert_eq!(s.design.assembly.interference_tolerance, um(50));
+        for text in [
+            "[assembly]
+interference_tolerance = -1 mm
+",
+            "[assembly]
+interference_tolerance = 1001 mm
+",
+            "[assembly]
+interference_tolerance = thick
+",
+        ] {
+            let e = crate::config::Settings::with_user_config(text).unwrap_err();
+            assert_eq!(e.code(), "PHOENIX-CAD-011", "{text:?}: {e}");
+        }
     }
 
     #[test]
