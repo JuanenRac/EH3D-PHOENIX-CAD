@@ -23,6 +23,7 @@
 //! * [`clearance`]: the check of the room between the placed parts: the pairs that do not touch and are closer than a minimum, from the distance between their bounding boxes compared as squares in integers;
 //! * [`placement`]: the table of where the placed parts are with the box of the whole assembly, and an exploded view that pulls the parts away from the middle of the assembly by a percentage;
 //! * [`schedule`]: the hole schedule for the person who drills: every hole by face and position with a stable tag, its diameter and shape, and the list of tools grouped by diameter and shape;
+//! * [`dxf_import`]: a flat DXF drawing (lines, circles, arcs and polylines with bulges, in any unit) read into the elements of a sketch, with the ends that meet joined into one point and a count of what was left out;
 //! * [`sketch_export`]: a sketch as a flat DXF or SVG drawing of its closed outlines (outer outlines and holes on their own layers, lines, arcs and circles kept as such), for a laser or a router;
 //! * [`balance`]: the mass of the placed parts and their centre of mass, in integers (exact for profiles, an estimate from the middle of the box for screws and brackets, and the report counts the estimated ones);
 //! * [`panels`]: the reports of the window (cutting plan, hole schedule and tools, clearance, placements, mass and centre of mass) as text in the eight languages, the state of their panels and the safe name of the file of a sketch drawing;
@@ -89,6 +90,7 @@ pub mod config;
 pub mod datum;
 pub mod drag;
 pub mod drawing;
+pub mod dxf_import;
 pub mod enclosure;
 pub mod export;
 pub mod expr;

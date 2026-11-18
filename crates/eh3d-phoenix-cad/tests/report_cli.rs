@@ -497,3 +497,78 @@ fn a_section_of_the_model_is_printed_and_written_as_a_drawing() {
         assert!(err.contains(why), "{args:?}: {err}");
     }
 }
+
+#[test]
+fn a_dxf_drawing_is_read_into_a_sketch_that_can_be_drawn_again() {
+    let dir = Scratch::new("sketch-import");
+    let drawing = dir.file("plate.dxf");
+    let mut text = String::from("0\nSECTION\n2\nENTITIES\n");
+    for (a, b) in [
+        ((0, 0), (100, 0)),
+        ((100, 0), (100, 60)),
+        ((100, 60), (0, 60)),
+        ((0, 60), (0, 0)),
+    ] {
+        text.push_str(&format!(
+            "0\nLINE\n8\n0\n10\n{}\n20\n{}\n11\n{}\n21\n{}\n",
+            a.0, a.1, b.0, b.1
+        ));
+    }
+    text.push_str(
+        "0\nCIRCLE\n8\n0\n10\n20\n20\n30\n40\n5\n0\nTEXT\n8\n0\n1\nnote\n0\nENDSEC\n0\nEOF\n",
+    );
+    fs::write(&drawing, text).unwrap();
+    let sketch = dir.file("plate.phoenixsketch");
+    let (code, out, err) = run(&["sketch-import", &drawing, "--out", &sketch]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.starts_with("read: 4 lines, 1 circles, 0 arcs\n"),
+        "{out}"
+    );
+    assert!(out.contains("left out: TEXT x 1\n"), "{out}");
+    assert!(out.contains("plate.phoenixsketch"), "{out}");
+    // the sketch is the one of the drawing: its outline is drawn as a DXF again
+    let back = dir.file("back.dxf");
+    let (code, _, err) = run(&["sketch-export", &sketch, "--format", "dxf", "--out", &back]);
+    assert_eq!(code, 0, "{err}");
+    assert!(fs::read_to_string(&back).unwrap().contains("CONTORNO"));
+    // a file is never written over unless it is ordered to, and the words follow --lang
+    let (code, _, err) = run(&["sketch-import", &drawing, "--out", &sketch]);
+    assert_ne!(code, 0);
+    assert!(err.contains("PHOENIX-CAD-040"), "{err}");
+    let (code, out, err) = run(&[
+        "sketch-import",
+        &drawing,
+        "--out",
+        &sketch,
+        "--overwrite",
+        "--lang",
+        "es",
+        "--unit",
+        "in",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.starts_with("leído: 4 líneas, 1 círculos, 0 arcos\n"),
+        "{out}"
+    );
+    // what is refused
+    let other = dir.file("empty.dxf");
+    fs::write(&other, "0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n").unwrap();
+    for (args, why) in [
+        (vec!["sketch-import"], "needs a DXF drawing"),
+        (vec!["sketch-import", &other], "PHOENIX-CAD-035"),
+        (
+            vec!["sketch-import", &drawing, "--unit", "yard"],
+            "unknown unit",
+        ),
+        (
+            vec!["sketch-import", &drawing, "--face", "middle"],
+            "not a face",
+        ),
+    ] {
+        let (code, _, err) = run(&args);
+        assert_ne!(code, 0, "{args:?}");
+        assert!(err.contains(why), "{args:?}: {err}");
+    }
+}

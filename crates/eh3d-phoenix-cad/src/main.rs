@@ -34,6 +34,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad balance PROJECT.phoenixproj [--lang CODE] [--config FILE]                     the mass of the placed parts and where their centre of mass is (exact for profiles, an estimate for screws and brackets, and the number of estimated parts is said)
   eh3d-phoenix-cad revolve PROJECT.phoenixproj|SKETCH.phoenixsketch --axis x|y [--angle DEGREES] [--sketch NAME] [--material NAME] [--out FILE.stl|.obj|.3mf [--overwrite]] [--lang CODE] [--config FILE]   turns a sketch (the only one of the project, or the one named) about its first or second axis, by a full turn unless --angle says less, and prints the volume, the surface and the distances from the axis of the solid made and, with a material of the settings, its mass; the profile must not cross the axis; with --out the triangles of the solid are written to a file of the format its extension says (never over a file that exists unless --overwrite is given)
   eh3d-phoenix-cad sweep PROFILE --path PATH [--profile-sketch NAME] [--path-sketch NAME] [--material NAME] [--out FILE.stl|.obj|.3mf [--overwrite]] [--lang CODE] [--config FILE]   sweeps the profile (a project or a sketch file, and the sketch of it) along the path (the lines and arcs of another sketch, or one circle) and prints the length of the path, the volume and the surface of the solid made and, with a material of the settings, its mass; the profile starts on the path, its first axis to the left of the way the path is walked from the free end of its first element; with --out the triangles of the solid are written as for revolve
+  eh3d-phoenix-cad sketch-import DRAWING.dxf [--out FILE.phoenixsketch] [--name NAME] [--face NAME] [--unit mm|cm|m|in] [--overwrite] [--lang CODE] [--config FILE]   reads the lines, circles, arcs and polylines of a text DXF drawing into a new sketch (the ends that meet become one point, so closed outlines can be raised from a face or cut into it) and writes it as a sketch file; what is not read (text, dimensions, splines, ...) is counted and told; the unit is that of the drawing (mm without --unit), the sketch lies on the face given (front without --face), and its name is the one of the file without --name
   eh3d-phoenix-cad section PROJECT.phoenixproj --axis x|y|z --at LENGTH [--format dxf|svg] [--out FILE] [--overwrite] [--lang CODE] [--config FILE]   cuts the solids of a project (the box, the parts and the turned and swept bodies) with the plane across an axis at a position (a length: 15, 15 mm, 0.5 in) and prints the outlines and the area of the material; with --out the section is written as a DXF or SVG drawing (the format is --format or the extension of the file; never over a file that exists unless --overwrite is given)
   eh3d-phoenix-cad library FILE.phoenixlib [--config FILE]                        reads a library of parts, checks it and lists its parts
   eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill [--view top|front|side] [--out FILE] [--overwrite] [--ascii|--binary] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), as a Wavefront file (obj) or as a 3MF package (3mf), the plan, front or side as a drawing (dxf, svg), the STEP file, the OpenSCAD-style script, the fit report or the bill of materials
@@ -660,6 +661,121 @@ fn run_sketch_export(args: &[String]) -> Result<bool, String> {
     Ok(true)
 }
 
+/// `sketch-import`: reads a text DXF drawing into a sketch and writes the sketch file. Nothing is
+/// written over a file that exists unless `--overwrite` is given.
+fn run_sketch_import(args: &[String]) -> Result<bool, String> {
+    let mut config: Option<PathBuf> = None;
+    let mut file: Option<PathBuf> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut name: Option<String> = None;
+    let mut face = eh3d_phoenix_cad::enclosure::Face::Front;
+    let mut unit_nm: i64 = 1_000_000;
+    let mut overwrite = false;
+    let mut lang = Lang::En;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--config" => {
+                config = Some(PathBuf::from(
+                    iter.next().ok_or("--config needs a settings file")?,
+                ));
+            }
+            "--out" => out = Some(PathBuf::from(iter.next().ok_or("--out needs a file")?)),
+            "--name" => name = Some(iter.next().ok_or("--name needs a name")?.clone()),
+            "--face" => {
+                let word = iter.next().ok_or("--face needs a face")?;
+                face = eh3d_phoenix_cad::enclosure::Face::from_name(word).ok_or_else(|| {
+                    format!("{word}: not a face (front, back, left, right, top or bottom)")
+                })?;
+            }
+            "--unit" => {
+                let word = iter.next().ok_or("--unit needs mm, cm, m or in")?;
+                unit_nm = match word.as_str() {
+                    "mm" => 1_000_000,
+                    "cm" => 10_000_000,
+                    "m" => 1_000_000_000,
+                    "in" => 25_400_000,
+                    other => return Err(format!("{other}: unknown unit (mm, cm, m or in)")),
+                };
+            }
+            "--overwrite" => overwrite = true,
+            "--lang" => {
+                let code = iter.next().ok_or("--lang needs a language code")?;
+                lang = Lang::from_code(code).ok_or("unknown language code")?;
+            }
+            other if other.starts_with("--") => return Err(format!("unknown option {other}")),
+            other => {
+                if file.is_some() {
+                    return Err("only one drawing can be read".to_owned());
+                }
+                file = Some(PathBuf::from(other));
+            }
+        }
+    }
+    let file = file.ok_or("sketch-import needs a DXF drawing")?;
+    let (settings, ui) = load_settings(config.as_deref())?;
+    let solver = load_solver_settings(config.as_deref())?;
+    let bytes = eh3d_phoenix_cad::store::load_limited(&file, u64::from(ui.export.max_kib) * 1024)
+        .map_err(|e| format!("{}: {}", file.display(), error_text(&e, lang)))?;
+    let text = String::from_utf8(bytes)
+        .map_err(|_| format!("{}: the drawing is not text", file.display()))?;
+    let name = name.unwrap_or_else(|| {
+        file.file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    });
+    let join = eh3d_phoenix_cad::profile::ProfileLimits::from_settings(&solver).join_nm;
+    let imported = eh3d_phoenix_cad::dxf_import::from_dxf(
+        &text,
+        &name,
+        eh3d_phoenix_cad::sketch::SketchPlane::on_face(face),
+        unit_nm,
+        join,
+        settings.drawing.max_entities as usize,
+    )
+    .map_err(|e| format!("{}: {}", file.display(), error_text(&e, lang)))?;
+    let target = out.unwrap_or_else(|| {
+        PathBuf::from(format!(
+            "{name}.{}",
+            eh3d_phoenix_cad::sketch::file::EXTENSION
+        ))
+    });
+    if target.exists() && !overwrite {
+        return Err(error_text(
+            &eh3d_phoenix_cad::CadError::ExportExists(target.display().to_string()),
+            lang,
+        ));
+    }
+    eh3d_phoenix_cad::sketch::file::write_file(&target, &imported.sketch, settings.backups)
+        .map_err(|e| error_text(&e, lang))?;
+    println!(
+        "{}",
+        eh3d_phoenix_cad::lang::fill(
+            Msg::DxfRead.tr(lang),
+            &[
+                &imported.lines.to_string(),
+                &imported.circles.to_string(),
+                &imported.arcs.to_string()
+            ]
+        )
+    );
+    for (what, count) in &imported.skipped {
+        println!(
+            "{}",
+            eh3d_phoenix_cad::lang::fill(Msg::DxfSkipped.tr(lang), &[what, &count.to_string()])
+        );
+    }
+    let written = fs::metadata(&target).map_or(0, |m| m.len());
+    println!(
+        "{}",
+        eh3d_phoenix_cad::lang::fill(
+            Msg::Exported.tr(lang),
+            &[&target.display().to_string(), &written.to_string()]
+        )
+    );
+    Ok(true)
+}
+
 /// `section`: reads a project, cuts its solids with a plane and prints the outlines and the area of
 /// the material; with `--out` the section is also written as a DXF or SVG drawing.
 fn run_section(args: &[String]) -> Result<bool, String> {
@@ -887,6 +1003,7 @@ fn run(args: &[String]) -> Result<bool, String> {
         "sweep" => run_sweep(rest),
         "sketch-export" => run_sketch_export(rest),
         "section" => run_section(rest),
+        "sketch-import" => run_sketch_import(rest),
         "library" => run_library(rest),
         "export" => run_export(rest),
         "gui" => Err("this build has no window: build it with --features gui".to_owned()),
@@ -903,7 +1020,7 @@ fn window_request(args: &[String]) -> Option<Result<shot::WindowArgs, String>> {
         Some(
             "help" | "--help" | "-h" | "config" | "check" | "interference" | "bill" | "cutplan"
             | "clearance" | "placements" | "holes" | "partlist" | "balance" | "revolve" | "sweep"
-            | "sketch-export" | "section" | "library" | "export",
+            | "sketch-export" | "section" | "sketch-import" | "library" | "export",
         ) => return None,
         Some(first) if first.starts_with("--") => {}
         Some(first) => {
