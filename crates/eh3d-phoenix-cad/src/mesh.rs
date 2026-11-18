@@ -69,6 +69,27 @@ impl Mesh {
         total / 6.0
     }
 
+    /// The centre of mass of the solid the closed surface bounds, in nanometres: the mean of the
+    /// centres of the signed tetrahedra of the triangles with a corner of the mesh, weighted by
+    /// their volumes. `None` when the surface holds no volume.
+    pub fn centroid_nm(&self) -> Option<P3> {
+        let origin = *self.vertices.first()?;
+        let mut six_volumes = 0.0;
+        let mut moment = [0.0f64; 3];
+        for t in &self.triangles {
+            let [a, b, c] = self.corners(t);
+            let v = dot(sub(a, origin), cross(sub(b, origin), sub(c, origin)));
+            six_volumes += v;
+            for (k, m) in moment.iter_mut().enumerate() {
+                *m += v * (a[k] + b[k] + c[k] + origin[k]);
+            }
+        }
+        if six_volumes.abs() < 1.0 {
+            return None;
+        }
+        Some(moment.map(|m| m / (4.0 * six_volumes)))
+    }
+
     /// The unit normal of a triangle (zero for a triangle with no area).
     pub fn normal(&self, t: &[u32; 3]) -> P3 {
         let [a, b, c] = self.corners(t);
@@ -989,5 +1010,17 @@ mod tests {
         let mut bin = vec![b' '; 80];
         bin.extend_from_slice(&5u32.to_le_bytes());
         assert!(read_stl(&bin).is_err());
+    }
+
+    #[test]
+    fn the_centre_of_mass_of_a_closed_surface_is_its_centroid() {
+        // a box of 2 by 4 by 6 mm with a corner at the origin
+        let c = cuboid(2e6, 4e6, 6e6).centroid_nm().unwrap();
+        assert!((c[0] - 1e6).abs() < 1.0 && (c[1] - 2e6).abs() < 1.0 && (c[2] - 3e6).abs() < 1.0);
+        // moved, its centre moves with it
+        let moved = cuboid(2e6, 4e6, 6e6).mapped(|p| [p[0] + 10e6, p[1] - 4e6, p[2]]);
+        let c = moved.centroid_nm().unwrap();
+        assert!((c[0] - 11e6).abs() < 1.0 && (c[1] + 2e6).abs() < 1.0);
+        assert!(Mesh::default().centroid_nm().is_none());
     }
 }

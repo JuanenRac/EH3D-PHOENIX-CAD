@@ -328,6 +328,12 @@ impl Drawing {
             let b = [hi[0] as f64, hi[1] as f64, hi[2] as f64];
             entities.extend(box_in_view(view, a, b));
         }
+        for body in enclosure.turned().values() {
+            let (lo, hi) = body.bounds()?;
+            let a = [lo[0] as f64, lo[1] as f64, lo[2] as f64];
+            let b = [hi[0] as f64, hi[1] as f64, hi[2] as f64];
+            entities.extend(box_in_view(view, a, b));
+        }
         // the openings of the face that the view looks at, and the centre lines
         let over = mm(settings.axis_overshoot.get());
         let mut axes: Vec<(Layer, Entity)> = Vec::new();

@@ -81,6 +81,16 @@ impl PrinterProfile {
                 part: part.clone(),
             })?;
         }
+        // turned bodies are not printed by this model either: they stay where they are
+        if !design.turned().is_empty() {
+            out.set_sketches(design.sketches().to_vec(), design.profile_limits());
+            for (id, body) in design.turned() {
+                out.apply(Operation::AddTurned {
+                    id: *id,
+                    turned: body.spec.clone(),
+                })?;
+            }
+        }
         // the mates keep the parts relative to each other
         for (id, mate) in design.mates() {
             out.apply(Operation::AddMate {

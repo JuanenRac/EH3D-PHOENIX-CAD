@@ -33,6 +33,16 @@ pub struct Balance {
     pub centre_nm: Option<[i64; 3]>,
 }
 
+/// A body whose mass and centre are known already, such as a turned body (see
+/// [`crate::turned`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Weighed {
+    /// The mass in micrograms.
+    pub mass_ug: i128,
+    /// Twice the centre of mass in nanometres.
+    pub middle2_nm: [i128; 3],
+}
+
 /// The balance of the parts. The density of each material is in `densities` (kilograms per cubic
 /// metre, the table of the settings); a material that is not there is refused with
 /// `PHOENIX-CAD-045`, as in the bill of materials.
@@ -40,9 +50,31 @@ pub fn balance(
     parts: &BTreeMap<Id, PartInstance>,
     densities: &BTreeMap<String, u32>,
 ) -> Result<Balance, CadError> {
+    balance_with(parts, &[], densities)
+}
+
+/// The balance of the parts and of other bodies that were weighed already; each of them counts as
+/// one more part with an exact centre.
+pub fn balance_with(
+    parts: &BTreeMap<Id, PartInstance>,
+    weighed: &[Weighed],
+    densities: &BTreeMap<String, u32>,
+) -> Result<Balance, CadError> {
     let mut total: i128 = 0;
     let mut moment2 = [0i128; 3];
     let mut estimated = 0usize;
+    for w in weighed {
+        total = total
+            .checked_add(w.mass_ug)
+            .ok_or(CadError::Overflow("mass"))?;
+        for (k, slot) in moment2.iter_mut().enumerate() {
+            *slot = w
+                .mass_ug
+                .checked_mul(w.middle2_nm[k])
+                .and_then(|x| x.checked_add(*slot))
+                .ok_or(CadError::Overflow("moment"))?;
+        }
+    }
     for p in parts.values() {
         let density = *densities.get(&p.part.material).ok_or_else(|| {
             CadError::Part(format!(
@@ -75,7 +107,7 @@ pub fn balance(
         None
     };
     Ok(Balance {
-        parts: parts.len(),
+        parts: parts.len() + weighed.len(),
         estimated,
         mass_ug: total,
         centre_nm,
@@ -239,6 +271,30 @@ mod tests {
         assert_eq!(
             balance_text(&b),
             "parts: 2\nmass: 16.000 g\ncentre of mass: 55 5 5 mm\nestimated centres: 0 of 2 parts (screws and brackets use the middle of their box)\n"
+        );
+    }
+
+    #[test]
+    fn a_body_that_was_weighed_counts_as_a_part_with_an_exact_centre() {
+        // a cube of 10 mm of steel at x = 0 (8 g) and a body of 2 g whose centre is at x = 40 mm:
+        // (8 x 5 + 2 x 40) / 10 = 12 mm
+        let parts = set(vec![(1, cube("steel", 0))]);
+        let weighed = [Weighed {
+            mass_ug: 2_000_000,
+            middle2_nm: [80_000_000, 0, 0],
+        }];
+        let b = balance_with(&parts, &weighed, &densities()).unwrap();
+        assert_eq!((b.parts, b.estimated), (2, 0));
+        assert_eq!(b.mass_ug, 10_000_000);
+        assert_eq!(b.centre_nm.unwrap()[0], 12_000_000);
+        // with no part at all the body is the whole of it
+        let alone = balance_with(&BTreeMap::new(), &weighed, &densities()).unwrap();
+        assert_eq!(alone.parts, 1);
+        assert_eq!(alone.centre_nm, Some([40_000_000, 0, 0]));
+        // and without bodies it is the balance of the parts
+        assert_eq!(
+            balance_with(&parts, &[], &densities()).unwrap(),
+            balance(&parts, &densities()).unwrap()
         );
     }
 }

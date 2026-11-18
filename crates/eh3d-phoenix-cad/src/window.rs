@@ -39,6 +39,7 @@ use crate::sketch::file as sketch_file;
 use crate::sketch::settings::SketchSettings;
 use crate::sketch::{check_sketch_name, Sketch};
 use crate::store;
+use crate::turned::TurnedSpec;
 use crate::uiconfig::UiSettings;
 use crate::units::{format_angle, format_length, parse_angle, parse_length, Count};
 use crate::vars::{Param, Variables};
@@ -73,6 +74,8 @@ pub enum Selection {
     Part(usize),
     /// A mate between two placed parts: the index of its step.
     Mate(usize),
+    /// A turned body: the index of its step.
+    Turned(usize),
     /// A part of the open library, which is not in the model: its place in the library.
     CatalogPart(usize),
     /// A step that has no editor of its own: its index.
@@ -108,6 +111,8 @@ pub enum NewStep {
     Part,
     /// A mate between the selected part and the one before it, of the kind the settings say.
     Mate,
+    /// A sketch of the project turned about an axis, as a body of its own.
+    Turned,
 }
 
 /// A row of the sheet of variables.
@@ -152,6 +157,7 @@ impl Selection {
             | Selection::Fins(i)
             | Selection::Part(i)
             | Selection::Mate(i)
+            | Selection::Turned(i)
             | Selection::Other(i) => Some(i),
             Selection::Nothing
             | Selection::Body
@@ -286,6 +292,12 @@ pub enum Key {
     PartPlaced,
     /// The parts that share volume with a part (read only).
     PartConflicts,
+    /// The axis of the sketch a turned body is turned about.
+    TurnedAxis,
+    /// The turn of a turned body, in degrees.
+    TurnedAngle,
+    /// The material of a turned body.
+    TurnedMaterial,
 }
 
 /// How a field is edited.
@@ -687,6 +699,7 @@ pub fn step_label(step: &Step) -> String {
         Operation::AddPattern { pattern, .. } => pattern.name().to_string(),
         Operation::AddFins { fins, .. } => fins.name.clone(),
         Operation::AddPart { part, .. } => part.name.clone(),
+        Operation::AddTurned { turned, .. } => turned.name.clone(),
         _ => "-".to_string(),
     }
 }
@@ -702,6 +715,7 @@ fn the_selection_of(index: usize, step: &Step) -> Selection {
         Operation::AddFins { .. } => Selection::Fins(index),
         Operation::AddPart { .. } => Selection::Part(index),
         Operation::AddMate { .. } => Selection::Mate(index),
+        Operation::AddTurned { .. } => Selection::Turned(index),
         _ => Selection::Other(index),
     }
 }
@@ -896,6 +910,7 @@ impl Window {
         let mut fins = Vec::new();
         let mut parts = Vec::new();
         let mut mates = Vec::new();
+        let mut turned = Vec::new();
         let mut edges = Vec::new();
         let mut lids = Vec::new();
         let mut features = Vec::new();
@@ -914,6 +929,7 @@ impl Window {
                 Selection::Fins(_) => fins.push(item),
                 Selection::Part(_) => parts.push(item),
                 Selection::Mate(_) => mates.push(item),
+                Selection::Turned(_) => turned.push(item),
                 Selection::Edging(_) => edges.push(item),
                 Selection::Lid(_) => lids.push(item),
                 Selection::Feature(_) => features.push(item),
@@ -970,6 +986,7 @@ impl Window {
             (Msg::GroupFins, fins),
             (Msg::GroupParts, parts),
             (Msg::GroupMates, mates),
+            (Msg::GroupTurned, turned),
             (Msg::GroupEdges, edges),
             (Msg::GroupLid, lids),
             (Msg::GroupScrews, screws),
@@ -1004,6 +1021,7 @@ impl Window {
             | Selection::Fins(i)
             | Selection::Part(i)
             | Selection::Mate(i)
+            | Selection::Turned(i)
             | Selection::Other(i) => i < self.mech.steps.len(),
             Selection::CatalogPart(k) => k < self.library.as_ref().map_or(0, |l| l.parts.len()),
             Selection::Screw(k) => k < self.built.enclosure.lid_holes().len(),
@@ -1025,7 +1043,8 @@ impl Window {
                 | Some(Operation::Extrude { id, .. })
                 | Some(Operation::Pocket { id, .. })
                 | Some(Operation::AddFins { id, .. })
-                | Some(Operation::AddPart { id, .. }) => Highlight::Object(*id),
+                | Some(Operation::AddPart { id, .. })
+                | Some(Operation::AddTurned { id, .. }) => Highlight::Object(*id),
                 Some(Operation::AddMate { mate, .. }) => Highlight::Object(mate.b),
                 Some(Operation::AddPattern { id, .. }) => Highlight::Pattern(*id),
                 _ => Highlight::Nothing,
@@ -1038,6 +1057,7 @@ impl Window {
             | Selection::Pattern(i)
             | Selection::Fins(i)
             | Selection::Part(i)
+            | Selection::Turned(i)
             | Selection::Mate(i) => id_of(i),
             Selection::Screw(k) => Highlight::Screw(k),
             _ => Highlight::Nothing,
@@ -1206,6 +1226,9 @@ impl Window {
             }
             (Selection::Mate(_), Some(Operation::AddMate { mate, .. })) => {
                 self.mate_fields(mate, writable)
+            }
+            (Selection::Turned(_), Some(Operation::AddTurned { id, turned })) => {
+                self.turned_fields(*id, turned, writable)
             }
             (Selection::CatalogPart(k), _) => self.catalog_fields(k),
             (Selection::Edging(_), Some(Operation::SetEdging(edging))) => {
@@ -1739,6 +1762,83 @@ impl Window {
         out
     }
 
+    /// The fields of a turned body: its name, its sketch, the axis and the turn, the material, the
+    /// position of the origin of the sketch and, once the model has it, its volume, mass and size.
+    fn turned_fields(&self, id: Id, turned: &TurnedSpec, writable: bool) -> Vec<Field> {
+        let text = |key: Key, label: Msg, text: String| Field {
+            key,
+            label,
+            text,
+            note: String::new(),
+            input: Input::Text,
+            editable: writable,
+        };
+        let mut out = vec![
+            text(Key::Name, Msg::FieldName, turned.name.clone()),
+            self.sketch_field(&turned.sketch, writable),
+            text(
+                Key::TurnedAxis,
+                Msg::FieldTurnedAxis,
+                turned.axis.name().to_string(),
+            ),
+            text(
+                Key::TurnedAngle,
+                Msg::FieldTurnedAngle,
+                format_angle(turned.angle),
+            ),
+            text(
+                Key::TurnedMaterial,
+                Msg::FieldPartMaterial,
+                turned.material.clone(),
+            ),
+            self.length_field(Key::PartX, Msg::FieldPartX, turned.at[0], writable),
+            self.length_field(Key::PartY, Msg::FieldPartY, turned.at[1], writable),
+            self.length_field(Key::PartZ, Msg::FieldPartZ, turned.at[2], writable),
+        ];
+        if let Some(body) = self.built.enclosure.turned().get(&id) {
+            if let Ok((lo, hi)) = body.bounds() {
+                out.push(Self::info_field(
+                    Key::PartSize,
+                    Msg::FieldPartSize,
+                    self.size_text([hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]),
+                ));
+            }
+            out.extend(self.material_fields(body.volume_nm3(), &turned.material));
+        }
+        out
+    }
+
+    /// A turned body after an edit of the field `key`. The material has to be one of the settings.
+    fn edited_turned(
+        &self,
+        turned: &TurnedSpec,
+        key: Key,
+        text: &str,
+    ) -> Result<TurnedSpec, CadError> {
+        let mut t = turned.clone();
+        match key {
+            Key::Name => t.name = text.trim().to_string(),
+            Key::Sketch => t.sketch = self.edited_sketch(&turned.sketch, key, text)?,
+            Key::TurnedAxis => {
+                t.axis = crate::revolve::Axis::from_name(text.trim())
+                    .ok_or_else(|| CadError::Reference(text.trim().to_string()))?;
+            }
+            Key::TurnedAngle => t.angle = parse_angle(text)?,
+            Key::TurnedMaterial => {
+                let name = text.trim();
+                if !self.settings.materials.contains_key(name) {
+                    return Err(CadError::UnknownName(name.to_string()));
+                }
+                t.material = name.to_string();
+            }
+            Key::PartX => t.at[0] = self.parse_text(text)?,
+            Key::PartY => t.at[1] = self.parse_text(text)?,
+            Key::PartZ => t.at[2] = self.parse_text(text)?,
+            _ => return Err(refusal()),
+        }
+        Ok(t)
+    }
+
     /// The fields of a part of the open library, which are all read only: what it is made of and
     /// how big it is at its usual cut.
     fn catalog_fields(&self, index: usize) -> Vec<Field> {
@@ -1957,13 +2057,40 @@ impl Window {
     pub fn balance(&self) -> Result<crate::balance::Balance, CadError> {
         let placed =
             crate::assembly::place(self.built.enclosure.parts(), self.built.enclosure.mates())?;
-        crate::balance::balance(&placed, &self.settings.materials)
+        let weighed = self.weighed_turned()?;
+        crate::balance::balance_with(&placed, &weighed, &self.settings.materials)
+    }
+
+    /// The mass and the centre of mass of each turned body of the model.
+    fn weighed_turned(&self) -> Result<Vec<crate::balance::Weighed>, CadError> {
+        self.built
+            .enclosure
+            .turned()
+            .values()
+            .map(|t| {
+                let density = *self
+                    .settings
+                    .materials
+                    .get(&t.spec.material)
+                    .ok_or_else(|| {
+                        CadError::Part(format!(
+                            "the material {} of {} is not in the settings",
+                            t.spec.material, t.spec.name
+                        ))
+                    })?;
+                t.weigh(density, &self.settings.mesh)
+            })
+            .collect()
     }
 
     /// The placed parts (with the mates applied) with their kind, material, volume, mass and box
     /// (see [`crate::partlist`]).
     pub fn part_list(&self) -> Result<crate::partlist::List, CadError> {
-        crate::partlist::list(&self.placed_parts()?, &self.settings.materials)
+        crate::partlist::list_with(
+            &self.placed_parts()?,
+            self.built.enclosure.turned(),
+            &self.settings.materials,
+        )
     }
 
     /// The list of the placed parts as comma separated values.
@@ -1999,15 +2126,11 @@ impl Window {
     ) -> String {
         use crate::panels::{self, Panel};
         let lang = self.lang;
-        let needs_parts = matches!(
-            panel,
-            Panel::CutPlan
-                | Panel::Clearance
-                | Panel::Placements
-                | Panel::PartList
-                | Panel::Balance
-        );
-        if needs_parts && self.built.enclosure.parts().is_empty() {
+        let needs_parts = matches!(panel, Panel::CutPlan | Panel::Clearance | Panel::Placements);
+        let needs_bodies = matches!(panel, Panel::PartList | Panel::Balance);
+        let no_parts = self.built.enclosure.parts().is_empty();
+        let no_bodies = no_parts && self.built.enclosure.turned().is_empty();
+        if (needs_parts && no_parts) || (needs_bodies && no_bodies) {
             return Msg::PanelNoParts.tr(lang).to_string();
         }
         let text = match panel {
@@ -2246,6 +2369,10 @@ impl Window {
             Operation::AddMate { id, mate } => Ok(Operation::AddMate {
                 id: *id,
                 mate: self.edited_mate(mate, key, text)?,
+            }),
+            Operation::AddTurned { id, turned } => Ok(Operation::AddTurned {
+                id: *id,
+                turned: self.edited_turned(turned, key, text)?,
             }),
             Operation::SetEdging(edging) => {
                 Ok(Operation::SetEdging(self.edited_edging(edging, key, text)?))
@@ -2722,7 +2849,9 @@ impl Window {
                 | Operation::AddPart { id, .. }
                 | Operation::RemovePart { id }
                 | Operation::AddMate { id, .. }
-                | Operation::RemoveMate { id } => ids.push(*id),
+                | Operation::RemoveMate { id }
+                | Operation::AddTurned { id, .. }
+                | Operation::RemoveTurned { id } => ids.push(*id),
                 Operation::AddPattern { id, pattern } => ids.extend(pattern.instance_ids(*id)),
                 Operation::AddPost { id, post } | Operation::ReplacePost { id, post } => {
                     ids.push(*id);
@@ -3028,6 +3157,40 @@ impl Window {
                     ))
                 }
             }
+            NewStep::Turned => {
+                let sketch = self
+                    .active_sketch
+                    .as_ref()
+                    .filter(|name| self.mech.sketch(name).is_some())
+                    .cloned()
+                    .or_else(|| self.mech.sketches.first().map(|s| s.name().to_string()))
+                    .ok_or_else(|| CadError::Feature("the project has no sketch".to_string()))?;
+                if !self.settings.materials.contains_key(&d.turned_material) {
+                    return Err(CadError::UnknownName(d.turned_material.clone()));
+                }
+                let count = self
+                    .mech
+                    .steps
+                    .iter()
+                    .filter(|s| matches!(s.op, Operation::AddTurned { .. }))
+                    .count();
+                let name = fill(Msg::NameTurned.tr(self.lang), &[&(count + 1).to_string()]);
+                let turned = TurnedSpec {
+                    name: name.clone(),
+                    sketch,
+                    axis: self.ui.panels.revolve_axis,
+                    angle: crate::units::Angle::from_deg(i64::from(self.ui.panels.revolve_angle))?,
+                    at: [d.part_x.checked_add(shift)?, d.part_y, d.part_z],
+                    material: d.turned_material.clone(),
+                };
+                Ok((
+                    Operation::AddTurned {
+                        id: self.fresh_id()?,
+                        turned,
+                    },
+                    name,
+                ))
+            }
             NewStep::Edging => {
                 if self
                     .mech
@@ -3063,7 +3226,11 @@ impl Window {
 
     fn step_addition(&mut self, kind: NewStep) -> Result<(), CadError> {
         let tries = match kind {
-            NewStep::Edging | NewStep::Extrude | NewStep::Pocket | NewStep::Mate => 1,
+            NewStep::Edging
+            | NewStep::Extrude
+            | NewStep::Pocket
+            | NewStep::Mate
+            | NewStep::Turned => 1,
             NewStep::Hole
             | NewStep::Post
             | NewStep::HolePattern
@@ -3177,6 +3344,7 @@ impl Window {
         }
         let used = self.mech.steps.iter().any(|s| match &s.op {
             Operation::Extrude { sketch, .. } | Operation::Pocket { sketch, .. } => sketch == name,
+            Operation::AddTurned { turned, .. } => turned.sketch == name,
             _ => false,
         });
         let result = if used {
@@ -7152,6 +7320,74 @@ CONTORNO
         w.keep_sketch(across);
         let crossing = w.revolve_panel_text("across", TurnAxis::X, "360", None);
         assert!(crossing.starts_with("PHOENIX-CAD-036"), "{crossing}");
+    }
+
+    #[test]
+    fn a_turned_body_is_a_step_with_fields_a_volume_and_a_place_in_the_lists_and_the_files() {
+        let mut w = fresh();
+        // without a sketch there is nothing to turn
+        w.add_step(NewStep::Turned);
+        assert!(problem(&w), "{:?}", w.status);
+        w.keep_sketch(plate());
+        w.add_step(NewStep::Turned);
+        assert!(!problem(&w), "{:?}", w.status);
+        assert_eq!(w.selection, Selection::Turned(0));
+        assert_eq!(w.mech.steps[0].name, "Turned body 1");
+        assert_eq!(w.enclosure().turned().len(), 1);
+        assert_eq!(w.mech.version(), 6);
+        // 40 x 25 mm from the axis with a hole of 3 mm radius: a full turn holds 76407.982 mm3
+        assert!(text_of(&w, Key::PartVolume).starts_with("76407.98"));
+        assert_eq!(text_of(&w, Key::TurnedAxis), "x");
+        assert_eq!(text_of(&w, Key::TurnedAngle), "360");
+        assert_eq!(text_of(&w, Key::TurnedMaterial), "PLA");
+        // the group of the tree
+        let groups = w.tree();
+        assert!(groups.iter().any(|g| g.title == Msg::GroupTurned));
+        // half a turn has half the volume
+        set(&mut w, Key::TurnedAngle, "180");
+        assert!(!problem(&w), "{:?}", w.status);
+        assert!(text_of(&w, Key::PartVolume).starts_with("38203.99"));
+        // a refused value leaves the body as it was
+        for (key, text) in [
+            (Key::TurnedAxis, "z"),
+            (Key::TurnedMaterial, "glue"),
+            (Key::TurnedAngle, "0"),
+            (Key::Sketch, "nothing"),
+        ] {
+            set(&mut w, key, text);
+            assert!(problem(&w), "{key:?} {text}");
+        }
+        assert_eq!(text_of(&w, Key::TurnedAngle), "180");
+        set(&mut w, Key::PartX, "50 mm");
+        assert!(!problem(&w), "{:?}", w.status);
+        // the lists and the balance count it
+        let b = w.balance().unwrap();
+        assert_eq!((b.parts, b.estimated), (1, 0));
+        assert!(
+            b.mass_ug > 47_000_000 && b.mass_ug < 47_800_000,
+            "{}",
+            b.mass_ug
+        );
+        let list = w.part_list().unwrap();
+        assert_eq!(list.rows.len(), 1);
+        assert!(list.rows[0].turned);
+        let csv = w.part_list_csv().unwrap();
+        assert!(
+            csv.contains("Turned body 1,turned,plate,PLA,1240,"),
+            "{csv}"
+        );
+        assert!(csv.contains("total,1 parts,"), "{csv}");
+        w.lang = Lang::Es;
+        assert!(w.part_list_text().unwrap().contains("de revolución"));
+        w.lang = Lang::En;
+        // the sketch it uses cannot be removed
+        w.remove_sketch("plate");
+        assert!(problem(&w), "{:?}", w.status);
+        // and the files of triangles hold the body after the box
+        let bodies = crate::solid::bodies(w.enclosure(), &w.settings.mesh).unwrap();
+        assert_eq!(bodies.len(), 2);
+        assert_eq!(bodies[1].name, "Turned body 1");
+        assert!(crate::step::export_step(w.enclosure()).is_err());
     }
 
     #[test]

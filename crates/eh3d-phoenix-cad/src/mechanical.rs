@@ -29,7 +29,9 @@
 //! `remove-part` (a part of a library of parts placed in the model, with a copy of the part, its position, its orientation on
 //! the axes and the length it is cut to); only a recipe that places a part is written as version 4. Version 5 adds the steps `add-mate` and `remove-mate`
 //! (a part placed relative to another along one axis: a gap, an alignment or a stack); only a recipe that has a mate is written
-//! as version 5, so a project without one keeps the version and the bytes it had. The sketches
+//! as version 5, so a project without one keeps the version and the bytes it had. Version 6 adds the steps `add-turned` and `remove-turned`
+//! (a sketch of the project turned about one of its axes as a body of its own, with its angle, its position and its material); only a
+//! recipe that has a turned body is written as version 6, and the recipes of versions 1 to 5 are read and written as before. The sketches
 //! are not in this domain: they have their own domain, `sketch` (see [`crate::sketch::domain`]).
 
 use std::collections::BTreeSet;
@@ -49,7 +51,9 @@ use crate::parametric::ParamModel;
 use crate::pattern::{Layout, PatternOp, Seed};
 use crate::profile::ProfileLimits;
 use crate::project::{parameters_from_bytes, parameters_to_bytes, Document, PARAMETERS_DOMAIN};
+use crate::revolve::Axis;
 use crate::sketch::{check_sketch_name, Sketch};
+use crate::turned::TurnedSpec;
 use crate::units::{Angle, Count};
 use crate::vars::{Param, Variables};
 use crate::{CadError, Length};
@@ -58,7 +62,7 @@ use crate::{CadError, Length};
 pub const MECHANICAL_DOMAIN: &str = "mechanical";
 
 /// The newest version of the text of the domain that this program writes and reads.
-pub const DOMAIN_VERSION: u32 = 5;
+pub const DOMAIN_VERSION: u32 = 6;
 
 /// The version of a recipe that has no extrusion, no pocket and no pattern.
 pub const FIRST_VERSION: u32 = 1;
@@ -526,6 +530,22 @@ fn operation_words(op: &Operation, limits: &MechanicalLimits) -> Result<Vec<Stri
             words.push("remove-mate".to_string());
             words.push(id.to_string());
         }
+        Operation::AddTurned { id, turned } => {
+            words.push("add-turned".to_string());
+            words.push(id.to_string());
+            words.push(escape(&turned.name, limits)?);
+            words.push(sketch_word(&turned.sketch)?);
+            words.push(turned.axis.name().to_string());
+            words.push(turned.angle.get().to_string());
+            for v in turned.at {
+                words.push(v.get().to_string());
+            }
+            words.push(escape(&turned.material, limits)?);
+        }
+        Operation::RemoveTurned { id } => {
+            words.push("remove-turned".to_string());
+            words.push(id.to_string());
+        }
     }
     Ok(words)
 }
@@ -587,10 +607,11 @@ fn layout_of(word: &str) -> Result<Layout, CadError> {
     }
 }
 
-/// The version of the domain a step needs: 5 for a mate, 4 for a placed part, 3 for a pattern or
+/// The version of the domain a step needs: 6 for a turned body, 5 for a mate, 4 for a placed part, 3 for a pattern or
 /// cooling fins, 2 for an extrusion or a pocket and 1 for the rest.
 fn step_version(op: &Operation) -> u32 {
     match op {
+        Operation::AddTurned { .. } | Operation::RemoveTurned { .. } => 6,
         Operation::AddMate { .. } | Operation::RemoveMate { .. } => 5,
         Operation::AddPart { .. } | Operation::RemovePart { .. } => 4,
         Operation::AddPattern { .. }
@@ -734,6 +755,31 @@ fn operation_of(words: &[&str], limits: &MechanicalLimits) -> Result<Operation, 
             mate: Mate::from_words(rest).map_err(|e| bad(&e))?,
         }),
         ["remove-mate", id] => Ok(Operation::RemoveMate { id: id_of(id)? }),
+        ["add-turned", id, name, sketch, axis, angle, x, y, z, material] => {
+            let ndeg = angle
+                .parse::<i64>()
+                .ok()
+                .filter(|v| v.to_string() == *angle)
+                .ok_or_else(|| bad("the angle of a turned body is not a whole number"))?;
+            Ok(Operation::AddTurned {
+                id: id_of(id)?,
+                turned: TurnedSpec {
+                    name: unescape(name, limits)?,
+                    sketch: sketch_word(sketch)?,
+                    axis: Axis::from_name(axis)
+                        .ok_or_else(|| bad("the axis of a turned body is not known"))?,
+                    angle: Angle::new(ndeg)
+                        .map_err(|_| bad("the angle of a turned body is out of range"))?,
+                    at: [
+                        length_of(x, "position of a turned body")?,
+                        length_of(y, "position of a turned body")?,
+                        length_of(z, "position of a turned body")?,
+                    ],
+                    material: unescape(material, limits)?,
+                },
+            })
+        }
+        ["remove-turned", id] => Ok(Operation::RemoveTurned { id: id_of(id)? }),
         _ => Err(bad("a step is not understood")),
     }
 }
@@ -2257,11 +2303,11 @@ hole 018bcfe5-6800-7004-8000-000000000004 H4 55000000 35000000 3200000\n";
     #[test]
     fn a_domain_of_a_newer_version_is_neither_read_nor_overwritten() {
         let s = settings();
-        let future = b"mechanical 6\nwhatever \xff comes next\n".to_vec();
+        let future = b"mechanical 7\nwhatever \xff comes next\n".to_vec();
         let mut d = Document::new();
         d.set(MECHANICAL_DOMAIN, true, future.clone()).unwrap();
         d.set("notes", false, b"x".to_vec()).unwrap();
-        assert_eq!(d.mechanical_version().unwrap(), Some(6));
+        assert_eq!(d.mechanical_version().unwrap(), Some(7));
         let err = d.mechanical(&s.expr, &s.mechanical).unwrap_err();
         assert_eq!(err.code(), "PHOENIX-CAD-018");
         assert!(err.to_string().contains("newer version"), "{err}");
@@ -2533,9 +2579,9 @@ mod feature_tests {
     fn a_future_version_is_neither_read_nor_overwritten() {
         let s = Settings::defaults();
         let mut d = Document::new();
-        let future = b"mechanical 6\nwhatever\n".to_vec();
+        let future = b"mechanical 7\nwhatever\n".to_vec();
         d.set(MECHANICAL_DOMAIN, true, future.clone()).unwrap();
-        assert_eq!(d.mechanical_version().unwrap(), Some(6));
+        assert_eq!(d.mechanical_version().unwrap(), Some(7));
         assert!(d.mechanical(&s.expr, &s.mechanical).is_err());
         assert!(d.set_mechanical(&with_features(), &s.mechanical).is_err());
         assert_eq!(d.get(MECHANICAL_DOMAIN).unwrap().data, future);
@@ -3062,8 +3108,8 @@ mod feature_tests {
         .unwrap();
         let e = parse(&plain.replacen("mechanical 1", "mechanical 4", 1)).unwrap_err();
         assert!(e.to_string().contains("has no step that needs it"), "{e}");
-        // a domain of version 6 is a newer one
-        let e = parse(&plain.replacen("mechanical 1", "mechanical 6", 1)).unwrap_err();
+        // a domain of version 7 is a newer one
+        let e = parse(&plain.replacen("mechanical 1", "mechanical 7", 1)).unwrap_err();
         assert!(e.to_string().contains("newer version"), "{e}");
     }
 
@@ -3304,7 +3350,7 @@ mod feature_tests {
                 .contains("version 5 is in a domain of version 4"),
             "{e}"
         );
-        let e = parse(&good.replacen("mechanical 5", "mechanical 6", 1)).unwrap_err();
+        let e = parse(&good.replacen("mechanical 5", "mechanical 7", 1)).unwrap_err();
         assert!(e.to_string().contains("newer version"), "{e}");
         let parts = String::from_utf8(with_parts().to_bytes(&s.mechanical).unwrap()).unwrap();
         let e = parse(&parts.replacen("mechanical 4", "mechanical 5", 1)).unwrap_err();
@@ -3386,6 +3432,140 @@ mod feature_tests {
         let mut d = Document::new();
         d.set_mechanical(&m, &s.mechanical).unwrap();
         assert_eq!(d.mechanical_version().unwrap(), Some(5));
+        let read = Document::from_bytes(&d.to_bytes(), 1 << 24).unwrap();
+        assert_eq!(read.mechanical(&s.expr, &s.mechanical).unwrap(), Some(m));
+    }
+
+    fn with_turned() -> Mechanical {
+        let mut m = Mechanical::new(ParamModel::new(base()).unwrap(), Variables::new());
+        m.sketches.push(plate());
+        m.steps.push(step(
+            "ring one",
+            Operation::AddTurned {
+                id: id(1),
+                turned: TurnedSpec {
+                    name: "ring one".into(),
+                    sketch: "plate".into(),
+                    axis: Axis::X,
+                    angle: Angle::from_deg(180).unwrap(),
+                    at: [mm(10), mm(0), mm(-5)],
+                    material: "PLA".into(),
+                },
+            },
+        ));
+        m.steps
+            .push(step("no ring", Operation::RemoveTurned { id: id(1) }));
+        m.tip = 1;
+        m
+    }
+
+    #[test]
+    fn turned_bodies_are_steps_of_version_six_with_a_golden_text() {
+        let s = Settings::defaults();
+        let m = with_turned();
+        assert_eq!(m.version(), 6);
+        let text = String::from_utf8(m.to_bytes(&s.mechanical).unwrap()).unwrap();
+        assert!(text.starts_with("mechanical 6\n[parameters]\n"));
+        let steps = text.split("[steps]\n").nth(1).unwrap();
+        let expect = format!(
+            "tip 1\n\
+             step 0 ring%20one add-turned {a} ring%20one plate x 180000000000 10000000 0 -5000000 PLA\n\
+             step 0 no%20ring remove-turned {a}\n",
+            a = id(1)
+        );
+        assert_eq!(steps, expect);
+        let read = Mechanical::from_bytes(text.as_bytes(), &s.expr, &s.mechanical).unwrap();
+        assert_eq!(read, m);
+        assert_eq!(read.to_bytes(&s.mechanical).unwrap(), text.as_bytes());
+        // up to the tip the body is there; with the tip after the removal it is gone
+        let built = m.build(&s.constants, &s.expr).unwrap();
+        assert_eq!(built.enclosure.turned().len(), 1);
+        assert_eq!(built.states[1], StepState::AfterTip);
+        let mut all = m.clone();
+        all.tip = 2;
+        let built = all.build(&s.constants, &s.expr).unwrap();
+        assert!(built.enclosure.turned().is_empty());
+    }
+
+    #[test]
+    fn the_older_recipes_keep_their_version_and_a_turned_body_needs_the_newest() {
+        let s = Settings::defaults();
+        assert_eq!(with_mates().version(), 5);
+        assert_eq!(with_parts().version(), 4);
+        assert_eq!(with_fins().version(), 3);
+        assert_eq!(with_features().version(), 2);
+        let mut both = with_mates();
+        both.steps.extend(with_turned().steps);
+        both.tip = both.steps.len();
+        assert_eq!(both.version(), DOMAIN_VERSION);
+        // a recipe of version 5 is read and written as it always was
+        let five = String::from_utf8(with_mates().to_bytes(&s.mechanical).unwrap()).unwrap();
+        assert!(five.starts_with("mechanical 5\n"));
+        let read = Mechanical::from_bytes(five.as_bytes(), &s.expr, &s.mechanical).unwrap();
+        assert_eq!(read.to_bytes(&s.mechanical).unwrap(), five.as_bytes());
+    }
+
+    #[test]
+    fn the_words_of_a_turned_body_that_are_not_understood_are_refused() {
+        let s = Settings::defaults();
+        let good = String::from_utf8(with_turned().to_bytes(&s.mechanical).unwrap()).unwrap();
+        let parse = |t: &str| Mechanical::from_bytes(t.as_bytes(), &s.expr, &s.mechanical);
+        let line = "ring%20one plate x 180000000000 10000000 0 -5000000 PLA";
+        for bad in [
+            // the axis, the angle, a position and a name that are not what they must be
+            "ring%20one plate z 180000000000 10000000 0 -5000000 PLA",
+            "ring%20one plate x 180.5 10000000 0 -5000000 PLA",
+            "ring%20one plate x 0180000000000 10000000 0 -5000000 PLA",
+            "ring%20one plate x 9999999999999999 10000000 0 -5000000 PLA",
+            "ring%20one plate x 180000000000 10.5 0 -5000000 PLA",
+            "ring%20one pl%61te x 180000000000 10000000 0 -5000000 PLA",
+            "ring%20one plate x 180000000000 10000000 0 -5000000",
+            "ring%20one plate x 180000000000 10000000 0 -5000000 PLA extra",
+        ] {
+            let text = good.replace(line, bad);
+            assert_ne!(text, good, "{bad}");
+            let e = parse(&text).unwrap_err();
+            assert_eq!(e.code(), "PHOENIX-CAD-018", "{bad}: {e}");
+        }
+        // the removal takes exactly one id
+        for bad in ["remove-turned", "remove-turned X"] {
+            let text = good.replace(&format!("remove-turned {}", id(1)), bad);
+            assert!(parse(&text).is_err(), "{bad}");
+        }
+        // the version has to agree with the steps, in both directions
+        let e = parse(&good.replacen("mechanical 6", "mechanical 5", 1)).unwrap_err();
+        assert!(
+            e.to_string()
+                .contains("version 6 is in a domain of version 5"),
+            "{e}"
+        );
+        let mates = String::from_utf8(with_mates().to_bytes(&s.mechanical).unwrap()).unwrap();
+        let e = parse(&mates.replacen("mechanical 5", "mechanical 6", 1)).unwrap_err();
+        assert!(e.to_string().contains("has no step that needs it"), "{e}");
+        let e = parse(&good.replacen("mechanical 6", "mechanical 7", 1)).unwrap_err();
+        assert!(e.to_string().contains("newer version"), "{e}");
+    }
+
+    #[test]
+    fn a_turned_body_of_a_sketch_that_is_not_there_fails_its_step() {
+        let s = Settings::defaults();
+        let mut m = with_turned();
+        m.sketches.clear();
+        let built = m.build(&s.constants, &s.expr).unwrap();
+        match &built.states[0] {
+            StepState::Failed(e) => assert_eq!(e.code(), "PHOENIX-CAD-037"),
+            other => panic!("{other:?}"),
+        }
+        assert!(built.enclosure.turned().is_empty());
+    }
+
+    #[test]
+    fn a_project_with_a_turned_body_goes_through_the_file() {
+        let s = Settings::defaults();
+        let m = with_turned();
+        let mut d = Document::new();
+        d.set_mechanical(&m, &s.mechanical).unwrap();
+        assert_eq!(d.mechanical_version().unwrap(), Some(6));
         let read = Document::from_bytes(&d.to_bytes(), 1 << 24).unwrap();
         assert_eq!(read.mechanical(&s.expr, &s.mechanical).unwrap(), Some(m));
     }

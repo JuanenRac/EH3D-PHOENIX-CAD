@@ -101,6 +101,8 @@ pub struct NewStepDefaults {
     pub mate_axis: Dim,
     /// The faces a new alignment puts on one plane.
     pub mate_edge: Edge,
+    /// The material of a new turned body, a name of the table of densities of the settings.
+    pub turned_material: String,
 }
 
 impl NewStepDefaults {
@@ -286,6 +288,12 @@ impl NewStepDefaults {
         let mate_direction = word(c, "new_step.mate_direction")?;
         let mate_axis = word(c, "new_step.mate_axis")?;
         let mate_edge = word(c, "new_step.mate_edge")?;
+        let turned_material = word(c, "new_step.turned_material")?;
+        if turned_material.is_empty() {
+            return Err(CadError::Config(
+                "new_step.turned_material must name a material".into(),
+            ));
+        }
         let mate_distance = c.length("new_step.mate_distance")?;
         if mate_distance.get() < 0 {
             return Err(CadError::Config(
@@ -368,6 +376,7 @@ impl NewStepDefaults {
                     "new_step.mate_edge: {mate_edge} is not min, max or center"
                 ))
             })?,
+            turned_material: turned_material.to_string(),
         })
     }
 }
@@ -581,6 +590,7 @@ mod tests {
         assert_eq!(n.mate_kind, "stack");
         assert_eq!((n.mate_direction, n.mate_distance), (Axis::PlusZ, mm(0)));
         assert_eq!((n.mate_axis, n.mate_edge), (Dim::Z, Edge::Min));
+        assert_eq!(n.turned_material, "PLA");
         assert_eq!(n.mate_of("stack"), Some(MateKind::Stack));
         assert_eq!(
             n.mate_of("gap"),

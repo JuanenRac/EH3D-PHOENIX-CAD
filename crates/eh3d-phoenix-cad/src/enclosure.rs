@@ -27,6 +27,7 @@ use crate::mount::{lid_holes_of, Lid, Post};
 use crate::pattern::{PatternOp, Seed};
 use crate::profile::{Profile, ProfileLimits};
 use crate::sketch::Sketch;
+use crate::turned::{Turned, TurnedSpec};
 use crate::units::isqrt_u128;
 use crate::{CadError, Length};
 
@@ -587,6 +588,20 @@ pub enum Operation {
         /// The id of the mate.
         id: Id,
     },
+    /// Adds a turned body: a sketch of the project turned about one of its axes, as a body of its
+    /// own next to the box (see [`crate::turned`]). The sketch is taken by its name every time the
+    /// model is built.
+    AddTurned {
+        /// The id of the body.
+        id: Id,
+        /// What is turned, how, where and of what material.
+        turned: TurnedSpec,
+    },
+    /// Takes a turned body away.
+    RemoveTurned {
+        /// The id of the body.
+        id: Id,
+    },
 }
 
 /// What a feature does to the box.
@@ -650,6 +665,7 @@ pub struct Enclosure {
     fins: BTreeMap<Id, FinSet>,
     parts: BTreeMap<Id, PartInstance>,
     mates: BTreeMap<Id, Mate>,
+    turned: BTreeMap<Id, Turned>,
     design: Option<DesignLimits>,
 }
 
@@ -671,8 +687,15 @@ impl Enclosure {
             fins: BTreeMap::new(),
             parts: BTreeMap::new(),
             mates: BTreeMap::new(),
+            turned: BTreeMap::new(),
             design: None,
         })
+    }
+
+    /// The turned bodies by id (ordered by id). They are separate bodies, like the parts: they are
+    /// not part of the volume of the box.
+    pub fn turned(&self) -> &BTreeMap<Id, Turned> {
+        &self.turned
     }
 
     /// The parts placed in the model by id (ordered by id). They are separate bodies: they are not
@@ -855,6 +878,16 @@ impl Enclosure {
     pub fn set_sketches(&mut self, sketches: Vec<Sketch>, limits: Option<ProfileLimits>) {
         self.sketches = sketches;
         self.limits = limits;
+    }
+
+    /// The sketches the enclosure was given (see [`Enclosure::set_sketches`]).
+    pub fn sketches(&self) -> &[Sketch] {
+        &self.sketches
+    }
+
+    /// The limits of the profiles the enclosure was given, or `None` for the shipped ones.
+    pub fn profile_limits(&self) -> Option<ProfileLimits> {
+        self.limits
     }
 
     /// The extrusions and pockets by id (ordered by id).
@@ -1505,6 +1538,30 @@ impl Enclosure {
             }
             Operation::RemoveMate { id } => match self.mates.remove(&id) {
                 Some(mate) => Ok(Operation::AddMate { id, mate }),
+                None => Err(CadError::HoleId(id)),
+            },
+            Operation::AddTurned { id, turned } => {
+                let limits = self.design_limits().catalog;
+                if self.turned.contains_key(&id) {
+                    return Err(CadError::HoleId(id));
+                }
+                if self.parts.len() + self.turned.len() >= limits.max_instances {
+                    return Err(CadError::Part(format!(
+                        "more than the {} parts and turned bodies the settings allow",
+                        limits.max_instances
+                    )));
+                }
+                turned.check(&limits)?;
+                let profiles = self.limits.unwrap_or_else(ProfileLimits::shipped);
+                let body = Turned::resolve(&turned, &self.sketches, &profiles)?;
+                self.turned.insert(id, body);
+                Ok(Operation::RemoveTurned { id })
+            }
+            Operation::RemoveTurned { id } => match self.turned.remove(&id) {
+                Some(body) => Ok(Operation::AddTurned {
+                    id,
+                    turned: body.spec,
+                }),
                 None => Err(CadError::HoleId(id)),
             },
             Operation::RemoveFeature { id } => {
@@ -2665,5 +2722,101 @@ mod feature_tests {
         let f = printer.for_fabrication(&e).unwrap();
         assert_eq!(f.mates(), e.mates());
         assert_eq!(f.placed_parts(), e.placed_parts());
+    }
+
+    fn turned_op(n: u64, name: &str, sketch: &str) -> Operation {
+        Operation::AddTurned {
+            id: id(n),
+            turned: crate::turned::TurnedSpec::full_turn(name, sketch, "PLA").unwrap(),
+        }
+    }
+
+    #[test]
+    fn a_turned_body_is_added_and_removed_by_its_exact_inverse() {
+        let mut e = with_plate();
+        let before = e.clone();
+        let undo = e.apply(turned_op(7, "ring", "plate")).unwrap();
+        assert_eq!(undo, Operation::RemoveTurned { id: id(7) });
+        assert_eq!(e.turned().len(), 1);
+        assert_eq!(e.turned()[&id(7)].spec.name, "ring");
+        // it is a body of its own: the box and its volume are what they were
+        assert_eq!(e.features_volume_nm3(), before.features_volume_nm3());
+        let redo = e.apply(undo).unwrap();
+        assert_eq!(e, before);
+        assert_eq!(redo, turned_op(7, "ring", "plate"));
+        e.apply(redo).unwrap();
+        assert_eq!(e.turned().len(), 1);
+    }
+
+    #[test]
+    fn a_refused_turned_body_leaves_the_model_as_it_was() {
+        let mut e = with_plate();
+        e.apply(turned_op(7, "ring", "plate")).unwrap();
+        let before = e.clone();
+        // the id is used, the sketch does not exist, the name is empty
+        assert!(e.apply(turned_op(7, "again", "plate")).is_err());
+        assert_eq!(
+            e.apply(turned_op(8, "lost", "nothing")).unwrap_err().code(),
+            "PHOENIX-CAD-037"
+        );
+        assert_eq!(
+            e.apply(turned_op(8, "", "plate")).unwrap_err().code(),
+            "PHOENIX-CAD-045"
+        );
+        // a turn of nothing, and a body farther from the origin than the settings allow
+        let mut spec = crate::turned::TurnedSpec::full_turn("ring", "plate", "PLA").unwrap();
+        spec.angle = crate::units::Angle::ZERO;
+        let op = Operation::AddTurned {
+            id: id(8),
+            turned: spec.clone(),
+        };
+        assert_eq!(e.apply(op).unwrap_err().code(), "PHOENIX-CAD-007");
+        spec.angle = crate::units::Angle::from_deg(90).unwrap();
+        spec.at[0] = mm(6_001);
+        let op = Operation::AddTurned {
+            id: id(8),
+            turned: spec,
+        };
+        assert_eq!(e.apply(op).unwrap_err().code(), "PHOENIX-CAD-045");
+        assert!(e.apply(Operation::RemoveTurned { id: id(9) }).is_err());
+        assert_eq!(e, before);
+    }
+
+    #[test]
+    fn the_turned_bodies_count_with_the_parts_against_the_limit_of_the_settings() {
+        let mut design = crate::config::DesignLimits::shipped();
+        design.catalog.max_instances = 1;
+        let mut e = with_plate();
+        e.set_design_limits(design);
+        e.apply(turned_op(7, "ring", "plate")).unwrap();
+        let err = e.apply(turned_op(8, "other", "plate")).unwrap_err();
+        assert_eq!(err.code(), "PHOENIX-CAD-045");
+        assert!(err.to_string().contains("more than the 1 parts"), "{err}");
+        assert_eq!(e.turned().len(), 1);
+    }
+
+    #[test]
+    fn a_turned_body_follows_a_change_of_its_sketch() {
+        let mut e = with_plate();
+        e.apply(turned_op(7, "ring", "plate")).unwrap();
+        let tall = e.turned()[&id(7)].volume_nm3().unwrap();
+        // the same steps over a sketch that is not the same one give another body
+        let mut again = Enclosure::new(params()).unwrap();
+        let mut small = Sketch::new("plate", SketchPlane::on_face(Face::Top)).unwrap();
+        small
+            .add_rectangle((mm(0), mm(0)), (mm(10), mm(5)))
+            .unwrap();
+        again.set_sketches(vec![small], None);
+        again.apply(turned_op(7, "ring", "plate")).unwrap();
+        assert!(again.turned()[&id(7)].volume_nm3().unwrap() < tall);
+    }
+
+    #[test]
+    fn the_turned_bodies_are_kept_when_the_model_is_made_for_fabrication() {
+        let mut e = with_plate();
+        e.apply(turned_op(7, "ring", "plate")).unwrap();
+        let printer = crate::config::Settings::defaults().printer;
+        let f = printer.for_fabrication(&e).unwrap();
+        assert_eq!(f.turned(), e.turned());
     }
 }

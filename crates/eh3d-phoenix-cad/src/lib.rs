@@ -29,6 +29,7 @@
 //! * [`titleblock`]: the title block of a drawing (organisation, title, number, revision, author and scale in a table under the box), written into the DXF and SVG drawings when the settings ask for it, with the names of its cells in the eight languages;
 //! * [`partlist`]: the list of the placed parts with their properties (kind, material, density, volume, mass, corner and size of the box) and its totals, as comma separated values or as text in the eight languages;
 //! * [`revolve`]: the volume, the surface and the mass of the solid that a sketch makes when it is turned about one of its axes (by the theorems of Pappus, with the circular segments of its arcs), refused when the profile crosses the axis;
+//! * [`turned`]: a sketch turned about one of its axes kept in the model as a body of its own (its sketch, axis, angle, position and material), with its volume, mass, box, triangles and centre of mass, and its place in the bill, the balance and the files of triangles;
 //! * [`sweep`]: the volume and the surface of a profile swept along a path of lines and arcs of a sketch (a bend, a mitred corner, a closed path), by the theorems of Pappus with the first moments of the profile, refused when the path branches or the profile reaches the centre of a bend;
 //! * [`fins`]: sets of cooling fins that rise from a face (how many, how thick, how tall, how far apart, where they start and how long they run), checked against the limits of the settings, the edges and the holes of the face and the other sets, and an estimate, marked as one, of the heat they give to still air from a coefficient of the settings;
 //! * [`graph`]: the graph of dependencies between objects, with a deterministic order of calculation, refused cycles, a recalculation that reuses what did not change, and a Graphviz dump;
@@ -37,7 +38,7 @@
 //! * [`parametric`]: the parameters of an enclosure as values, variables or expressions that refer to variables, to constants of the settings and to each other, calculated through the graph of dependencies;
 //! * [`datum`]: reference frames with an origin and one of the 24 axis-aligned rotations, and the frame of each face of the box;
 //! * [`project`]: the envelope of a project file with a format version, named domains kept byte for byte when unknown, read-only opening when a critical domain is not understood, and migrations from older versions;
-//! * [`mechanical`]: the mechanical domain of the project file: the recipe of steps (version 5 when it has a mate, version 4 when it places a part, version 3 when it has a pattern or cooling fins, version 2 when it has an extrusion or a pocket), the parameters and expressions, and the interface of the board, read again to the same enclosure, with a migration from the domain of the parameters;
+//! * [`mechanical`]: the mechanical domain of the project file: the recipe of steps (version 6 when it has a turned body, version 5 when it has a mate, version 4 when it places a part, version 3 when it has a pattern or cooling fins, version 2 when it has an extrusion or a pocket), the parameters and expressions, and the interface of the board, read again to the same enclosure, with a migration from the domain of the parameters;
 //! * [`messages`]: the text of every diagnostic in the eight languages of the suite;
 //! * [`fit`]: whether an envelope (the outline of a board and its tallest part) fits inside;
 //! * [`sketch`]: the 2D sketch on a face of the box: points, lines, circles, arcs, polylines and rectangles, geometric and dimensional constraints (a dimension may be an expression over the variables), a numeric solver that reports the degrees of freedom left, the constraints that repeat or contradict each other, or that it did not converge, its settings file, the sketch file (the way in and out of a sketch) and the domain `sketch` of the project file, where the sketches of a project are kept;
@@ -128,6 +129,7 @@ pub mod store;
 pub mod sweep;
 pub mod titleblock;
 pub mod triangulate;
+pub mod turned;
 pub mod uiconfig;
 pub mod units;
 pub mod vars;

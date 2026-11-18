@@ -541,6 +541,18 @@ pub fn scene_with(
             push_box(&mut out, point(lo), point(hi), kind);
         }
     }
+    for (id, body) in enclosure.turned() {
+        // a turned body is drawn as the box that holds it, like a part
+        let kind = if highlight == Highlight::Object(*id) {
+            Kind::Selected
+        } else {
+            Kind::Post
+        };
+        if let Ok((lo, hi)) = body.bounds() {
+            let point = |p: [i64; 3]| -> Point3 { [mm(p[0]), mm(p[1]), mm(p[2])] };
+            push_box(&mut out, point(lo), point(hi), kind);
+        }
+    }
     if let Some(b) = board {
         push_box(&mut out, b.min, b.max, Kind::Board);
     }
