@@ -1909,6 +1909,19 @@ impl Window {
         }
     }
 
+    /// The mass of the placed parts (with the mates applied) and their centre of mass (see
+    /// [`crate::balance`]).
+    pub fn balance(&self) -> Result<crate::balance::Balance, CadError> {
+        let placed =
+            crate::assembly::place(self.built.enclosure.parts(), self.built.enclosure.mates())?;
+        crate::balance::balance(&placed, &self.settings.materials)
+    }
+
+    /// The balance of the placed parts as lines of text.
+    pub fn balance_text(&self) -> Result<String, CadError> {
+        self.balance().map(|b| crate::balance::balance_text(&b))
+    }
+
     fn refresh_fields(&mut self) {
         self.fields = self.make_fields();
     }
@@ -6648,6 +6661,26 @@ total,0,
             "
 CONTORNO
 "
+        ));
+    }
+
+    #[test]
+    fn the_balance_of_the_frame_agrees_with_its_bill_of_materials() {
+        let mut w = fresh();
+        assert!(w.open(&frame_path()), "{:?}", w.status);
+        let b = w.balance().unwrap();
+        assert_eq!(b.parts, 18);
+        // the bill rounds the mass of each line and the balance the mass of each part, so the two
+        // totals can differ by the rounding, at most half a microgram for each of them
+        let bill = w.bill().unwrap().mass_ug;
+        assert!((bill - b.mass_ug).abs() <= 18, "{bill} {}", b.mass_ug);
+        let c = b.centre_nm.unwrap();
+        // the frame is 300 mm along x and 220 mm along y: the centre lies inside its box
+        assert!(c[0] > 0 && c[0] < 300_000_000, "{c:?}");
+        assert!(c[1] > 0 && c[1] < 220_000_000, "{c:?}");
+        assert!(w.balance_text().unwrap().starts_with(
+            "parts: 18
+mass: "
         ));
     }
 

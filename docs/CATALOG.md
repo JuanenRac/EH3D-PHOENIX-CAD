@@ -60,6 +60,10 @@ The window shows the bill and the cut list in the fit report (in the language of
 
 The command `eh3d-phoenix-cad cutplan PROJECT` prints one line per bar as comma separated values (`part,material,bar,bar_mm,pieces_mm,offcut_mm,offcut_use`, and a line of totals), or with `--text` lines for a person with the share of the bars that is used.
 
+## Mass and centre of mass of the parts
+
+`eh3d_phoenix_cad::balance` adds up the mass of the placed parts (the volume of each times the density of its material, the same figure as the bill of materials) and finds their centre of mass: the mean of the centres of the parts weighted by their masses, calculated in integers (masses in micrograms, middles in doubled nanometres) and rounded to the nanometre once, at the end. The centre of a part is the middle of its bounding box. That is the exact centre of mass of a profile, solid or hollow, because its section is symmetric; for a screw (the head pulls the centre towards the head) and for a bracket (the corner is heavier than the ends of the legs) it is an estimate, and the report says how many parts are estimated. The parts are the ones the mates give; the box of the enclosure is not included (see the mass of the model for it). The command `eh3d-phoenix-cad balance PROJECT` prints the number of parts, the mass in grams, the centre in millimetres and the number of estimated centres; a material that is not in the settings is refused with `PHOENIX-CAD-045`.
+
 ## In the project file
 
 A project with a placed part writes the mechanical domain in version 4, with the steps `add-part` and `remove-part`; a project without one keeps the version and the bytes it had. See [PROJECT_DOMAIN.md](PROJECT_DOMAIN.md) for the form of the lines.

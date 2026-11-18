@@ -4,6 +4,7 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **Mass and centre of mass of the placed parts:** `eh3d_phoenix_cad::balance` adds the exact masses of the parts and finds their centre of mass in integers (exact for profiles, an estimate from the middle of the box for screws and brackets, with the number of estimated parts reported); the new command `balance` prints it. 7 tests.
 - **Sketch export to DXF and SVG:** `eh3d_phoenix_cad::sketch_export` writes the closed outlines of a sketch as a flat drawing (outer outlines and holes on their own layers; lines, arcs and circles kept as such) and the new command `sketch-export PROJECT|SKETCH --format dxf|svg` writes it without ever overwriting a file unless asked. 6 tests.
 - **Hole schedule:** `eh3d_phoenix_cad::schedule` lists the holes of the box by face and position with stable tags `H1`, `H2`, ... and groups them into the drills and cutters they need; the new command `holes [--tools]` prints both as comma separated values. 5 tests.
 - **Table of placements and exploded view:** `eh3d_phoenix_cad::placement` lists where each placed part ends up with the mates applied (corner, size, turn) and the box of the assembly, and can pull the parts apart from the middle by a percentage; the new command `placements [--explode PERCENT]` prints it as comma separated values and the setting `placement.max_explode_percent` limits the pull. 8 tests.

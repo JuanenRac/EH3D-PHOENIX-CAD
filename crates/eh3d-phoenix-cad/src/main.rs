@@ -30,6 +30,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad placements PROJECT.phoenixproj [--explode PERCENT] [--config FILE]   where each placed part is (the corner and the size in millimetres and the turn) and the size of the whole assembly, as comma separated values; with --explode the parts are first pulled apart from the middle of the assembly by that percentage
   eh3d-phoenix-cad holes PROJECT.phoenixproj [--tools] [--config FILE]            the schedule of the holes of the box for the person who drills (a tag, the face, the position, the diameter and the shape of each) as comma separated values, or with --tools the drills and cutters they need grouped by diameter and shape
   eh3d-phoenix-cad sketch-export PROJECT.phoenixproj|SKETCH.phoenixsketch --format dxf|svg [--sketch NAME] [--out FILE] [--overwrite] [--config FILE]   writes a sketch (the only one of the project, or the one named) as a flat drawing of its closed outlines for a laser or a router; never over a file that exists unless --overwrite is given
+  eh3d-phoenix-cad balance PROJECT.phoenixproj [--config FILE]                     the mass of the placed parts and where their centre of mass is (exact for profiles, an estimate for screws and brackets, and the number of estimated parts is said)
   eh3d-phoenix-cad library FILE.phoenixlib [--config FILE]                        reads a library of parts, checks it and lists its parts
   eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill [--view top|front|side] [--out FILE] [--overwrite] [--ascii|--binary] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), as a Wavefront file (obj) or as a 3MF package (3mf), the plan, front or side as a drawing (dxf, svg), the STEP file, the OpenSCAD-style script, the fit report or the bill of materials
   eh3d-phoenix-cad config                                                         every setting of the library, of the window and of the sketch with its default value, as a file for --config
@@ -340,6 +341,19 @@ fn run_sketch_export(args: &[String]) -> Result<bool, String> {
     Ok(true)
 }
 
+/// `balance`: reads a project and prints the mass of its placed parts and their centre of mass.
+fn run_balance(args: &[String]) -> Result<bool, String> {
+    let (file, config) = file_and_config(args, "project file")?;
+    let (settings, ui) = load_settings(config.as_deref())?;
+    let lang = Lang::En;
+    let mut win = Window::new(lang, settings, ui).map_err(|e| error_text(&e, lang))?;
+    if !win.open(&file) {
+        return Err(format!("{}: {}", file.display(), win.status.text(lang)));
+    }
+    print!("{}", win.balance_text().map_err(|e| error_text(&e, lang))?);
+    Ok(win.info.failed == 0)
+}
+
 /// `library`: reads a library of parts, checks it against the settings and lists its parts.
 fn run_library(args: &[String]) -> Result<bool, String> {
     let (file, config) = file_and_config(args, "library file")?;
@@ -465,6 +479,7 @@ fn run(args: &[String]) -> Result<bool, String> {
         "clearance" => run_clearance(rest),
         "placements" => run_placements(rest),
         "holes" => run_holes(rest),
+        "balance" => run_balance(rest),
         "sketch-export" => run_sketch_export(rest),
         "library" => run_library(rest),
         "export" => run_export(rest),
@@ -481,7 +496,8 @@ fn window_request(args: &[String]) -> Option<Result<shot::WindowArgs, String>> {
         None | Some("gui") => {}
         Some(
             "help" | "--help" | "-h" | "config" | "check" | "interference" | "bill" | "cutplan"
-            | "clearance" | "placements" | "holes" | "sketch-export" | "library" | "export",
+            | "clearance" | "placements" | "holes" | "balance" | "sketch-export" | "library"
+            | "export",
         ) => return None,
         Some(first) if first.starts_with("--") => {}
         Some(first) => {
