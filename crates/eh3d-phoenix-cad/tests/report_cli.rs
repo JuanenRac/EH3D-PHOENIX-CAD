@@ -319,3 +319,67 @@ e3 line e1 e2
         assert!(err.contains(why), "{args:?}: {err}");
     }
 }
+
+#[test]
+fn the_triangles_of_a_turned_or_swept_solid_are_written_in_the_format_of_the_extension() {
+    let dir = Scratch::new("solids");
+    let stl = dir.file("plate.stl");
+    let (code, text, err) = run(&[
+        "revolve", PLATE, "--axis", "y", "--angle", "90", "--out", &stl,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert!(text.contains("volume: "), "{text}");
+    assert!(text.contains("plate.stl"), "{text}");
+    let bytes = fs::read(&stl).unwrap();
+    // a binary STL file: 80 bytes of header, the count and 50 bytes for each triangle
+    let triangles = u32::from_le_bytes([bytes[80], bytes[81], bytes[82], bytes[83]]) as usize;
+    assert!(triangles > 100);
+    assert_eq!(bytes.len(), 84 + 50 * triangles);
+    // it is not written over a file that exists, unless it is asked for
+    let (code, _, err) = run(&["revolve", PLATE, "--axis", "y", "--out", &stl]);
+    assert_eq!(code, 1);
+    assert!(err.contains("PHOENIX-CAD-040"), "{err}");
+    let (code, _, err) = run(&[
+        "revolve",
+        PLATE,
+        "--axis",
+        "y",
+        "--out",
+        &stl,
+        "--overwrite",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    // an OBJ file and a 3MF file of the same solid, and an extension that is neither
+    let obj = dir.file("plate.obj");
+    let (code, _, err) = run(&["revolve", PLATE, "--axis", "y", "--out", &obj]);
+    assert_eq!(code, 0, "{err}");
+    assert!(fs::read_to_string(&obj)
+        .unwrap()
+        .starts_with("# EH3D PHOENIX-CAD"));
+    let mf = dir.file("plate.3mf");
+    let (code, _, err) = run(&["revolve", PLATE, "--axis", "y", "--out", &mf]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(&fs::read(&mf).unwrap()[..2], b"PK");
+    let (code, _, err) = run(&["revolve", PLATE, "--axis", "y", "--out", &dir.file("x.txt")]);
+    assert_eq!(code, 1);
+    assert!(err.contains("ends in .stl"), "{err}");
+    // the sweep writes its solid the same way
+    let profile = dir.file("profile.phoenixsketch");
+    fs::write(
+        &profile,
+        "phoenix-sketch 1\nname profile\nplane top 0 0 0\nnext 3 1\ne1 point 0 0\ne2 circle e1 3000000\n",
+    )
+    .unwrap();
+    let path = dir.file("path.phoenixsketch");
+    fs::write(
+        &path,
+        "phoenix-sketch 1\nname path\nplane top 0 0 0\nnext 4 1\ne1 point 0 0\ne2 point 0 100000000\ne3 line e1 e2\n",
+    )
+    .unwrap();
+    let tube = dir.file("tube.obj");
+    let (code, text, err) = run(&["sweep", &profile, "--path", &path, "--out", &tube]);
+    assert_eq!(code, 0, "{err}");
+    assert!(text.contains("volume: 2827.433 mm3\n"), "{text}");
+    let obj = fs::read_to_string(&tube).unwrap();
+    assert!(obj.contains("\no profile\n"), "{obj}");
+}

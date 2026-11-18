@@ -12,13 +12,14 @@
 //! integers.
 //!
 //! The profile must lie on one side of the axis, touching it at most: a profile that crosses the
-//! axis would sweep through itself and is refused with `PHOENIX-CAD-036`. Only the figures are
-//! made; no mesh, no STL file and no STEP file of the turned solid.
+//! axis would sweep through itself and is refused with `PHOENIX-CAD-036`. [`mesh`] makes the
+//! triangles of the solid for an STL, OBJ or 3MF file; there is no STEP file of it.
 
 use std::f64::consts::{PI, TAU};
 
 use crate::lang::{fill, Lang, Msg};
 use crate::mass::mass_micrograms;
+use crate::mesh::{sin_cos, Builder, Circle, Loop, Mesh, Role};
 use crate::profile::{Outline, Piece, Profile, Pt};
 use crate::units::{div_round_half_away, Angle};
 use crate::CadError;
@@ -340,6 +341,211 @@ pub fn revolve_text(
     Ok(out)
 }
 
+/// The boundary of an outline as points in the direction it is walked: a circle by the sides of
+/// the table, an arc by whole steps of one side or less with its two ends exact.
+fn sample_outline(o: &Outline, table: &Circle) -> Vec<(f64, f64)> {
+    let n = table.sides();
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    if let Some((c, r)) = o.circle_of() {
+        for k in 0..n {
+            let (cos, sin) = table.at(k);
+            out.push((c.0 as f64 + r as f64 * cos, c.1 as f64 + r as f64 * sin));
+        }
+        return out;
+    }
+    for piece in o.pieces() {
+        match *piece {
+            Piece::Line { from, .. } => out.push((from.0 as f64, from.1 as f64)),
+            Piece::Arc {
+                center,
+                from,
+                to,
+                ccw,
+            } => {
+                let (r, theta, a0) = arc_figures(center, from, to, ccw);
+                let steps = ((theta / (TAU / n as f64)).ceil() as usize).max(1);
+                out.push((from.0 as f64, from.1 as f64));
+                for k in 1..steps {
+                    let part = theta * k as f64 / steps as f64;
+                    let angle = if ccw { a0 + part } else { a0 - part };
+                    let (sin, cos) = sin_cos(angle);
+                    out.push((center.0 as f64 + r * cos, center.1 as f64 + r * sin));
+                }
+            }
+        }
+    }
+    out.dedup();
+    if out.len() > 1 && out.first() == out.last() {
+        out.pop();
+    }
+    out
+}
+
+/// Twice the signed area of a list of points (positive when they run counter-clockwise).
+fn signed_area2(points: &[(f64, f64)]) -> f64 {
+    let mut total = 0.0;
+    for (i, p) in points.iter().enumerate() {
+        let q = points[(i + 1) % points.len()];
+        total += p.0 * q.1 - q.0 * p.1;
+    }
+    total
+}
+
+/// The regions of a profile as lists of points: for each region its outer outline (counter-clockwise)
+/// and then its holes (clockwise). The first coordinate is that of the sketch and so is the second.
+pub(crate) fn sampled_regions(profile: &Profile, table: &Circle) -> Vec<Vec<Vec<(f64, f64)>>> {
+    let oriented = |o: &Outline, ccw: bool| {
+        let mut points = sample_outline(o, table);
+        if (signed_area2(&points) > 0.0) != ccw {
+            points.reverse();
+        }
+        points
+    };
+    profile
+        .regions
+        .iter()
+        .map(|region| {
+            let mut loops = vec![oriented(&region.outer, true)];
+            loops.extend(region.holes.iter().map(|h| oriented(h, false)));
+            loops
+        })
+        .collect()
+}
+
+/// The vertices of an outline at the start and at the end of a turn or of a path, and whether it is
+/// a hole: what the flat face at each end is made of.
+type EndLoops = (Vec<u32>, Vec<u32>, bool);
+
+/// The triangles of the solid made by turning a profile about an axis by an angle (see
+/// [`revolve`] for what is refused). A full turn is `sides` steps (a multiple of four, from the
+/// settings of the mesh) and a part of a turn the part of them that its angle needs, closed by a
+/// flat face at each end. The triangles face away from the material and the surface is closed;
+/// `limit` is the most triangles that are made.
+pub fn mesh(
+    profile: &Profile,
+    axis: Axis,
+    angle: Angle,
+    sides: u32,
+    limit: usize,
+) -> Result<Mesh, CadError> {
+    revolve(profile, axis, angle)?;
+    let (_, hi) = exact_bounds(profile);
+    let hi_r = if axis.radial() == 0 { hi.0 } else { hi.1 };
+    let side = if hi_r <= 0 { -1.0 } else { 1.0 };
+    let table = Circle::new(sides);
+    let n = table.sides();
+    let ndeg = angle.get();
+    let full = ndeg == 360_000_000_000;
+    let steps = if full {
+        n
+    } else {
+        ((n as f64 * ndeg as f64 / 360e9).ceil() as usize).max(1)
+    };
+    let radians = ndeg as f64 / 1e9 * PI / 180.0;
+    let rings = if full { steps } else { steps + 1 };
+    let turn: Vec<(f64, f64)> = (0..rings)
+        .map(|j| {
+            if full {
+                table.at(j)
+            } else {
+                let (s, c) = sin_cos(radians * j as f64 / steps as f64);
+                (c, s)
+            }
+        })
+        .collect();
+    // the point (axial, radial) of the profile turned to the ring j
+    let place = |a: f64, r: f64, j: usize| -> [f64; 3] {
+        let (c, s) = turn[j];
+        match axis {
+            Axis::X => [a, r * c, r * s],
+            Axis::Y => [r * c, a, -(r * s)],
+        }
+    };
+    // swapping the two coordinates or negating the radial one turns the outlines the other way
+    let mirrored = (axis == Axis::Y) != (side < 0.0);
+    let mut b = Builder::new(limit);
+    let mut cap_loops: Vec<Vec<EndLoops>> = Vec::new();
+    for region in sampled_regions(profile, &table) {
+        let mut caps = Vec::new();
+        for (index, points) in region.iter().enumerate() {
+            let mut loop_points: Vec<(f64, f64)> = points
+                .iter()
+                .map(|&(x, y)| match axis {
+                    Axis::X => (x, side * y),
+                    Axis::Y => (y, side * x),
+                })
+                .collect();
+            if mirrored {
+                loop_points.reverse();
+            }
+            let ids: Vec<Vec<u32>> = (0..rings)
+                .map(|j| {
+                    loop_points
+                        .iter()
+                        .map(|&(a, r)| b.vertex(place(a, r, j)))
+                        .collect()
+                })
+                .collect();
+            let m = loop_points.len();
+            for j in 0..steps {
+                let j1 = (j + 1) % rings;
+                for i in 0..m {
+                    let q = (i + 1) % m;
+                    let (pa, pb, pc, pd) = (ids[j][i], ids[j][q], ids[j1][q], ids[j1][i]);
+                    if pa != pb && pb != pc && pa != pc {
+                        b.triangle(pa, pb, pc)?;
+                    }
+                    if pa != pc && pc != pd && pa != pd {
+                        b.triangle(pa, pc, pd)?;
+                    }
+                }
+            }
+            if !full {
+                caps.push((ids[0].clone(), ids[steps].clone(), index > 0));
+            }
+        }
+        if !full {
+            cap_loops.push(caps);
+        }
+    }
+    if !full {
+        let (c1, s1) = turn[steps];
+        let flow = |s: f64, c: f64| -> [f64; 3] {
+            match axis {
+                Axis::X => [0.0, -s, c],
+                Axis::Y => [-s, 0.0, -c],
+            }
+        };
+        let start = flow(0.0, 1.0);
+        let end = flow(s1, c1);
+        for caps in &cap_loops {
+            let first: Vec<Loop> = caps
+                .iter()
+                .map(|(a, _, hole)| {
+                    Loop::new(
+                        a.clone(),
+                        if *hole { Role::Cut } else { Role::Boundary },
+                        "the start of the turn",
+                    )
+                })
+                .collect();
+            let last: Vec<Loop> = caps
+                .iter()
+                .map(|(_, z, hole)| {
+                    Loop::new(
+                        z.clone(),
+                        if *hole { Role::Cut } else { Role::Boundary },
+                        "the end of the turn",
+                    )
+                })
+                .collect();
+            b.plane(&first, [-start[0], -start[1], -start[2]])?;
+            b.plane(&last, end)?;
+        }
+    }
+    Ok(b.finish())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -526,5 +732,118 @@ mod tests {
         assert_eq!(Axis::from_name("x"), Some(Axis::X));
         assert_eq!(Axis::from_name("z"), None);
         assert_eq!(Axis::Y.name(), "y");
+    }
+
+    fn solid(s: &Sketch, axis: Axis, degrees: i64) -> Mesh {
+        mesh(&profile(s), axis, deg(degrees), 128, 1_000_000).unwrap()
+    }
+
+    /// Whether the volume of the triangles is within `ppm` parts per million of `mm3`.
+    fn volume_is(m: &Mesh, mm3: f64, ppm: f64) -> bool {
+        let v = m.volume_nm3() / 1e18;
+        (v - mm3).abs() <= mm3 * ppm / 1e6
+    }
+
+    #[test]
+    fn a_tube_is_a_closed_surface_with_the_volume_of_the_theorem() {
+        // pi (15^2 - 5^2) 10 = 6283.185 mm3; 128 sides take 0.04 % of it
+        let tube = solid(&rectangle(0, 5, 10, 15), Axis::X, 360);
+        tube.check_closed().unwrap();
+        assert!(volume_is(&tube, 6283.185, 1000.0), "{}", tube.volume_nm3());
+        // 4 corners, 128 steps: a quad of two triangles for each edge and step
+        assert_eq!(tube.triangles.len(), 4 * 128 * 2);
+        // the same tube about the second axis, and below the axis
+        let y = solid(&rectangle(5, 0, 15, 10), Axis::Y, 360);
+        y.check_closed().unwrap();
+        assert!(volume_is(&y, 6283.185, 1000.0));
+        let below = solid(&rectangle(0, -15, 10, -5), Axis::X, 360);
+        below.check_closed().unwrap();
+        assert!(volume_is(&below, 6283.185, 1000.0));
+        // the tube lies on the first axis, from 0 to 10 mm, and 15 mm round it
+        let (lo, hi) = tube.bounds().unwrap();
+        assert!((lo[0]).abs() < 1.0 && (hi[0] - 10e6).abs() < 1.0);
+        assert!((hi[1] - 15e6).abs() < 1.0 && (lo[2] + 15e6).abs() < 1.0);
+    }
+
+    #[test]
+    fn a_part_of_a_turn_is_closed_by_a_flat_face_at_each_end() {
+        let s = rectangle(0, 5, 10, 15);
+        for (degrees, volume) in [(180, 3141.593), (90, 1570.796), (45, 785.398)] {
+            let half = solid(&s, Axis::X, degrees);
+            half.check_closed().unwrap();
+            assert!(
+                volume_is(&half, volume, 1500.0),
+                "{degrees}: {}",
+                half.volume_nm3()
+            );
+        }
+        let y = solid(&rectangle(5, 0, 15, 10), Axis::Y, 90);
+        y.check_closed().unwrap();
+        assert!(volume_is(&y, 1570.796, 1500.0));
+        // 360 degrees less a little still has its two ends
+        let almost = solid(&s, Axis::X, 359);
+        almost.check_closed().unwrap();
+    }
+
+    #[test]
+    fn holes_and_the_axis_are_part_of_the_surface() {
+        // the block with a round hole of the volume test: 48686.346 mm3, and the hole is a wall
+        let mut s = rectangle(0, 10, 20, 30);
+        let c = s.add_point(mm(10), mm(20)).unwrap();
+        s.add_circle(c, mm(2)).unwrap();
+        let block = solid(&s, Axis::X, 360);
+        block.check_closed().unwrap();
+        assert!(
+            volume_is(&block, 48686.346, 3000.0),
+            "{}",
+            block.volume_nm3()
+        );
+        let cut = solid(&s, Axis::X, 120);
+        cut.check_closed().unwrap();
+        // a half disc on the axis is a ball: the points on the axis are single vertices
+        let mut d = new();
+        let a = d.add_point(mm(-3), mm(0)).unwrap();
+        let b = d.add_point(mm(3), mm(0)).unwrap();
+        let o = d.add_point(mm(0), mm(0)).unwrap();
+        d.add_line(a, b).unwrap();
+        d.add_arc(o, b, a).unwrap();
+        let ball = solid(&d, Axis::X, 360);
+        ball.check_closed().unwrap();
+        assert!(volume_is(&ball, 113.097, 3000.0), "{}", ball.volume_nm3());
+        let quarter = solid(&d, Axis::X, 90);
+        quarter.check_closed().unwrap();
+        assert!(volume_is(&quarter, 28.274, 3000.0));
+    }
+
+    #[test]
+    fn a_circle_turned_is_a_closed_torus_and_the_limits_and_refusals_are_kept() {
+        let mut s = new();
+        let c = s.add_point(mm(0), mm(10)).unwrap();
+        s.add_circle(c, mm(2)).unwrap();
+        let ring = solid(&s, Axis::X, 360);
+        ring.check_closed().unwrap();
+        assert!(volume_is(&ring, 789.568, 3000.0), "{}", ring.volume_nm3());
+        // a limit of triangles
+        let e = mesh(&profile(&s), Axis::X, deg(360), 128, 100).unwrap_err();
+        assert_eq!(e.code(), "PHOENIX-CAD-050");
+        // what revolve refuses, mesh refuses
+        let across = profile(&rectangle(0, -5, 10, 5));
+        assert_eq!(
+            mesh(&across, Axis::X, deg(360), 128, 1_000_000)
+                .unwrap_err()
+                .code(),
+            "PHOENIX-CAD-036"
+        );
+        assert_eq!(
+            mesh(&profile(&s), Axis::X, deg(0), 128, 1_000_000)
+                .unwrap_err()
+                .code(),
+            "PHOENIX-CAD-007"
+        );
+        // fewer sides, fewer triangles; the same input gives the same bytes
+        let coarse = mesh(&profile(&s), Axis::X, deg(360), 16, 1_000_000).unwrap();
+        assert!(coarse.triangles.len() < ring.triangles.len());
+        let again = mesh(&profile(&s), Axis::X, deg(360), 16, 1_000_000).unwrap();
+        assert_eq!(coarse, again);
     }
 }

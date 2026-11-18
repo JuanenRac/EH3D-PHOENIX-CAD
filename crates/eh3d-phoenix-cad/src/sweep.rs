@@ -20,16 +20,19 @@
 //!
 //! Refused with `PHOENIX-CAD-036`: a path that branches, has several pieces, or turns back on
 //! itself; an arc that meets its neighbour at a corner (make them tangent); a profile that reaches
-//! the centre of a bend; and a piece too short for the mitres next to it with this profile. Only
-//! the figures are made; no mesh and no file of the swept solid.
+//! the centre of a bend; and a piece too short for the mitres next to it with this profile. [`mesh`]
+//! makes the triangles of the solid for an STL, OBJ or 3MF file; there is no STEP file of it.
 
 use std::collections::BTreeMap;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use crate::lang::{fill, Lang, Msg};
 use crate::mass::mass_micrograms;
+use crate::mesh::{sin_cos, Builder, Circle, Loop, Mesh, Role};
 use crate::profile::{Outline, Piece, Profile, Pt};
-use crate::revolve::{arc_figures, boundary_moment, exact_bounds, outline_moments, scaled};
+use crate::revolve::{
+    arc_figures, boundary_moment, exact_bounds, outline_moments, sampled_regions, scaled,
+};
 use crate::sketch::{Element, ElementId, Sketch};
 use crate::CadError;
 
@@ -389,6 +392,199 @@ pub fn sweep(profile: &Profile, path: &Path) -> Result<Swept, CadError> {
     })
 }
 
+/// A place along the path where a ring of the profile is put: the point of the path and, for a
+/// unit of the first coordinate of the profile, the offset to the left of it (longer than one at a
+/// mitre, where the ring lies in the plane that halves the corner).
+type Station = ([f64; 2], [f64; 2]);
+
+/// The unit direction of the path at the start and at the end of a piece, as (x, y).
+fn directions(piece: &Piece) -> ((f64, f64), (f64, f64)) {
+    match *piece {
+        Piece::Line { from, to } => {
+            let (dx, dy) = ((to.0 - from.0) as f64, (to.1 - from.1) as f64);
+            let len = dx.hypot(dy);
+            ((dx / len, dy / len), (dx / len, dy / len))
+        }
+        Piece::Arc {
+            center,
+            from,
+            to,
+            ccw,
+        } => {
+            let turn = |p: Pt| {
+                let (x, y) = ((p.0 - center.0) as f64, (p.1 - center.1) as f64);
+                let len = x.hypot(y);
+                let (x, y) = (x / len, y / len);
+                if ccw {
+                    (-y, x)
+                } else {
+                    (y, -x)
+                }
+            };
+            (turn(from), turn(to))
+        }
+    }
+}
+
+/// The left normal of a direction.
+fn left(d: (f64, f64)) -> (f64, f64) {
+    (-d.1, d.0)
+}
+
+/// The offset at a corner between two directions: the mean of the two normals over one plus their
+/// product, which is `1 / cos(f / 2)` along the bisector.
+fn mitre(before: (f64, f64), after: (f64, f64)) -> [f64; 2] {
+    let (a, b) = (left(before), left(after));
+    let k = 1.0 + a.0 * b.0 + a.1 * b.1;
+    [(a.0 + b.0) / k, (a.1 + b.1) / k]
+}
+
+/// The stations of a path, and whether they close on themselves.
+fn stations_of(path: &Path, table: &Circle) -> Vec<Station> {
+    let n = table.sides();
+    if let Some((c, r)) = path.circle {
+        return (0..n)
+            .map(|k| {
+                let (cos, sin) = table.at(k);
+                (
+                    [c.0 as f64 + r as f64 * cos, c.1 as f64 + r as f64 * sin],
+                    [-cos, -sin],
+                )
+            })
+            .collect();
+    }
+    let count = path.pieces.len();
+    let dirs: Vec<_> = path.pieces.iter().map(directions).collect();
+    let mut out: Vec<Station> = Vec::new();
+    for (i, piece) in path.pieces.iter().enumerate() {
+        let (start, _) = dirs[i];
+        let before = if i > 0 {
+            Some(dirs[i - 1].1)
+        } else if path.closed {
+            Some(dirs[count - 1].1)
+        } else {
+            None
+        };
+        let offset = match before {
+            Some(b) => mitre(b, start),
+            None => {
+                let l = left(start);
+                [l.0, l.1]
+            }
+        };
+        match *piece {
+            Piece::Line { from, .. } => out.push(([from.0 as f64, from.1 as f64], offset)),
+            Piece::Arc {
+                center,
+                from,
+                to,
+                ccw,
+            } => {
+                out.push(([from.0 as f64, from.1 as f64], offset));
+                let (r, theta, a0) = arc_figures(center, from, to, ccw);
+                let steps = ((theta / (TAU / n as f64)).ceil() as usize).max(1);
+                for k in 1..steps {
+                    let part = theta * k as f64 / steps as f64;
+                    let angle = if ccw { a0 + part } else { a0 - part };
+                    let (sin, cos) = sin_cos(angle);
+                    // the left of a counter-clockwise arc points to its centre, of a clockwise one away
+                    let side = if ccw { -1.0 } else { 1.0 };
+                    out.push((
+                        [center.0 as f64 + r * cos, center.1 as f64 + r * sin],
+                        [side * cos, side * sin],
+                    ));
+                }
+            }
+        }
+    }
+    if !path.closed {
+        if let Some(last) = path.pieces.last() {
+            let to = match *last {
+                Piece::Line { to, .. } | Piece::Arc { to, .. } => to,
+            };
+            let l = left(dirs[count - 1].1);
+            out.push(([to.0 as f64, to.1 as f64], [l.0, l.1]));
+        }
+    }
+    out
+}
+
+/// The vertices of an outline at the start and at the end of a turn or of a path, and whether it is
+/// a hole: what the flat face at each end is made of.
+type EndLoops = (Vec<u32>, Vec<u32>, bool);
+
+/// The triangles of the solid made by sweeping a profile along a path (see [`sweep`] for what is
+/// refused). The profile is put at stations along the path: the ends of the pieces, every side of
+/// the circle table along an arc, and the plane that halves each corner. The surface is closed (a
+/// flat face at each end of an open path), faces away from the material, and has the volume that
+/// [`sweep`] gives up to the sides of the circles. `sides` is the sides of a full circle (a
+/// multiple of four) and `limit` the most triangles that are made.
+pub fn mesh(profile: &Profile, path: &Path, sides: u32, limit: usize) -> Result<Mesh, CadError> {
+    sweep(profile, path)?;
+    let table = Circle::new(sides);
+    let stations = stations_of(path, &table);
+    let count = stations.len();
+    let steps = if path.closed { count } else { count - 1 };
+    let mut b = Builder::new(limit);
+    let place =
+        |s: &Station, u: f64, v: f64| -> [f64; 3] { [s.0[0] + u * s.1[0], s.0[1] + u * s.1[1], v] };
+    let mut caps: Vec<Vec<EndLoops>> = Vec::new();
+    for region in sampled_regions(profile, &table) {
+        let mut ends = Vec::new();
+        for (index, points) in region.iter().enumerate() {
+            let rings: Vec<Vec<u32>> = stations
+                .iter()
+                .map(|st| {
+                    points
+                        .iter()
+                        .map(|&(u, v)| b.vertex(place(st, u, v)))
+                        .collect()
+                })
+                .collect();
+            let m = points.len();
+            for j in 0..steps {
+                let j1 = (j + 1) % count;
+                for i in 0..m {
+                    let q = (i + 1) % m;
+                    let (pa, pb, pc, pd) = (rings[j][i], rings[j][q], rings[j1][q], rings[j1][i]);
+                    if pa != pb && pb != pc && pa != pc {
+                        b.triangle(pa, pb, pc)?;
+                    }
+                    if pa != pc && pc != pd && pa != pd {
+                        b.triangle(pa, pc, pd)?;
+                    }
+                }
+            }
+            if !path.closed {
+                ends.push((rings[0].clone(), rings[count - 1].clone(), index > 0));
+            }
+        }
+        caps.push(ends);
+    }
+    if !path.closed {
+        let first = path.pieces.first().map(directions).map(|d| d.0);
+        let last = path.pieces.last().map(directions).map(|d| d.1);
+        if let (Some(start), Some(end)) = (first, last) {
+            for ends in &caps {
+                let loops = |at_end: bool, label: &str| -> Vec<Loop> {
+                    ends.iter()
+                        .map(|e| {
+                            let role = if e.2 { Role::Cut } else { Role::Boundary };
+                            let ids = if at_end { &e.1 } else { &e.0 };
+                            Loop::new(ids.clone(), role, label)
+                        })
+                        .collect()
+                };
+                let at_start = loops(false, "the start of the path");
+                let at_end = loops(true, "the end of the path");
+                b.plane(&at_start, [-start.0, -start.1, 0.0])?;
+                b.plane(&at_end, [end.0, end.1, 0.0])?;
+            }
+        }
+    }
+    Ok(b.finish())
+}
+
 /// The figures as lines of text in a language. With a material (its name and its density in
 /// kilograms per cubic metre) the mass is given too.
 pub fn sweep_text(
@@ -673,5 +869,97 @@ mod tests {
             assert_eq!(t.lines().count(), 6, "{}", l.code());
             assert!(t.contains("5000.000"), "{}", l.code());
         }
+    }
+
+    fn solid(profile: &Sketch, path: &Sketch) -> Mesh {
+        mesh(
+            &self::profile(profile),
+            &path_of(path).unwrap(),
+            128,
+            1_000_000,
+        )
+        .unwrap()
+    }
+
+    fn volume_is(m: &Mesh, mm3: f64, ppm: f64) -> bool {
+        let v = m.volume_nm3() / 1e18;
+        (v - mm3).abs() <= mm3 * ppm / 1e6
+    }
+
+    #[test]
+    fn the_mitred_corners_of_a_rectangle_give_the_exact_volume() {
+        // the rectangle has no curve: the triangles hold exactly the volume of the formula
+        let path = polyline(&[(0, 0), (50, 0), (50, 50)], false);
+        for (x0, x1, volume) in [(0, 4, 768.0), (-2, 2, 800.0), (-4, 0, 832.0)] {
+            let m = solid(&rectangle(x0, -1, x1, 1), &path);
+            m.check_closed().unwrap();
+            assert!(volume_is(&m, volume, 1.0), "{x0}: {}", m.volume_nm3());
+        }
+        // a closed square of lines has no ends
+        let square = polyline(&[(0, 0), (100, 0), (100, 100), (0, 100)], true);
+        let m = solid(&rectangle(0, -1, 4, 1), &square);
+        m.check_closed().unwrap();
+        assert!(volume_is(&m, 3072.0, 1.0), "{}", m.volume_nm3());
+        // the same path drawn the other way round has the profile outside
+        let other = polyline(&[(0, 0), (0, 100), (100, 100), (100, 0)], true);
+        let m = solid(&rectangle(0, -1, 4, 1), &other);
+        m.check_closed().unwrap();
+        assert!(volume_is(&m, 3200.0 + 128.0, 1.0), "{}", m.volume_nm3());
+    }
+
+    #[test]
+    fn a_pipe_a_bend_and_a_torus_are_closed_surfaces_with_their_volumes() {
+        let mut ring = circle(0, 5);
+        let c = ring.add_point(mm(0), mm(0)).unwrap();
+        ring.add_circle(c, mm(3)).unwrap();
+        // 1600 pi = 5026.548 mm3, 128 sides take 0.05 % of it
+        let pipe = solid(&ring, &polyline(&[(0, 0), (0, 100)], false));
+        pipe.check_closed().unwrap();
+        assert!(volume_is(&pipe, 5026.548, 1000.0), "{}", pipe.volume_nm3());
+        let torus = solid(&circle(0, 3), &circle(0, 20));
+        torus.check_closed().unwrap();
+        assert!(
+            volume_is(&torus, 3553.058, 1500.0),
+            "{}",
+            torus.volume_nm3()
+        );
+        let mut bend = new("path");
+        let o = bend.add_point(mm(0), mm(0)).unwrap();
+        let a = bend.add_point(mm(20), mm(0)).unwrap();
+        let b = bend.add_point(mm(0), mm(20)).unwrap();
+        bend.add_arc(o, a, b).unwrap();
+        for (x, volume) in [(0, 888.264), (2, 799.438), (-2, 977.091)] {
+            let m = solid(&circle(x, 3), &bend);
+            m.check_closed().unwrap();
+            assert!(volume_is(&m, volume, 1500.0), "{x}: {}", m.volume_nm3());
+        }
+        // a line, then an arc that leaves it tangent, then a corner of lines after it is not
+        // allowed, but the tangent join is
+        let mut path = new("path");
+        let a = path.add_point(mm(0), mm(0)).unwrap();
+        let b = path.add_point(mm(10), mm(0)).unwrap();
+        let o = path.add_point(mm(10), mm(10)).unwrap();
+        let c = path.add_point(mm(20), mm(10)).unwrap();
+        path.add_line(a, b).unwrap();
+        path.add_arc(o, b, c).unwrap();
+        let m = solid(&circle(0, 1), &path);
+        m.check_closed().unwrap();
+        assert!(volume_is(&m, 80.764, 3000.0), "{}", m.volume_nm3());
+    }
+
+    #[test]
+    fn the_mesh_keeps_the_refusals_and_the_limit_of_triangles() {
+        let pr = self::profile(&circle(0, 3));
+        let line = path_of(&polyline(&[(0, 0), (0, 100)], false)).unwrap();
+        let e = mesh(&pr, &line, 128, 100).unwrap_err();
+        assert_eq!(e.code(), "PHOENIX-CAD-050");
+        let back = path_of(&polyline(&[(0, 0), (50, 0), (0, 0)], false)).unwrap();
+        assert_eq!(
+            mesh(&pr, &back, 128, 1_000_000).unwrap_err().code(),
+            "PHOENIX-CAD-036"
+        );
+        let a = mesh(&pr, &line, 16, 1_000_000).unwrap();
+        assert_eq!(a, mesh(&pr, &line, 16, 1_000_000).unwrap());
+        assert!(a.triangles.len() < 128 * 2);
     }
 }

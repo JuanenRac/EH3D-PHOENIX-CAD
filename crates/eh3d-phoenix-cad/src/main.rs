@@ -31,8 +31,8 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad holes PROJECT.phoenixproj [--tools] [--text] [--lang CODE] [--config FILE]            the schedule of the holes of the box for the person who drills (a tag, the face, the position, the diameter and the shape of each) as comma separated values, or with --tools the drills and cutters they need grouped by diameter and shape
   eh3d-phoenix-cad sketch-export PROJECT.phoenixproj|SKETCH.phoenixsketch --format dxf|svg [--sketch NAME] [--out FILE] [--overwrite] [--lang CODE] [--config FILE]   writes a sketch (the only one of the project, or the one named) as a flat drawing of its closed outlines for a laser or a router; never over a file that exists unless --overwrite is given
   eh3d-phoenix-cad balance PROJECT.phoenixproj [--lang CODE] [--config FILE]                     the mass of the placed parts and where their centre of mass is (exact for profiles, an estimate for screws and brackets, and the number of estimated parts is said)
-  eh3d-phoenix-cad revolve PROJECT.phoenixproj|SKETCH.phoenixsketch --axis x|y [--angle DEGREES] [--sketch NAME] [--material NAME] [--lang CODE] [--config FILE]   turns a sketch (the only one of the project, or the one named) about its first or second axis, by a full turn unless --angle says less, and prints the volume, the surface and the distances from the axis of the solid made and, with a material of the settings, its mass; the profile must not cross the axis
-  eh3d-phoenix-cad sweep PROFILE --path PATH [--profile-sketch NAME] [--path-sketch NAME] [--material NAME] [--lang CODE] [--config FILE]   sweeps the profile (a project or a sketch file, and the sketch of it) along the path (the lines and arcs of another sketch, or one circle) and prints the length of the path, the volume and the surface of the solid made and, with a material of the settings, its mass; the profile starts on the path, its first axis to the left of the way the path is walked from the free end of its first element
+  eh3d-phoenix-cad revolve PROJECT.phoenixproj|SKETCH.phoenixsketch --axis x|y [--angle DEGREES] [--sketch NAME] [--material NAME] [--out FILE.stl|.obj|.3mf [--overwrite]] [--lang CODE] [--config FILE]   turns a sketch (the only one of the project, or the one named) about its first or second axis, by a full turn unless --angle says less, and prints the volume, the surface and the distances from the axis of the solid made and, with a material of the settings, its mass; the profile must not cross the axis; with --out the triangles of the solid are written to a file of the format its extension says (never over a file that exists unless --overwrite is given)
+  eh3d-phoenix-cad sweep PROFILE --path PATH [--profile-sketch NAME] [--path-sketch NAME] [--material NAME] [--out FILE.stl|.obj|.3mf [--overwrite]] [--lang CODE] [--config FILE]   sweeps the profile (a project or a sketch file, and the sketch of it) along the path (the lines and arcs of another sketch, or one circle) and prints the length of the path, the volume and the surface of the solid made and, with a material of the settings, its mass; the profile starts on the path, its first axis to the left of the way the path is walked from the free end of its first element; with --out the triangles of the solid are written as for revolve
   eh3d-phoenix-cad library FILE.phoenixlib [--config FILE]                        reads a library of parts, checks it and lists its parts
   eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill [--view top|front|side] [--out FILE] [--overwrite] [--ascii|--binary] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), as a Wavefront file (obj) or as a 3MF package (3mf), the plan, front or side as a drawing (dxf, svg), the STEP file, the OpenSCAD-style script, the fit report or the bill of materials
   eh3d-phoenix-cad config                                                         every setting of the library, of the window and of the sketch with its default value, as a file for --config
@@ -333,6 +333,42 @@ fn read_sketch(
     Ok((sketch, project, settings, ui, solver))
 }
 
+/// Writes the triangles of a solid to `out` as the file its extension says (`.stl` binary or text
+/// as the setting `mesh.binary` says, `.obj` or `.3mf`) and tells how many bytes it has.
+fn write_solid(
+    mesh: &eh3d_phoenix_cad::mesh::Mesh,
+    name: &str,
+    out: &Path,
+    overwrite: bool,
+    settings: &Settings,
+    ui: &UiSettings,
+    lang: Lang,
+) -> Result<(), String> {
+    let extension = out
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    let bodies = [(name, mesh)];
+    let bytes: Vec<u8> = match extension.as_str() {
+        "stl" if settings.mesh.binary => eh3d_phoenix_cad::mesh::stl_binary(&bodies),
+        "stl" => eh3d_phoenix_cad::mesh::stl_ascii(&bodies).into_bytes(),
+        "obj" => eh3d_phoenix_cad::interchange::obj(&bodies).into_bytes(),
+        "3mf" => eh3d_phoenix_cad::interchange::three_mf(&bodies),
+        _ => return Err("--out needs a file that ends in .stl, .obj or .3mf".to_owned()),
+    };
+    let written =
+        eh3d_phoenix_cad::export::write_bytes(out, &bytes, overwrite, None, ui.export.max_kib)
+            .map_err(|e| error_text(&e, lang))?;
+    println!(
+        "{}",
+        eh3d_phoenix_cad::lang::fill(
+            Msg::Exported.tr(lang),
+            &[&out.display().to_string(), &written.to_string()]
+        )
+    );
+    Ok(())
+}
+
 /// `revolve`: turns a sketch about one of its axes and prints the volume, the surface and, with a
 /// material of the settings, the mass of the solid.
 fn run_revolve(args: &[String]) -> Result<bool, String> {
@@ -342,6 +378,8 @@ fn run_revolve(args: &[String]) -> Result<bool, String> {
     let mut axis: Option<String> = None;
     let mut turn: Option<String> = None;
     let mut material: Option<String> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut overwrite = false;
     let mut lang = Lang::En;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -351,6 +389,8 @@ fn run_revolve(args: &[String]) -> Result<bool, String> {
                     iter.next().ok_or("--config needs a settings file")?,
                 ));
             }
+            "--out" => out = Some(PathBuf::from(iter.next().ok_or("--out needs a file")?)),
+            "--overwrite" => overwrite = true,
             "--axis" => axis = Some(iter.next().ok_or("--axis needs x or y")?.clone()),
             "--angle" => turn = Some(iter.next().ok_or("--angle needs degrees")?.clone()),
             "--sketch" => name = Some(iter.next().ok_or("--sketch needs a name")?.clone()),
@@ -380,7 +420,7 @@ fn run_revolve(args: &[String]) -> Result<bool, String> {
         }
         None => eh3d_phoenix_cad::units::Angle::from_deg(360).map_err(|e| error_text(&e, lang))?,
     };
-    let (sketch, _, settings, _, solver) =
+    let (sketch, _, settings, ui, solver) =
         read_sketch(&file, name.as_deref(), config.as_deref(), lang)?;
     let profile = eh3d_phoenix_cad::profile::Profile::from_sketch(
         &sketch,
@@ -404,6 +444,25 @@ fn run_revolve(args: &[String]) -> Result<bool, String> {
         eh3d_phoenix_cad::revolve::revolve_text(&turned, density, lang)
             .map_err(|e| error_text(&e, lang))?
     );
+    if let Some(target) = out {
+        let solid = eh3d_phoenix_cad::revolve::mesh(
+            &profile,
+            axis,
+            angle,
+            settings.mesh.circle_segments,
+            settings.mesh.max_triangles as usize,
+        )
+        .map_err(|e| error_text(&e, lang))?;
+        write_solid(
+            &solid,
+            sketch.name(),
+            &target,
+            overwrite,
+            &settings,
+            &ui,
+            lang,
+        )?;
+    }
     Ok(true)
 }
 
@@ -416,6 +475,8 @@ fn run_sweep(args: &[String]) -> Result<bool, String> {
     let mut profile_name: Option<String> = None;
     let mut path_name: Option<String> = None;
     let mut material: Option<String> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut overwrite = false;
     let mut lang = Lang::En;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -425,6 +486,8 @@ fn run_sweep(args: &[String]) -> Result<bool, String> {
                     iter.next().ok_or("--config needs a settings file")?,
                 ));
             }
+            "--out" => out = Some(PathBuf::from(iter.next().ok_or("--out needs a file")?)),
+            "--overwrite" => overwrite = true,
             "--path" => {
                 path_file = Some(PathBuf::from(iter.next().ok_or("--path needs a file")?));
             }
@@ -452,7 +515,7 @@ fn run_sweep(args: &[String]) -> Result<bool, String> {
     }
     let file = file.ok_or("sweep needs a project or a sketch file for the profile")?;
     let path_file = path_file.ok_or("sweep needs --path")?;
-    let (sketch, _, settings, _, solver) =
+    let (sketch, _, settings, ui, solver) =
         read_sketch(&file, profile_name.as_deref(), config.as_deref(), lang)?;
     let (path_sketch, _, _, _, _) =
         read_sketch(&path_file, path_name.as_deref(), config.as_deref(), lang)?;
@@ -479,6 +542,24 @@ fn run_sweep(args: &[String]) -> Result<bool, String> {
         eh3d_phoenix_cad::sweep::sweep_text(&swept, density, lang)
             .map_err(|e| error_text(&e, lang))?
     );
+    if let Some(target) = out {
+        let solid = eh3d_phoenix_cad::sweep::mesh(
+            &profile,
+            &path,
+            settings.mesh.circle_segments,
+            settings.mesh.max_triangles as usize,
+        )
+        .map_err(|e| error_text(&e, lang))?;
+        write_solid(
+            &solid,
+            sketch.name(),
+            &target,
+            overwrite,
+            &settings,
+            &ui,
+            lang,
+        )?;
+    }
     Ok(true)
 }
 

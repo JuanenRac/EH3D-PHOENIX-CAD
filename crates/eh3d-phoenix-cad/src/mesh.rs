@@ -172,6 +172,20 @@ fn sin_cos_quarter(theta: f64) -> (f64, f64) {
     (sin, cos)
 }
 
+/// The sine and the cosine of any angle in radians, with the same sums and products as the table
+/// of the circles (the angle is brought into the first quarter turn and the result turned back).
+pub(crate) fn sin_cos(theta: f64) -> (f64, f64) {
+    let quarter = std::f64::consts::FRAC_PI_2;
+    let turns = (theta / quarter).floor();
+    let (s, c) = sin_cos_quarter(theta - turns * quarter);
+    match (turns as i64).rem_euclid(4) {
+        0 => (s, c),
+        1 => (c, -s),
+        2 => (-s, -c),
+        _ => (-c, s),
+    }
+}
+
 /// The points of a circle of `n` sides (a multiple of four), shared by every circle of a solid.
 #[derive(Debug, Clone)]
 pub struct Circle {
