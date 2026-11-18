@@ -26,6 +26,7 @@
 //! * [`sketch_export`]: a sketch as a flat DXF or SVG drawing of its closed outlines (outer outlines and holes on their own layers, lines, arcs and circles kept as such), for a laser or a router;
 //! * [`balance`]: the mass of the placed parts and their centre of mass, in integers (exact for profiles, an estimate from the middle of the box for screws and brackets, and the report counts the estimated ones);
 //! * [`panels`]: the reports of the window (cutting plan, hole schedule and tools, clearance, placements, mass and centre of mass) as text in the eight languages, the state of their panels and the safe name of the file of a sketch drawing;
+//! * [`section`]: the section of the model by a plane across one of the axes, cut from the triangles of every solid (the box, the parts and the turned and swept bodies) into closed outlines with their area, as a DXF or SVG drawing and as a report;
 //! * [`titleblock`]: the title block of a drawing (organisation, title, number, revision, author and scale in a table under the box), written into the DXF and SVG drawings when the settings ask for it, with the names of its cells in the eight languages;
 //! * [`partlist`]: the list of the placed parts with their properties (kind, material, density, volume, mass, corner and size of the box) and its totals, as comma separated values or as text in the eight languages;
 //! * [`revolve`]: the volume, the surface and the mass of the solid that a sketch makes when it is turned about one of its axes (by the theorems of Pappus, with the circular segments of its arcs), refused when the profile crosses the axis;
@@ -120,6 +121,7 @@ pub mod revolve;
 pub mod scad;
 pub mod scene;
 pub mod schedule;
+pub mod section;
 pub mod shot;
 pub mod sketch;
 pub mod sketch_export;

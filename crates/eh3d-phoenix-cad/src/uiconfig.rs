@@ -196,6 +196,10 @@ pub struct PanelSettings {
     pub revolve_axis: crate::revolve::Axis,
     /// The turn, in whole degrees, the revolve panel starts with.
     pub revolve_angle: u32,
+    /// The axis across the plane the section panel starts with.
+    pub section_axis: crate::assembly::Dim,
+    /// The position of the plane the section panel starts with.
+    pub section_position: Length,
 }
 
 impl PanelSettings {
@@ -455,6 +459,7 @@ impl PanelSettings {
     fn from_config(c: &Config) -> Result<PanelSettings, CadError> {
         let name = word(c, "panels.sketch_format")?;
         let axis = word(c, "panels.revolve_axis")?;
+        let section_axis = word(c, "panels.section_axis")?;
         Ok(PanelSettings {
             holes_tools: count(c, "panels.holes_tools", 0, 1)? == 1,
             explode: count(c, "panels.explode", 0, 1)? == 1,
@@ -471,6 +476,12 @@ impl PanelSettings {
                 CadError::Config(format!("panels.revolve_axis: {axis} is not x or y"))
             })?,
             revolve_angle: count(c, "panels.revolve_angle", 1, 360)?,
+            section_axis: crate::assembly::Dim::from_name(section_axis).ok_or_else(|| {
+                CadError::Config(format!(
+                    "panels.section_axis: {section_axis} is not x, y or z"
+                ))
+            })?,
+            section_position: c.length("panels.section_position")?,
         })
     }
 }
@@ -590,6 +601,8 @@ mod tests {
         assert_eq!(s.panels.sketch_format, SketchFormat::Dxf);
         assert_eq!(s.panels.revolve_axis, crate::revolve::Axis::X);
         assert_eq!(s.panels.revolve_angle, 360);
+        assert_eq!(s.panels.section_axis, crate::assembly::Dim::Z);
+        assert_eq!(s.panels.section_position, mm(0));
         assert_eq!((n.pattern_count, n.pattern_step), (4, mm(10)));
         assert_eq!(n.pattern_radius, mm(5));
         assert_eq!(n.pattern_angle, Angle::from_deg(90).unwrap());
@@ -686,6 +699,9 @@ sketch_format = pdf
 ",
             "[panels]
 revolve_axis = z
+",
+            "[panels]
+section_axis = w
 ",
             "[panels]
 revolve_angle = 0

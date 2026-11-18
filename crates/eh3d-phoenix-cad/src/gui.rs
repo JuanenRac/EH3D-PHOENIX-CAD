@@ -2,6 +2,7 @@
 //! passes on what the person does. Everything that can be decided without a screen is decided
 //! there, in code that is tested.
 
+use crate::assembly::Dim;
 use crate::body::StepState;
 use crate::browse::{self, Browser};
 use crate::catalog;
@@ -928,6 +929,41 @@ impl App {
                                 });
                         });
                     }
+                    Panel::Section => {
+                        ui.horizontal(|ui| {
+                            ui.label(Msg::PanelSectionAxis.tr(lang));
+                            for (axis, name) in [(Dim::X, "x"), (Dim::Y, "y"), (Dim::Z, "z")] {
+                                ui.selectable_value(&mut self.panels.section_axis, axis, name);
+                            }
+                            ui.label(Msg::PanelSectionAt.tr(lang));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.panels.section_at)
+                                    .desired_width(80.0),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(Msg::PanelFormat.tr(lang));
+                            ui.selectable_value(&mut self.panels.format, SketchFormat::Dxf, "DXF");
+                            ui.selectable_value(&mut self.panels.format, SketchFormat::Svg, "SVG");
+                        });
+                        let suggested = self.win.section_file_name(
+                            self.panels.section_axis,
+                            &self.panels.section_at,
+                            self.panels.format,
+                        );
+                        ui.horizontal(|ui| {
+                            ui.label(Msg::FileName.tr(lang));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.panels.file)
+                                    .hint_text(suggested.as_str())
+                                    .desired_width(260.0),
+                            );
+                        });
+                        ui.checkbox(&mut self.panels.overwrite, Msg::ExportOverwrite.tr(lang));
+                        if ui.button(Msg::PanelWrite.tr(lang)).clicked() {
+                            write = true;
+                        }
+                    }
                     _ => {}
                 }
                 if panel == Panel::SketchExport {
@@ -963,7 +999,10 @@ impl App {
                         }
                     }
                 } else {
-                    text = if panel == Panel::Revolve && !names.is_empty() {
+                    text = if panel == Panel::Section {
+                        self.win
+                            .section_panel_text(self.panels.section_axis, &self.panels.section_at)
+                    } else if panel == Panel::Revolve && !names.is_empty() {
                         let material = (!self.panels.revolve_material.is_empty())
                             .then_some(self.panels.revolve_material.as_str());
                         self.win.revolve_panel_text(
@@ -992,6 +1031,23 @@ impl App {
         if copy {
             ctx.copy_text(text);
             self.win.report_copied();
+        } else if write && panel == Panel::Section {
+            let file = if self.panels.file.trim().is_empty() {
+                self.win.section_file_name(
+                    self.panels.section_axis,
+                    &self.panels.section_at,
+                    self.panels.format,
+                )
+            } else {
+                self.panels.file.clone()
+            };
+            self.win.write_section_drawing(
+                self.panels.section_axis,
+                &self.panels.section_at,
+                self.panels.format,
+                &file,
+                self.panels.overwrite,
+            );
         } else if write {
             let sketch = names[self.panels.sketch].clone();
             let format = self.panels.format;

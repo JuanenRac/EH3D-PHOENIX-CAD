@@ -429,3 +429,71 @@ fn the_part_list_is_csv_for_a_program_and_text_for_a_person() {
     let (code, _, _) = run(&["partlist"]);
     assert_eq!(code, 1);
 }
+
+#[test]
+fn a_section_of_the_model_is_printed_and_written_as_a_drawing() {
+    let (code, text, err) = run(&["section", BOX, "--axis", "z", "--at", "10"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(text.starts_with("section plane: z = 10 mm\n"), "{text}");
+    assert!(text.contains("\nenclosure: "), "{text}");
+    let (code, text, _) = run(&[
+        "section", BOX, "--axis", "z", "--at", "10 mm", "--lang", "es",
+    ]);
+    assert_eq!(code, 0);
+    assert!(text.starts_with("plano de sección: z = 10 mm\n"), "{text}");
+    // a plane outside the model says so
+    let (code, text, _) = run(&["section", BOX, "--axis", "x", "--at", "9000"]);
+    assert_eq!(code, 0);
+    assert!(text.contains("does not cut the model"), "{text}");
+    // the drawing: the format is the extension or --format, and a file is never written over
+    let dir = Scratch::new("section");
+    let dxf = dir.file("cut.dxf");
+    let (code, text, err) = run(&["section", BOX, "--axis", "y", "--at", "10", "--out", &dxf]);
+    assert_eq!(code, 0, "{err}");
+    assert!(text.contains("cut.dxf"), "{text}");
+    assert!(fs::read_to_string(&dxf).unwrap().contains("CONTORNO"));
+    let (code, _, err) = run(&["section", BOX, "--axis", "y", "--at", "10", "--out", &dxf]);
+    assert_ne!(code, 0);
+    assert!(!err.is_empty());
+    let (code, _, err) = run(&[
+        "section",
+        BOX,
+        "--axis",
+        "y",
+        "--at",
+        "10",
+        "--out",
+        &dxf,
+        "--overwrite",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let svg = dir.file("cut.out");
+    let (code, _, err) = run(&[
+        "section", BOX, "--axis", "x", "--at", "10", "--format", "svg", "--out", &svg,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert!(fs::read_to_string(&svg).unwrap().starts_with("<?xml"));
+    // what is refused
+    for (args, why) in [
+        (vec!["section", BOX, "--at", "10"], "needs --axis"),
+        (vec!["section", BOX, "--axis", "x"], "needs --at"),
+        (
+            vec!["section", BOX, "--axis", "w", "--at", "10"],
+            "the axis is x, y or z",
+        ),
+        (
+            vec!["section", "--axis", "x", "--at", "10"],
+            "needs a project",
+        ),
+        (
+            vec![
+                "section", BOX, "--axis", "x", "--at", "10", "--out", "cut.png",
+            ],
+            "ends in .dxf or .svg",
+        ),
+    ] {
+        let (code, _, err) = run(&args);
+        assert_ne!(code, 0, "{args:?}");
+        assert!(err.contains(why), "{args:?}: {err}");
+    }
+}

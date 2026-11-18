@@ -2322,6 +2322,7 @@ impl Window {
             }),
             Panel::PartList => self.part_list().map(|l| crate::partlist::text_in(&l, lang)),
             Panel::Balance => self.balance().map(|b| panels::balance_text_in(&b, lang)),
+            Panel::Section => Ok(String::new()),
             Panel::SketchExport | Panel::Revolve => Ok(if self.mech.sketches.is_empty() {
                 Msg::PanelNoSketch.tr(lang).to_string()
             } else {
@@ -2363,6 +2364,105 @@ impl Window {
             crate::revolve::revolve_text(&turned, density, lang)
         };
         figures().unwrap_or_else(|e| error_text(&e, lang))
+    }
+
+    /// The section of the model by the plane across `axis` at a position typed as a length (see
+    /// [`crate::section`]): the model is made into triangles with the settings of the mesh, so a
+    /// model that cannot be refused with `PHOENIX-CAD-048` to `-050` has no section.
+    pub fn section(&self, axis: Dim, position: &str) -> Result<crate::section::Section, CadError> {
+        let at = self.parse_text(position)?;
+        let bodies = crate::solid::bodies(&self.built.enclosure, &self.settings.mesh)?;
+        Ok(crate::section::cut(&bodies, axis, at))
+    }
+
+    /// The report of a section as lines of text in the language of the window; a refusal is
+    /// written as the text of its error.
+    pub fn section_panel_text(&self, axis: Dim, position: &str) -> String {
+        match self.section(axis, position) {
+            Ok(section) => crate::section::text_in(&section, self.lang),
+            Err(e) => error_text(&e, self.lang),
+        }
+    }
+
+    /// The name of the model for the title block of a drawing: the name of the project file
+    /// without its extension, or `box`.
+    pub fn model_name(&self) -> String {
+        self.path
+            .as_deref()
+            .and_then(Path::file_stem)
+            .map_or_else(|| "box".to_string(), |s| s.to_string_lossy().into_owned())
+    }
+
+    /// The text of the DXF or SVG drawing of a section (see [`crate::section::render_titled`]).
+    pub fn section_drawing_text(
+        &self,
+        axis: Dim,
+        position: &str,
+        dxf: bool,
+    ) -> Result<String, CadError> {
+        let section = self.section(axis, position)?;
+        crate::section::render_titled(
+            &section,
+            &self.settings.drawing,
+            dxf,
+            &self.settings.title_block,
+            &self.model_name(),
+            self.lang,
+        )
+    }
+
+    /// The name suggested for the file of the drawing of a section: `section-z-15.dxf` for the
+    /// plane across `z` at 15 mm (a point in the position is written as an underscore).
+    pub fn section_file_name(
+        &self,
+        axis: Dim,
+        position: &str,
+        format: crate::panels::SketchFormat,
+    ) -> String {
+        let at = self
+            .parse_text(position)
+            .map_or_else(|_| "0".to_string(), |l| mm_text(l.get()).replace('.', "_"));
+        format!("section-{}-{at}.{}", axis.name(), format.name())
+    }
+
+    /// Writes the drawing of a section in a file next to the project, as the drawing of a sketch
+    /// is written (a name that holds a folder is refused, and so is a file that exists unless
+    /// `overwrite` is true). The status bar says what happened.
+    pub fn write_section_drawing(
+        &mut self,
+        axis: Dim,
+        position: &str,
+        format: crate::panels::SketchFormat,
+        file: &str,
+        overwrite: bool,
+    ) -> bool {
+        let written = self
+            .section_drawing_text(axis, position, format.is_dxf())
+            .and_then(|text| {
+                let target = crate::panels::drawing_target(self.path.as_deref(), file)?;
+                let bytes = export::write_file(
+                    &target,
+                    &text,
+                    overwrite,
+                    self.path.as_deref(),
+                    self.ui.export.max_kib,
+                )?;
+                let name = target
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                Ok((name, bytes))
+            });
+        match written {
+            Ok((name, bytes)) => {
+                self.status = Status::Done(Msg::Exported, vec![name, bytes.to_string()]);
+                true
+            }
+            Err(e) => {
+                self.status = Status::Error(e);
+                false
+            }
+        }
     }
 
     /// Writes a sketch of the project as a DXF or SVG drawing in a file next to the project (see
@@ -8083,5 +8183,49 @@ mass: "
             .map(|p| p.orientation.roll)
             .collect();
         assert!(rolls.contains(&3), "{rolls:?}");
+    }
+
+    #[test]
+    fn the_section_panel_cuts_the_model_reports_in_the_language_and_writes_the_drawing() {
+        use crate::panels::{Panel, PanelOptions, SketchFormat};
+        let mut w = fresh();
+        let none = PanelOptions::default();
+        assert_eq!(w.panel_text(Panel::Section, &none), "");
+        // the box is 104 x 64 mm outside and 100 x 60 inside: the wall holds 656 mm2 at 15 mm
+        let t = w.section_panel_text(Dim::Z, "15");
+        assert!(t.starts_with("section plane: z = 15 mm\n"), "{t}");
+        assert!(t.contains("area of the material: 656.000 mm2"), "{t}");
+        assert_eq!(t, w.section_panel_text(Dim::Z, "15 mm"));
+        w.lang = Lang::Es;
+        let es = w.section_panel_text(Dim::Z, "15");
+        assert!(es.contains("área del material: 656.000 mm2"), "{es}");
+        w.lang = Lang::En;
+        // a plane outside the model and a position that is not a length are told as text
+        assert!(w.section_panel_text(Dim::X, "500").contains("does not cut"));
+        assert!(w
+            .section_panel_text(Dim::X, "far")
+            .starts_with("PHOENIX-CAD-008"));
+        assert_eq!(
+            w.section_file_name(Dim::Y, "12.5", SketchFormat::Svg),
+            "section-y-12_5.svg"
+        );
+        assert_eq!(
+            w.section_file_name(Dim::Z, "far", SketchFormat::Dxf),
+            "section-z-0.dxf"
+        );
+        // the drawing is written next to the project, never over a file that exists, never into
+        // another folder
+        let dir = Scratch::new("section-file");
+        let project = dir.0.join("box.phoenixproj");
+        assert!(w.save_to(&project), "{:?}", w.status);
+        assert!(w.write_section_drawing(Dim::Z, "15", SketchFormat::Dxf, "cut.dxf", false));
+        let text = std::fs::read_to_string(dir.0.join("cut.dxf")).unwrap();
+        assert!(text.contains("CONTORNO"));
+        assert!(!w.write_section_drawing(Dim::Z, "15", SketchFormat::Dxf, "cut.dxf", false));
+        assert!(w.write_section_drawing(Dim::Z, "15", SketchFormat::Dxf, "cut.dxf", true));
+        assert!(!w.write_section_drawing(Dim::Z, "15", SketchFormat::Svg, "../cut.svg", true));
+        assert!(!w.write_section_drawing(Dim::Z, "500", SketchFormat::Svg, "empty.svg", false));
+        assert!(!dir.0.join("empty.svg").exists());
+        assert_eq!(w.model_name(), "box");
     }
 }

@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use crate::assembly::Dim;
 use crate::balance::Balance;
 use crate::catalog::{mass_g_text, PartInstance};
 use crate::clearance::{self, ClearanceSettings};
@@ -45,11 +46,13 @@ pub enum Panel {
     SketchExport,
     /// The figures of a sketch turned about one of its axes.
     Revolve,
+    /// The section of the model by a plane, with its drawing.
+    Section,
 }
 
 impl Panel {
     /// Every panel, in the order of the menu.
-    pub const ALL: [Panel; 8] = [
+    pub const ALL: [Panel; 9] = [
         Panel::CutPlan,
         Panel::Holes,
         Panel::Clearance,
@@ -58,6 +61,7 @@ impl Panel {
         Panel::Balance,
         Panel::SketchExport,
         Panel::Revolve,
+        Panel::Section,
     ];
 
     /// The title of the panel, which is also the text of its menu entry.
@@ -71,6 +75,7 @@ impl Panel {
             Panel::Balance => Msg::PanelBalance,
             Panel::SketchExport => Msg::PanelSketchExport,
             Panel::Revolve => Msg::PanelRevolve,
+            Panel::Section => Msg::PanelSection,
         }
     }
 }
@@ -142,6 +147,10 @@ pub struct PanelState {
     pub revolve_angle: String,
     /// The material of the revolve panel; empty means none, and then no mass is given.
     pub revolve_material: String,
+    /// The axis across the plane of the section panel.
+    pub section_axis: Dim,
+    /// The position of the plane being typed for the section panel.
+    pub section_at: String,
 }
 
 impl PanelState {
@@ -159,6 +168,8 @@ impl PanelState {
             revolve_axis: settings.revolve_axis,
             revolve_angle: settings.revolve_angle.to_string(),
             revolve_material: String::new(),
+            section_axis: settings.section_axis,
+            section_at: crate::scad::mm_text(settings.section_position.get()),
         }
     }
 
@@ -652,6 +663,7 @@ mod tests {
         assert_eq!(st.revolve_axis, Axis::X);
         assert_eq!(st.revolve_angle, "360");
         assert!(st.revolve_material.is_empty());
+        assert_eq!((st.section_axis, st.section_at.as_str()), (Dim::Z, "0"));
         let mut st = PanelState::new(&s, true);
         assert!(st.overwrite);
         st.explode = true;
