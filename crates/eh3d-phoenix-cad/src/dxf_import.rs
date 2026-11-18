@@ -443,8 +443,17 @@ mod tests {
             line(0.0, 60.0, 0.0, 0.0005),
         ]
         .concat());
-        assert!(profile(&read(&text).unwrap()).regions.len() == 1);
-        // and with a join distance of one nanometre the outline is open
+        let joined = read(&text).unwrap();
+        assert_eq!(profile(&joined).regions.len(), 1);
+        let points = |i: &Import| {
+            i.sketch
+                .elements()
+                .iter()
+                .filter(|e| matches!(e.element, crate::sketch::Element::Point { .. }))
+                .count()
+        };
+        assert_eq!(points(&joined), 4);
+        // and with a join distance of one nanometre the last end is a point of its own
         let open = from_dxf(
             &text,
             "drawn",
@@ -454,7 +463,7 @@ mod tests {
             1000,
         )
         .unwrap();
-        assert!(Profile::from_sketch(&open.sketch, &ProfileLimits::shipped()).is_err());
+        assert_eq!(points(&open), 5);
     }
 
     #[test]
