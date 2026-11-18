@@ -18,6 +18,7 @@
 //! * [`pattern`]: rows, grids and circles of holes with exact positions, batches of operations that apply all or nothing, and the pattern as one step of the history (a hole or a post repeated along a line or round a centre, each position checked like a hole or a post of its own);
 //! * [`catalog`]: libraries of parts in a plain text file (profiles cut to a length, screws and angle brackets, with a material each), parts placed in the model by their position, orientation on the axes and cut, the bill of materials with the volume and the mass for the density of the material, and the cut list;
 //! * [`assembly`]: simple assemblies of the parts of the catalog: mates that place a part relative to another along one axis (a gap, an alignment or a stack, solved in whole nanometres, a chain solved from its free end, a cycle refused) and the check of which parts share volume (bounding boxes, then the exact shapes of profiles, brackets and screws, with a screw through the hole of a bracket allowed when its shank fits), with a report of the pairs in conflict;
+//! * [`nesting`]: the cutting plan of the profiles: the pieces of the cut list fitted into bars with the kerf of the saw and the trimmed ends, longest piece first into the bar with the least room left, with the offcuts and how much of the bars is used;
 //! * [`fins`]: sets of cooling fins that rise from a face (how many, how thick, how tall, how far apart, where they start and how long they run), checked against the limits of the settings, the edges and the holes of the face and the other sets, and an estimate, marked as one, of the heat they give to still air from a coefficient of the settings;
 //! * [`graph`]: the graph of dependencies between objects, with a deterministic order of calculation, refused cycles, a recalculation that reuses what did not change, and a Graphviz dump;
 //! * [`vars`]: named variables for the master dimensions, the binding of the parameters of an enclosure to them, and families of variants (small, medium, large);
@@ -89,6 +90,7 @@ pub mod mesh;
 pub mod messages;
 pub mod mount;
 pub mod names;
+pub mod nesting;
 pub mod parametric;
 pub mod pattern;
 pub mod printer;

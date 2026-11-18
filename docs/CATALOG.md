@@ -54,6 +54,12 @@ The mass is the volume times the density of the material, in whole micrograms. T
 
 The window shows the bill and the cut list in the fit report (in the language of the window) and writes the bill as comma separated values from the export menu; the command `eh3d-phoenix-cad bill PROJECT` prints the same values, and `eh3d-phoenix-cad library FILE` reads a library, checks it against the settings and lists its parts.
 
+## Cutting plan
+
+`eh3d_phoenix_cad::nesting` fits the pieces of the cut list into bars. A profile comes in bars of its longest cut (`max_cut` in the library); a bar loses `stock.end_trim` at each end, and every cut between two pieces takes `stock.kerf`. The pieces are placed longest first, each into the bar where it fits and that is left with the least room (best fit decreasing), so the same model always gives the same plan; it is a good plan and not always the best possible one. A bar with `n` pieces needs the pieces plus `n - 1` kerfs inside its room, and the offcut is what is left less the kerf of the cut that frees the last piece; an offcut of at least `stock.reusable_offcut` is marked `stock`, a shorter one `scrap` and none `none`. A piece longer than the room of a bar, or more bars than `stock.max_bars`, is refused with `PHOENIX-CAD-045`.
+
+The command `eh3d-phoenix-cad cutplan PROJECT` prints one line per bar as comma separated values (`part,material,bar,bar_mm,pieces_mm,offcut_mm,offcut_use`, and a line of totals), or with `--text` lines for a person with the share of the bars that is used.
+
 ## In the project file
 
 A project with a placed part writes the mechanical domain in version 4, with the steps `add-part` and `remove-part`; a project without one keeps the version and the bytes it had. See [PROJECT_DOMAIN.md](PROJECT_DOMAIN.md) for the form of the lines.

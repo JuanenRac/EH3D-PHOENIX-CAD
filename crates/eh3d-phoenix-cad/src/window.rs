@@ -1827,6 +1827,24 @@ impl Window {
         self.bill().map(|bill| catalog::bill_csv(&bill))
     }
 
+    /// The cutting plan of the profiles placed in the model: the pieces of the cut list fitted
+    /// into bars (see [`crate::nesting`]).
+    pub fn stock_plan(&self) -> Result<crate::nesting::Plan, CadError> {
+        crate::nesting::plan(self.built.enclosure.parts().values(), &self.settings.stock)
+    }
+
+    /// The cutting plan as comma separated values.
+    pub fn stock_csv_text(&self) -> Result<String, CadError> {
+        self.stock_plan()
+            .map(|plan| crate::nesting::plan_csv(&plan, &self.settings.stock))
+    }
+
+    /// The cutting plan as lines of text.
+    pub fn stock_text(&self) -> Result<String, CadError> {
+        self.stock_plan()
+            .map(|plan| crate::nesting::plan_text(&plan))
+    }
+
     fn refresh_fields(&mut self) {
         self.fields = self.make_fields();
     }
@@ -6409,6 +6427,44 @@ mod tests {
         assert_eq!(
             plain,
             "kind,part,material,count,cut_mm,volume_mm3,mass_g\ntotal,,,0,,0.000,0.000\n"
+        );
+    }
+
+    #[test]
+    fn the_cutting_plan_of_the_frame_is_one_bar_for_each_profile() {
+        let mut w = fresh();
+        assert!(w.open(&frame_path()), "{:?}", w.status);
+        let csv = w.stock_csv_text().unwrap();
+        // two rails of 300 mm and one kerf between them: 1990 - 603 - 3 = 1384 mm of offcut
+        assert!(
+            csv.contains(
+                "tube-40x20,aluminium,1,2000,300+300,1384,stock
+"
+            ),
+            "{csv}"
+        );
+        assert!(csv.contains("tube-20x20,aluminium,1,2000,"), "{csv}");
+        assert!(
+            csv.ends_with(
+                "total,,2,,8,,
+"
+            ),
+            "{csv}"
+        );
+        let text = w.stock_text().unwrap();
+        assert!(
+            text.ends_with(
+                "2 bars in all
+"
+            ),
+            "{text}"
+        );
+        // a project without parts has an empty plan
+        assert_eq!(
+            example().stock_csv_text().unwrap(),
+            "part,material,bar,bar_mm,pieces_mm,offcut_mm,offcut_use
+total,,0,,0,,
+"
         );
     }
 

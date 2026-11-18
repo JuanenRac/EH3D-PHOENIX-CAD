@@ -16,6 +16,7 @@ use crate::assembly::AssemblyLimits;
 use crate::catalog::CatalogLimits;
 use crate::enclosure::{Face, Hole, HoleStyle};
 use crate::expr::{parse, Constants, ExprLimits, Value};
+use crate::nesting::StockSettings;
 use crate::printer::PrinterProfile;
 use crate::units::{parse_length, Unit};
 use crate::{CadError, Length};
@@ -553,6 +554,8 @@ pub struct Settings {
     pub mesh: MeshSettings,
     /// The settings of the flat drawings (DXF and SVG).
     pub drawing: DrawingSettings,
+    /// The settings of the cutting plan of the profiles.
+    pub stock: StockSettings,
     /// The named values that expressions can use: the sizes of the screws, the compensation of the
     /// printer and the `[constants]` of the settings.
     pub constants: Constants,
@@ -832,6 +835,7 @@ impl Settings {
         let thermal = ThermalSettings::from_config(c)?;
         let mesh = MeshSettings::from_config(c)?;
         let drawing = DrawingSettings::from_config(c)?;
+        let stock = StockSettings::from_config(c)?;
         let constants = build_constants(c, &screws, &printer, counterbore_extra, &expr)?;
         Ok(Settings {
             backups,
@@ -851,6 +855,7 @@ impl Settings {
             thermal,
             mesh,
             drawing,
+            stock,
             constants,
         })
     }
