@@ -293,7 +293,7 @@ pub(crate) fn length_word(word: &str, what: &str) -> Result<Length, String> {
 }
 
 /// A length written as a canonical decimal number of nanometres, of any sign.
-fn signed_word(word: &str, what: &str) -> Result<Length, String> {
+pub(crate) fn signed_word(word: &str, what: &str) -> Result<Length, String> {
     let nm = word
         .parse::<i64>()
         .ok()

@@ -45,7 +45,7 @@ use std::str::FromStr;
 
 use eh3d_container::ObjectId;
 
-use crate::catalog::{length_word, share_volume, Axis, PartInstance, Shape};
+use crate::catalog::{length_word, share_volume, signed_word, Axis, PartInstance, Shape};
 use crate::config::Config;
 use crate::enclosure::Id;
 use crate::{CadError, Length};
@@ -343,11 +343,11 @@ impl Mate {
             [_, _, "stack"] => MateKind::Stack,
             [_, _, "offset", axis, distance] => MateKind::Offset {
                 axis: Dim::from_name(axis).ok_or("the axis of an offset is not known")?,
-                distance: length_word(distance, "distance of an offset")?,
+                distance: signed_word(distance, "distance of an offset")?,
             },
             [_, _, "symmetric", axis, plane] => MateKind::Symmetric {
                 axis: Dim::from_name(axis).ok_or("the axis of a symmetry is not known")?,
-                plane: length_word(plane, "plane of a symmetry")?,
+                plane: signed_word(plane, "plane of a symmetry")?,
             },
             [_, _, "turn", quarters] => MateKind::Turn {
                 quarters: ["0", "1", "2", "3"]
