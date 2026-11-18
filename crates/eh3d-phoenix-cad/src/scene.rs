@@ -545,6 +545,8 @@ pub fn scene_with(
         // a turned body is drawn as the box that holds it, like a part
         let kind = if highlight == Highlight::Object(*id) {
             Kind::Selected
+        } else if conflicts.contains(id) {
+            Kind::Conflict
         } else {
             Kind::Post
         };
@@ -557,6 +559,8 @@ pub fn scene_with(
         // a swept body is drawn as the box that holds it, like a turned one
         let kind = if highlight == Highlight::Object(*id) {
             Kind::Selected
+        } else if conflicts.contains(id) {
+            Kind::Conflict
         } else {
             Kind::Post
         };

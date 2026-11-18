@@ -1552,25 +1552,27 @@ impl Window {
         ]
     }
 
-    /// The name of a placed part, or its id when it is not in the model.
+    /// The name of a placed part or of a turned or swept body, or its id when it is not in the
+    /// model.
     fn part_name(&self, id: &Id) -> String {
         self.built
             .enclosure
-            .parts()
-            .get(id)
-            .map_or_else(|| id.to_string(), |p| p.name.clone())
+            .name_of(id)
+            .unwrap_or_else(|| id.to_string())
     }
 
-    /// The placed part with a name, refused when there is none or more than one.
+    /// The placed part, or the turned or swept body, with a name, refused when there is none or
+    /// more than one.
     fn part_named(&self, name: &str) -> Result<Id, CadError> {
         let name = name.trim();
-        let mut found = self
-            .built
-            .enclosure
+        let e = &self.built.enclosure;
+        let named = e
             .parts()
             .iter()
-            .filter(|(_, p)| p.name == name)
-            .map(|(id, _)| *id);
+            .map(|(id, p)| (*id, p.name.as_str()))
+            .chain(e.turned().iter().map(|(id, b)| (*id, b.spec.name.as_str())))
+            .chain(e.swept().iter().map(|(id, b)| (*id, b.spec.name.as_str())));
+        let mut found = named.filter(|(_, n)| *n == name).map(|(id, _)| id);
         match (found.next(), found.next()) {
             (Some(id), None) => Ok(id),
             (Some(_), Some(_)) => Err(CadError::Duplicate(name.to_string())),
@@ -1703,12 +1705,14 @@ impl Window {
                 ));
             }
         }
-        if let Some(p) = self.built.enclosure.placed_parts().get(&mate.b) {
-            out.push(Self::info_field(
-                Key::PartPlaced,
-                Msg::FieldPartPlaced,
-                self.position_text(p.at),
-            ));
+        if let Ok(placed) = self.built.enclosure.try_placed_all() {
+            if let Some(p) = placed.get(&mate.b) {
+                out.push(Self::info_field(
+                    Key::PartPlaced,
+                    Msg::FieldPartPlaced,
+                    self.position_text(p.at),
+                ));
+            }
         }
         out
     }
@@ -1879,7 +1883,31 @@ impl Window {
                     self.size_text([hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]),
                 ));
             }
+            out.extend(self.body_mate_fields(id, turned.at, body.spec.at));
             out.extend(self.material_fields(body.volume_nm3(), &turned.material));
+        }
+        out
+    }
+
+    /// The fields that a mate or an interference adds to a turned or a swept body: where the mates
+    /// put it, when that is not where it was typed, and the parts whose boxes share volume with
+    /// its box.
+    fn body_mate_fields(&self, id: Id, typed: [Length; 3], placed: [Length; 3]) -> Vec<Field> {
+        let mut out = Vec::new();
+        if placed != typed {
+            out.push(Self::info_field(
+                Key::PartPlaced,
+                Msg::FieldPartPlaced,
+                self.position_text(placed),
+            ));
+        }
+        let partners = self.partners_of(id);
+        if !partners.is_empty() {
+            out.push(Self::info_field(
+                Key::PartConflicts,
+                Msg::FieldPartConflicts,
+                partners.join(", "),
+            ));
         }
         out
     }
@@ -1916,6 +1944,7 @@ impl Window {
                     self.size_text([hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]),
                 ));
             }
+            out.extend(self.body_mate_fields(id, swept.at, body.spec.at));
             out.extend(self.material_fields(body.volume_nm3(), &swept.material));
         }
         out
@@ -2099,8 +2128,7 @@ impl Window {
     /// The pairs of placed parts that do not touch and are closer than the minimum of the
     /// settings (see [`crate::clearance`]), with the parts where the mates put them.
     pub fn clearance_report(&self) -> Result<crate::clearance::Report, CadError> {
-        let placed =
-            crate::assembly::place(self.built.enclosure.parts(), self.built.enclosure.mates())?;
+        let placed = self.built.enclosure.try_placed_parts()?;
         crate::clearance::find(&placed, &self.settings.clearance)
     }
 
@@ -2118,8 +2146,7 @@ impl Window {
 
     /// The pairs that are too close as comma separated values.
     pub fn clearance_csv_text(&self) -> Result<String, CadError> {
-        let placed =
-            crate::assembly::place(self.built.enclosure.parts(), self.built.enclosure.mates())?;
+        let placed = self.built.enclosure.try_placed_parts()?;
         let report = crate::clearance::find(&placed, &self.settings.clearance)?;
         Ok(crate::clearance::report_csv(
             &report,
@@ -2132,8 +2159,7 @@ impl Window {
     /// assembly, as comma separated values; with `explode` the parts are pulled apart by that
     /// percentage first (see [`crate::placement`]).
     pub fn placement_csv_text(&self, explode: Option<u32>) -> Result<String, CadError> {
-        let mut placed =
-            crate::assembly::place(self.built.enclosure.parts(), self.built.enclosure.mates())?;
+        let mut placed = self.built.enclosure.try_placed_parts()?;
         if let Some(percent) = explode {
             placed = crate::placement::explode(&placed, percent, &self.settings.placement)?;
         }
@@ -2194,8 +2220,7 @@ impl Window {
     /// The mass of the placed parts (with the mates applied) and their centre of mass (see
     /// [`crate::balance`]).
     pub fn balance(&self) -> Result<crate::balance::Balance, CadError> {
-        let placed =
-            crate::assembly::place(self.built.enclosure.parts(), self.built.enclosure.mates())?;
+        let placed = self.built.enclosure.try_placed_parts()?;
         let weighed = self.weighed_bodies()?;
         crate::balance::balance_with(&placed, &weighed, &self.settings.materials)
     }
@@ -2271,7 +2296,7 @@ impl Window {
 
     /// The parts placed in the model with the mates applied.
     fn placed_parts(&self) -> Result<std::collections::BTreeMap<Id, PartInstance>, CadError> {
-        crate::assembly::place(self.built.enclosure.parts(), self.built.enclosure.mates())
+        self.built.enclosure.try_placed_parts()
     }
 
     /// The report of a panel of the Reports menu as text in the language of the window (see
@@ -3338,23 +3363,35 @@ impl Window {
                 ))
             }
             NewStep::Mate => {
-                // the parts that are there, in the order of their steps
-                let parts = self.built.enclosure.parts();
+                // the parts and the turned and swept bodies that are there, in the order of their
+                // steps (a body is mated by its box)
+                let e = &self.built.enclosure;
                 let ids: Vec<Id> = self
                     .mech
                     .steps
                     .iter()
                     .take(self.mech.tip)
                     .filter_map(|s| match &s.op {
-                        Operation::AddPart { id, .. } if parts.contains_key(id) => Some(*id),
+                        Operation::AddPart { id, .. } if e.parts().contains_key(id) => Some(*id),
+                        Operation::AddTurned { id, .. } | Operation::AddSwept { id, .. }
+                            if e.is_body(id) =>
+                        {
+                            Some(*id)
+                        }
                         _ => None,
                     })
                     .collect();
                 let selected = match self.selection {
-                    Selection::Part(i) => match self.mech.steps.get(i).map(|s| &s.op) {
-                        Some(Operation::AddPart { id, .. }) => Some(*id),
-                        _ => None,
-                    },
+                    Selection::Part(i) | Selection::Turned(i) | Selection::Swept(i) => {
+                        match self.mech.steps.get(i).map(|s| &s.op) {
+                            Some(
+                                Operation::AddPart { id, .. }
+                                | Operation::AddTurned { id, .. }
+                                | Operation::AddSwept { id, .. },
+                            ) => Some(*id),
+                            _ => None,
+                        }
+                    }
                     _ => None,
                 };
                 let placed = selected
@@ -4075,7 +4112,8 @@ impl Window {
         if mates > 0 {
             lines.push(fill(Msg::ReportMates.tr(lang), &[&mates.to_string()]));
         }
-        if self.built.enclosure.parts().len() < 2 && !always {
+        let e = &self.built.enclosure;
+        if e.parts().len() + e.turned().len() + e.swept().len() < 2 && !always {
             return lines;
         }
         let Some(report) = &self.info.interference else {
@@ -8020,6 +8058,72 @@ mass: "
             .iter()
             .filter(|l| l.kind == Kind::Conflict)
             .count()
+    }
+
+    #[test]
+    fn a_turned_body_is_mated_from_the_window_by_its_box_and_named_in_the_fields() {
+        let mut w = two_tubes_in_the_window();
+        w.keep_sketch(plate());
+        w.add_step(NewStep::Turned);
+        assert!(!problem(&w), "{:?}", w.status);
+        // the mate starts as a stack of the selected body on the part before it
+        w.add_step(NewStep::Mate);
+        assert!(!problem(&w), "{:?}", w.status);
+        assert_eq!(text_of(&w, Key::MateA), "Part 2");
+        assert_eq!(text_of(&w, Key::MateB), "Turned body 1");
+        assert!(matches!(w.highlight(), Highlight::Object(_)));
+        // the lower face of the box of the body lies on the upper face of the part
+        let placed = w.enclosure().placed_parts();
+        let top = placed
+            .values()
+            .find(|p| p.name == "Part 2")
+            .unwrap()
+            .bounds()
+            .unwrap()
+            .1[2];
+        let (lo, _) = w
+            .enclosure()
+            .turned()
+            .values()
+            .next()
+            .unwrap()
+            .bounds()
+            .unwrap();
+        assert_eq!(lo[2], top);
+        // the body shows where the mate put it, and nothing shares volume with it
+        assert!(
+            !w.assembly_text().contains("Turned body 1 /"),
+            "{}",
+            w.assembly_text()
+        );
+        assert_eq!(conflict_lines(&w), 0);
+        // the mate goes through the file with the body in it
+        let dir = Scratch::new("mate-body");
+        let file = dir.0.join("mated.phoenixproj");
+        assert!(w.save_to(&file), "{:?}", w.status);
+        let mut again = fresh();
+        assert!(again.open(&file), "{:?}", again.status);
+        let (lo_again, _) = again
+            .enclosure()
+            .turned()
+            .values()
+            .next()
+            .unwrap()
+            .bounds()
+            .unwrap();
+        assert_eq!(lo_again, lo);
+        // an offset that pushes the body into the part is a conflict named in the report
+        let kind = field(&w, Key::MateKind);
+        w.choose(kind, "offset");
+        assert!(!problem(&w), "{:?}", w.status);
+        set(&mut w, Key::MateOffset, "0 mm");
+        assert!(!problem(&w), "{:?}", w.status);
+        assert!(
+            w.assembly_text().contains("Turned body 1"),
+            "{}",
+            w.assembly_text()
+        );
+        assert!(conflict_lines(&w) > 0);
     }
 
     #[test]

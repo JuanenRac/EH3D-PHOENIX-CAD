@@ -28,6 +28,15 @@ A mate is a **constraint, not a move**: the position typed for the part stays in
 
 All of these are refused with `PHOENIX-CAD-046` (or `PHOENIX-CAD-045` for a part that ends up too far) and leave the model as it was. A mate is a step of the history like a hole or a part, with an exact inverse (`Operation::AddMate` and `Operation::RemoveMate`), so it is in the tree, can be undone and redone and can be suppressed.
 
+## Turned and swept bodies
+
+A turned body (`add-turned`) and a swept body (`add-swept`) take part in the mates and in the check of the interferences **by their bounding boxes**: for the mates and for the check, each body is a solid bar of a rectangular section with the size of its box, at the corner of the box (`Enclosure::assembled`). A mate may name a body as `a` or as `b`, by its name in the window and by its id in the project file; the mate places the box, and the body is moved with it: in the built model the position of the body (the point where the origin of its sketch lies) is shifted by what the mate moved the box, so the views, the bill, the balance and the files of triangles see the body where the mates put it, while the recipe keeps the position that was typed. Solving the mates again changes nothing. The box of a body turned by less than a full turn is the box of the full turn, and a body whose box is flat in some direction has none.
+
+* a `turn` mate cannot name a body (a body is not turned by a quarter turn): it is refused with `PHOENIX-CAD-046`, and so is a mate that names a body that is not in the model;
+* a body that a mate uses cannot be removed until the mate is, as for a part;
+* the interference of a body is the interference of its box, so a ring that sits in the hole of a plate shares volume with the plate and is reported (the shape inside the box is not looked at); the pair is named in the report and drawn in the colour of a conflict in the views;
+* in the window, a new mate may start from the selected body, and the fields of a body show where the mates put it and the names of the parts and bodies that share volume with it.
+
 ## Interference
 
 `eh3d_phoenix_cad::assembly::interference` finds the pairs of placed parts that share volume. A pair that only touches (faces, edges or corners) is not in conflict. For each pair:

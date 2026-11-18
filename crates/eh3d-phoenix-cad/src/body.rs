@@ -195,6 +195,8 @@ impl Body {
             };
             states.push(state);
         }
+        // the bodies lie where the mates put their boxes
+        enclosure.place_bodies();
         Ok(Built { enclosure, states })
     }
 }

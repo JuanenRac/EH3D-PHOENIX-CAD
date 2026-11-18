@@ -19,8 +19,8 @@ use std::collections::BTreeMap;
 
 use eh3d_container::ObjectId;
 
-use crate::assembly::{interference, place, Mate, Report};
-use crate::catalog::{check_overlap, PartInstance};
+use crate::assembly::{interference, place, Mate, MateKind, Report};
+use crate::catalog::{check_overlap, Orientation, Part, PartInstance, Shape};
 use crate::config::DesignLimits;
 use crate::fins::{FinContext, FinSet};
 use crate::mount::{lid_holes_of, Lid, Post};
@@ -34,6 +34,22 @@ use crate::{CadError, Length};
 
 /// The identity of a hole: the object identity (UUID v7) that the whole suite uses.
 pub type Id = ObjectId;
+
+/// Moves the position of a body by a shift in nanometres; a shift that would leave the range of
+/// lengths is not applied.
+fn shift_position(at: &mut [Length; 3], shift: [i64; 3]) {
+    let moved: Option<Vec<Length>> = (0..3)
+        .map(|k| {
+            at[k]
+                .get()
+                .checked_add(shift[k])
+                .and_then(|v| Length::new(v).ok())
+        })
+        .collect();
+    if let Some(v) = moved {
+        *at = [v[0], v[1], v[2]];
+    }
+}
 
 /// The six faces of the box.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -734,12 +750,139 @@ impl Enclosure {
     /// The placed parts with the mates applied: the positions the parts really have. They are the
     /// positions typed for them where no mate places them.
     pub fn placed_parts(&self) -> BTreeMap<Id, PartInstance> {
-        place(&self.parts, &self.mates).unwrap_or_else(|_| self.parts.clone())
+        self.try_placed_parts()
+            .unwrap_or_else(|_| self.parts.clone())
     }
 
-    /// The pairs of placed parts that share volume (see [`crate::assembly::interference`]).
+    /// The placed parts with the mates applied, refused with `PHOENIX-CAD-046` when the mates
+    /// cannot be solved (see [`crate::assembly::place`]). The mates that join a part to a turned
+    /// or a swept body are solved too, with the box of the body.
+    pub fn try_placed_parts(&self) -> Result<BTreeMap<Id, PartInstance>, CadError> {
+        let mut all = self.try_placed_all()?;
+        all.retain(|id, _| self.parts.contains_key(id));
+        Ok(all)
+    }
+
+    /// The placed parts and the boxes of the turned and swept bodies, with the mates applied.
+    pub fn try_placed_all(&self) -> Result<BTreeMap<Id, PartInstance>, CadError> {
+        place(&self.assembled()?, &self.mates)
+    }
+
+    /// The parts, and the box of each turned and swept body as a part (see
+    /// [`Enclosure::body_boxes`]), in one map: the things the mates and the check of the
+    /// interferences work on.
+    pub fn assembled(&self) -> Result<BTreeMap<Id, PartInstance>, CadError> {
+        let mut all = self.parts.clone();
+        all.extend(self.body_boxes()?);
+        Ok(all)
+    }
+
+    /// Whether an id is the one of a turned or a swept body.
+    pub fn is_body(&self, id: &Id) -> bool {
+        self.turned.contains_key(id) || self.swept.contains_key(id)
+    }
+
+    /// The name of a part or of a turned or swept body.
+    pub fn name_of(&self, id: &Id) -> Option<String> {
+        self.parts
+            .get(id)
+            .map(|p| p.name.clone())
+            .or_else(|| self.turned.get(id).map(|b| b.spec.name.clone()))
+            .or_else(|| self.swept.get(id).map(|b| b.spec.name.clone()))
+    }
+
+    /// The box that holds each turned and swept body, as a part that is a solid bar of a
+    /// rectangular section with the size of the box. The bodies take part in the mates and in the
+    /// check of the interferences by these boxes (the shape inside the box is not looked at). A
+    /// body whose box is flat in some direction has none.
+    fn body_boxes(&self) -> Result<BTreeMap<Id, PartInstance>, CadError> {
+        let mut out = BTreeMap::new();
+        let mut add = |id: Id,
+                       name: &str,
+                       material: &str,
+                       bounds: ([i64; 3], [i64; 3])|
+         -> Result<(), CadError> {
+            let (lo, hi) = bounds;
+            let size = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
+            if size.iter().any(|s| *s <= 0) {
+                return Ok(());
+            }
+            out.insert(
+                id,
+                PartInstance {
+                    name: name.to_string(),
+                    library: "body".to_string(),
+                    part: Part {
+                        name: name.to_string(),
+                        material: material.to_string(),
+                        shape: Shape::Profile {
+                            width: Length::new(size[0])?,
+                            height: Length::new(size[1])?,
+                            wall: Length::ZERO,
+                            default_cut: Length::new(size[2])?,
+                            max_cut: Length::new(size[2])?,
+                        },
+                    },
+                    at: [
+                        Length::new(lo[0])?,
+                        Length::new(lo[1])?,
+                        Length::new(lo[2])?,
+                    ],
+                    orientation: Orientation::default(),
+                    cut: None,
+                },
+            );
+            Ok(())
+        };
+        for (id, body) in &self.turned {
+            add(*id, &body.spec.name, &body.spec.material, body.bounds()?)?;
+        }
+        for (id, body) in &self.swept {
+            add(*id, &body.spec.name, &body.spec.material, body.bounds()?)?;
+        }
+        Ok(out)
+    }
+
+    /// Moves each turned and swept body to where its mates put its box: the position of the body
+    /// (`at` of its spec) in this enclosure becomes the position the mates give it, so that the
+    /// views, the files and the figures of the model see the body where it is. The recipe keeps the
+    /// position that was typed. Mates that cannot be solved leave the bodies where they were typed.
+    pub fn place_bodies(&mut self) {
+        if self.mates.is_empty() {
+            return;
+        }
+        let (Ok(boxes), Ok(placed)) = (self.body_boxes(), self.try_placed_all()) else {
+            return;
+        };
+        for (id, before) in &boxes {
+            let Some(after) = placed.get(id) else {
+                continue;
+            };
+            let shift: [i64; 3] = std::array::from_fn(|k| after.at[k].get() - before.at[k].get());
+            if let Some(body) = self.turned.get_mut(id) {
+                shift_position(&mut body.spec.at, shift);
+            } else if let Some(body) = self.swept.get_mut(id) {
+                shift_position(&mut body.spec.at, shift);
+            }
+        }
+    }
+
+    /// The pairs of placed parts and bodies that share volume (see
+    /// [`crate::assembly::interference`]); a turned or swept body is looked at by its box.
     pub fn interference(&self) -> Result<Report, CadError> {
-        interference(&self.placed_parts(), &self.design_limits().assembly)
+        let placed = self.try_placed_all().or_else(|_| self.assembled())?;
+        interference(&placed, &self.design_limits().assembly)
+    }
+
+    /// Refuses with `PHOENIX-CAD-046` to take away a body that a mate uses.
+    fn refuse_if_mated(&self, id: Id) -> Result<(), CadError> {
+        if self.mates.values().any(|m| m.a == id || m.b == id) {
+            let name = self.name_of(&id).unwrap_or_default();
+            return Err(CadError::Mate(format!(
+                "{name} is used by a mate (remove the mate first)"
+            )));
+        }
+        Ok(())
     }
 
     /// The sets of cooling fins by id (ordered by id).
@@ -1552,9 +1695,21 @@ impl Enclosure {
                     )));
                 }
                 mate.check(limits.catalog.max_dimension)?;
+                if matches!(mate.kind, MateKind::Turn { .. })
+                    && (self.is_body(&mate.a) || self.is_body(&mate.b))
+                {
+                    return Err(CadError::Mate(
+                        "a turned or swept body cannot be turned by a mate: only its box takes part in the mates"
+                            .to_string(),
+                    ));
+                }
                 self.mates.insert(id, mate);
-                let solved = place(&self.parts, &self.mates)
-                    .and_then(|placed| placed.values().try_for_each(|p| p.check(&limits.catalog)));
+                let solved = self.try_placed_all().and_then(|placed| {
+                    placed
+                        .iter()
+                        .filter(|(id, _)| self.parts.contains_key(id))
+                        .try_for_each(|(_, p)| p.check(&limits.catalog))
+                });
                 match solved {
                     Ok(()) => Ok(Operation::RemoveMate { id }),
                     Err(e) => {
@@ -1584,13 +1739,16 @@ impl Enclosure {
                 self.turned.insert(id, body);
                 Ok(Operation::RemoveTurned { id })
             }
-            Operation::RemoveTurned { id } => match self.turned.remove(&id) {
-                Some(body) => Ok(Operation::AddTurned {
-                    id,
-                    turned: body.spec,
-                }),
-                None => Err(CadError::HoleId(id)),
-            },
+            Operation::RemoveTurned { id } => {
+                self.refuse_if_mated(id)?;
+                match self.turned.remove(&id) {
+                    Some(body) => Ok(Operation::AddTurned {
+                        id,
+                        turned: body.spec,
+                    }),
+                    None => Err(CadError::HoleId(id)),
+                }
+            }
             Operation::AddSwept { id, swept } => {
                 let limits = self.design_limits().catalog;
                 if self.swept.contains_key(&id) {
@@ -1608,13 +1766,16 @@ impl Enclosure {
                 self.swept.insert(id, body);
                 Ok(Operation::RemoveSwept { id })
             }
-            Operation::RemoveSwept { id } => match self.swept.remove(&id) {
-                Some(body) => Ok(Operation::AddSwept {
-                    id,
-                    swept: body.spec,
-                }),
-                None => Err(CadError::HoleId(id)),
-            },
+            Operation::RemoveSwept { id } => {
+                self.refuse_if_mated(id)?;
+                match self.swept.remove(&id) {
+                    Some(body) => Ok(Operation::AddSwept {
+                        id,
+                        swept: body.spec,
+                    }),
+                    None => Err(CadError::HoleId(id)),
+                }
+            }
             Operation::RemoveFeature { id } => {
                 let feature = self.features.remove(&id).ok_or(CadError::HoleId(id))?;
                 Ok(match feature.kind {
@@ -2897,6 +3058,120 @@ mod feature_tests {
         let mut e = Enclosure::new(params()).unwrap();
         e.set_sketches(vec![path, section], None);
         e
+    }
+
+    #[test]
+    fn turned_and_swept_bodies_interfere_with_parts_and_with_each_other_by_their_boxes() {
+        let mut e = with_plate();
+        e.apply(turned_op(7, "ring", "plate")).unwrap();
+        let (lo, hi) = e.turned()[&id(7)].bounds().unwrap();
+        let mm_of = |v: i64| v / 1_000_000;
+        // a tube far from the body: no pair
+        e.apply(placed(1, tube(), [3000, 0, 0], Some(100))).unwrap();
+        assert!(e.interference().unwrap().conflicts.is_empty());
+        // a tube with its corner a millimetre inside the box of the body
+        e.apply(Operation::RemovePart { id: id(1) }).unwrap();
+        let inside = [mm_of(lo[0]) + 1, mm_of(lo[1]) + 1, mm_of(lo[2]) + 1];
+        e.apply(placed(1, tube(), inside, Some(100))).unwrap();
+        let report = e.interference().unwrap();
+        assert_eq!(report.conflicts.len(), 1);
+        let pair = report.conflicting();
+        assert!(pair.contains(&id(1)) && pair.contains(&id(7)), "{pair:?}");
+        // a tube that only touches the box is not in conflict
+        e.apply(Operation::RemovePart { id: id(1) }).unwrap();
+        e.apply(placed(
+            1,
+            tube(),
+            [mm_of(hi[0]), mm_of(lo[1]), mm_of(lo[2])],
+            Some(100),
+        ))
+        .unwrap();
+        assert!(e.interference().unwrap().conflicts.is_empty());
+        // two bodies in the same place share volume
+        e.apply(turned_op(8, "twin", "plate")).unwrap();
+        let both = e.interference().unwrap().conflicting();
+        assert!(both.contains(&id(7)) && both.contains(&id(8)) && !both.contains(&id(1)));
+        // the name of a body is found by its id
+        assert_eq!(e.name_of(&id(8)).as_deref(), Some("twin"));
+        assert_eq!(e.name_of(&id(1)).as_deref(), Some("piece 1"));
+        assert_eq!(e.name_of(&id(99)), None);
+        assert!(e.is_body(&id(8)) && !e.is_body(&id(1)));
+    }
+
+    #[test]
+    fn a_swept_body_is_checked_by_its_box_too() {
+        let mut e = with_rail();
+        e.apply(swept_op(7, "rail")).unwrap();
+        let (lo, _) = e.swept()[&id(7)].bounds().unwrap();
+        let at = lo.map(|v| v / 1_000_000 + 1);
+        e.apply(placed(1, tube(), at, Some(50))).unwrap();
+        let pair = e.interference().unwrap().conflicting();
+        assert!(pair.contains(&id(1)) && pair.contains(&id(7)), "{pair:?}");
+    }
+
+    #[test]
+    fn a_mate_places_a_body_by_its_box_and_a_body_cannot_be_turned_by_one() {
+        use crate::assembly::MateKind;
+        let mut e = with_plate();
+        e.apply(placed(1, tube(), [0, 0, 0], Some(100))).unwrap();
+        e.apply(turned_op(7, "ring", "plate")).unwrap();
+        // the body stands on the tube: the lower face of its box on the upper face of the tube
+        e.apply(mate(5, 1, 7, MateKind::Stack)).unwrap();
+        // the position typed is what the recipe holds; the bodies are moved when the mates are
+        // applied to the built model
+        assert_eq!(e.turned()[&id(7)].spec.at, [Length::ZERO; 3]);
+        e.place_bodies();
+        let (lo, _) = e.turned()[&id(7)].bounds().unwrap();
+        assert_eq!(lo[2], mm(100).get());
+        assert_eq!(e.turned()[&id(7)].spec.at[0], Length::ZERO);
+        assert!(e.interference().unwrap().conflicts.is_empty());
+        // applying the mates again changes nothing
+        let once = e.clone();
+        e.place_bodies();
+        assert_eq!(e, once);
+        // a part is placed relative to a body in the same way
+        e.apply(placed(2, tube(), [500, 500, 500], Some(40)))
+            .unwrap();
+        e.apply(mate(6, 7, 2, MateKind::Stack)).unwrap();
+        let (_, hi) = e.turned()[&id(7)].bounds().unwrap();
+        assert_eq!(e.placed_parts()[&id(2)].at[2].get(), hi[2]);
+        assert_eq!(e.parts()[&id(2)].at[2], mm(500));
+        // a body cannot be turned by a mate, and the mate is not kept
+        let kept = e.mates().len();
+        let turn = mate(8, 1, 7, MateKind::Turn { quarters: 1 });
+        assert_eq!(code(e.apply(turn)), "PHOENIX-CAD-046");
+        assert_eq!(e.mates().len(), kept);
+        // a body that a mate uses is not taken away until the mate is
+        assert_eq!(
+            code(e.apply(Operation::RemoveTurned { id: id(7) })),
+            "PHOENIX-CAD-046"
+        );
+        e.apply(Operation::RemoveMate { id: id(5) }).unwrap();
+        e.apply(Operation::RemoveMate { id: id(6) }).unwrap();
+        e.apply(Operation::RemoveTurned { id: id(7) }).unwrap();
+        // a mate with a body that is not there is refused
+        assert_eq!(
+            code(e.apply(mate(9, 1, 7, MateKind::Stack))),
+            "PHOENIX-CAD-046"
+        );
+    }
+
+    #[test]
+    fn a_swept_body_that_a_mate_uses_is_not_taken_away() {
+        use crate::assembly::MateKind;
+        let mut e = with_rail();
+        e.apply(placed(1, tube(), [0, 0, 0], Some(100))).unwrap();
+        e.apply(swept_op(7, "rail")).unwrap();
+        e.apply(mate(5, 1, 7, MateKind::Stack)).unwrap();
+        assert_eq!(
+            code(e.apply(Operation::RemoveSwept { id: id(7) })),
+            "PHOENIX-CAD-046"
+        );
+        e.place_bodies();
+        let (lo, _) = e.swept()[&id(7)].bounds().unwrap();
+        assert_eq!(lo[2], mm(100).get());
+        e.apply(Operation::RemoveMate { id: id(5) }).unwrap();
+        e.apply(Operation::RemoveSwept { id: id(7) }).unwrap();
     }
 
     #[test]
