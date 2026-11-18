@@ -47,7 +47,7 @@ pub struct Mesh {
 }
 
 impl Mesh {
-    fn corners(&self, t: &[u32; 3]) -> [P3; 3] {
+    pub(crate) fn corners(&self, t: &[u32; 3]) -> [P3; 3] {
         [
             self.vertices[t[0] as usize],
             self.vertices[t[1] as usize],
@@ -556,7 +556,7 @@ impl Builder {
 // ---------------------------------------------------------------------------------------------
 
 /// A name that fits on a line of a text STL file.
-fn solid_name(name: &str) -> String {
+pub(crate) fn solid_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
         .map(|c| {
@@ -579,7 +579,7 @@ fn mm(nm: f64) -> f64 {
 }
 
 /// A number of the text file: millimetres with six decimals (one nanometre), never `-0`.
-fn number(v: f64) -> String {
+pub(crate) fn number(v: f64) -> String {
     let text = format!("{v:.6}");
     if text.starts_with('-') && text[1..].bytes().all(|b| b == b'0' || b == b'.') {
         text[1..].to_owned()

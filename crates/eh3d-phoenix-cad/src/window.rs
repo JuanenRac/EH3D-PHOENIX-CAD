@@ -606,6 +606,8 @@ pub fn format_msg(format: Format) -> Msg {
         Format::SvgSide => Msg::ExportSvgSide,
         Format::Report => Msg::ExportReport,
         Format::Bill => Msg::ExportBill,
+        Format::Obj => Msg::ExportObj,
+        Format::ThreeMf => Msg::ExportThreeMf,
     }
 }
 

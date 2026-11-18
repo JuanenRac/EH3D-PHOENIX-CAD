@@ -14,6 +14,7 @@ use crate::browse::matches_extension;
 use crate::config::Settings;
 use crate::drawing::{Drawing, View};
 use crate::enclosure::Enclosure;
+use crate::interchange;
 use crate::mesh;
 use crate::scad::to_scad;
 use crate::sketch::file as sketch_file;
@@ -52,11 +53,15 @@ pub enum Format {
     Report,
     /// The bill of materials of the parts placed in the model, as comma separated values.
     Bill,
+    /// The solids of the model as a Wavefront OBJ file.
+    Obj,
+    /// The solids of the model as a 3MF package.
+    ThreeMf,
 }
 
 impl Format {
     /// Every format, in the order of the menu.
-    pub const ALL: [Format; 11] = [
+    pub const ALL: [Format; 13] = [
         Format::Script,
         Format::Step,
         Format::Stl,
@@ -68,6 +73,8 @@ impl Format {
         Format::SvgSide,
         Format::Report,
         Format::Bill,
+        Format::Obj,
+        Format::ThreeMf,
     ];
 
     /// The extension of the files of the format, without the dot.
@@ -80,6 +87,8 @@ impl Format {
             Format::SvgTop | Format::SvgFront | Format::SvgSide => "svg",
             Format::Report => "txt",
             Format::Bill => "csv",
+            Format::Obj => "obj",
+            Format::ThreeMf => "3mf",
         }
     }
 
@@ -97,6 +106,8 @@ impl Format {
             Format::SvgSide => "svg-side",
             Format::Report => "report",
             Format::Bill => "bill",
+            Format::Obj => "obj",
+            Format::ThreeMf => "3mf",
         }
     }
 
@@ -144,14 +155,15 @@ pub fn render(
         Format::Script => text_of(to_scad(enclosure)),
         Format::Step => text_of(export_step(enclosure)?),
         Format::Report | Format::Bill => text_of(text.to_owned()),
-        Format::Stl => {
+        Format::Stl | Format::Obj | Format::ThreeMf => {
             let bodies = solid::bodies(enclosure, &settings.mesh)?;
             let list: Vec<(&str, &mesh::Mesh)> =
                 bodies.iter().map(|b| (b.name.as_str(), &b.mesh)).collect();
-            if settings.mesh.binary {
-                Ok(mesh::stl_binary(&list))
-            } else {
-                text_of(mesh::stl_ascii(&list))
+            match format {
+                Format::Obj => text_of(interchange::obj(&list)),
+                Format::ThreeMf => Ok(interchange::three_mf(&list)),
+                _ if settings.mesh.binary => Ok(mesh::stl_binary(&list)),
+                _ => text_of(mesh::stl_ascii(&list)),
             }
         }
         _ => {
@@ -339,7 +351,9 @@ mod tests {
                 ("svg", "svg-front"),
                 ("svg", "svg-side"),
                 ("txt", "report"),
-                ("csv", "bill")
+                ("csv", "bill"),
+                ("obj", "obj"),
+                ("3mf", "3mf")
             ]
         );
         for f in Format::ALL {
@@ -351,6 +365,36 @@ mod tests {
         assert_eq!(Format::drawing(false, View::Side), Format::SvgSide);
         assert_eq!(Format::SvgTop.view(), Some(View::Top));
         assert_eq!(Format::Stl.view(), None);
+    }
+
+    #[test]
+    fn the_obj_and_3mf_files_hold_the_same_triangles_as_the_stl_file() {
+        let e = enclosure();
+        let settings = Settings::defaults();
+        let stl = mesh::read_stl(&render(Format::Stl, &e, "", &settings).unwrap()).unwrap();
+        let obj = String::from_utf8(render(Format::Obj, &e, "", &settings).unwrap()).unwrap();
+        assert!(obj.starts_with(
+            "# EH3D PHOENIX-CAD, millimetres
+o enclosure
+"
+        ));
+        assert_eq!(
+            obj.lines().filter(|l| l.starts_with("f ")).count(),
+            stl.len()
+        );
+        let bytes = render(Format::ThreeMf, &e, "", &settings).unwrap();
+        let entries = interchange::read_stored_zip(&bytes).unwrap();
+        let model = String::from_utf8(entries[2].1.clone()).unwrap();
+        assert_eq!(model.matches("<triangle ").count(), stl.len());
+        assert_eq!(
+            model.matches("<vertex ").count(),
+            obj.lines().filter(|l| l.starts_with("v ")).count()
+        );
+        assert_eq!(Format::from_name("obj"), Some(Format::Obj));
+        assert_eq!(Format::from_name("3mf"), Some(Format::ThreeMf));
+        let project = Path::new("a/my box.phoenixproj");
+        assert_eq!(suggested_name(Some(project), Format::Obj), "my box.obj");
+        assert_eq!(suggested_name(Some(project), Format::ThreeMf), "my box.3mf");
     }
 
     #[test]

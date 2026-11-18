@@ -4,6 +4,7 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **Wavefront OBJ and 3MF export:** `eh3d_phoenix_cad::interchange` writes the solids of the model (the box and the placed parts, checked against their exact volume) as an OBJ file or as a 3MF package (stored zip with the model as XML, fixed dates, same bytes for the same model); both are in the Export menu in the eight languages and in `export --format obj|3mf`. 6 tests.
 - **Cutting plan of the profiles:** `eh3d_phoenix_cad::nesting` fits the cut list into bars (each profile in bars of its longest cut) with the kerf of the saw, the trimmed ends and the offcuts, best fit decreasing and deterministic; the new command `cutplan` prints it as comma separated values or as text, and the settings `[stock]` (`kerf`, `end_trim`, `reusable_offcut`, `max_bars`) are in `phoenix-cad.default.cfg`. 11 tests.
 - **The shared validation tools are updated:** the validator also runs the workflow and lessons checks of the suite with their latest rules, including a check to run before every push.
 - **The CI validation checks the workflows and the lessons of past CI failures against a baseline:** `tools/workflow_hygiene.py` and `tools/lessons_lint.py` (copies of the shared tools) run in the validation, and only findings that are not in `tools/workflow_hygiene_baseline.json` and `tools/lessons_lint_baseline.json` fail it, so what exists today stays as it is and a new one is caught. `python tools/workflow_hygiene.py --root . --detail` and `python tools/lessons_lint.py --repo .` list the findings.

@@ -7,13 +7,15 @@ The model is written to a file from the **Export** menu of the window or with th
 | Script | `script` | `.scad` | the model as an OpenSCAD-style script |
 | STEP | `step` | `.step` | a boundary representation of the box with its straight holes (see the limits in [SCOPE.md](SCOPE.md)) |
 | STL | `stl` | `.stl` | the solid as triangles, binary or text |
+| OBJ | `obj` | `.obj` | the same solids as a Wavefront file, in millimetres |
+| 3MF | `3mf` | `.3mf` | the same solids as a 3MF package (a zip file without compression with the model as XML), in millimetres |
 | DXF | `dxf` | `.dxf` | the plan, the front or the side as a drawing |
 | SVG | `svg` | `.svg` | the same views, scaled to a page, with dimensions |
 | Report | `report` | `.txt` | the fit report |
 | Bill | `bill` | `.csv` | the bill of materials of the parts placed in the model |
 
 ```
-eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|dxf|svg|step|script|report|bill
+eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill
                         [--view top|front|side] [--out FILE] [--overwrite] [--ascii|--binary]
 ```
 
@@ -49,6 +51,10 @@ What is in it: the box with its inner space; every hole in its five styles (the 
 There is no test for a shape of one body that passes through another body (a screw through a bracket is allowed, as in the check of the assembly); the check is of each body on its own.
 
 The file has not been opened in a slicer or in a CAD program.
+
+## The OBJ file and the 3MF package
+
+`eh3d_phoenix_cad::interchange` writes the solids that the STL file has (the box and every placed part, each checked against its exact volume) in two more formats, with the same triangles, in millimetres with six decimals and with the same bytes for the same model. The OBJ file has a group `o` for each solid, its vertices `v` and its faces `f` numbered from 1 over the whole file. The 3MF package holds `[Content_Types].xml`, `_rels/.rels` and `3D/3dmodel.model` (one `object` for each solid and one `item` of the build for each object); its entries are stored without compression and dated 1 January 1980, so the bytes do not depend on a compression library. Both are refused with the codes of the STL file (`PHOENIX-CAD-048` to `-050`) when the solid cannot be made. The 3MF package has not been opened in a slicer or a CAD program; the tests read it back and check every entry against its CRC-32.
 
 ## The drawings
 

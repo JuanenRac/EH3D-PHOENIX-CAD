@@ -27,7 +27,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad bill PROJECT.phoenixproj [--config FILE]                       the bill of materials of the parts placed in a project (profiles cut to a length, screws and brackets) as comma separated values, with the volume and the mass for the density of each material
   eh3d-phoenix-cad cutplan PROJECT.phoenixproj [--text] [--config FILE]            the cutting plan of the profiles placed in a project: the pieces of the cut list fitted into bars (the longest cut each profile comes in) with the kerf of the saw and the trimmed ends, as comma separated values or, with --text, as lines for a person
   eh3d-phoenix-cad library FILE.phoenixlib [--config FILE]                        reads a library of parts, checks it and lists its parts
-  eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|dxf|svg|step|script|report|bill [--view top|front|side] [--out FILE] [--overwrite] [--ascii|--binary] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), the plan, front or side as a drawing (dxf, svg), the STEP file, the OpenSCAD-style script, the fit report or the bill of materials
+  eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill [--view top|front|side] [--out FILE] [--overwrite] [--ascii|--binary] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), as a Wavefront file (obj) or as a 3MF package (3mf), the plan, front or side as a drawing (dxf, svg), the STEP file, the OpenSCAD-style script, the fit report or the bill of materials
   eh3d-phoenix-cad config                                                         every setting of the library, of the window and of the sketch with its default value, as a file for --config
 
 --open FILE is the same as giving the file by itself; a sketch file opens the window on the sketch. --lang takes en, es, de, fr, it, ja, zh or pt; without it the language of the system is used.
@@ -213,11 +213,11 @@ fn export_format(word: &str, view: Option<View>) -> Result<Format, String> {
     match word {
         "dxf" | "svg" => Ok(Format::drawing(word == "dxf", view.unwrap_or(View::Top))),
         _ if view.is_some() => Err("--view is only for the formats dxf and svg".to_owned()),
-        "stl" | "step" | "script" | "report" | "bill" => {
+        "stl" | "step" | "script" | "report" | "bill" | "obj" | "3mf" => {
             Format::from_name(word).ok_or_else(|| format!("{word}: unknown format"))
         }
         other => Err(format!(
-            "{other}: unknown format (stl, dxf, svg, step, script, report or bill)"
+            "{other}: unknown format (stl, obj, 3mf, dxf, svg, step, script, report or bill)"
         )),
     }
 }
