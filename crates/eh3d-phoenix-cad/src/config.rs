@@ -18,6 +18,7 @@ use crate::clearance::ClearanceSettings;
 use crate::enclosure::{Face, Hole, HoleStyle};
 use crate::expr::{parse, Constants, ExprLimits, Value};
 use crate::nesting::StockSettings;
+use crate::placement::PlacementSettings;
 use crate::printer::PrinterProfile;
 use crate::units::{parse_length, Unit};
 use crate::{CadError, Length};
@@ -559,6 +560,8 @@ pub struct Settings {
     pub stock: StockSettings,
     /// The settings of the check of the room between parts.
     pub clearance: ClearanceSettings,
+    /// The settings of the table of placements and of the exploded view.
+    pub placement: PlacementSettings,
     /// The named values that expressions can use: the sizes of the screws, the compensation of the
     /// printer and the `[constants]` of the settings.
     pub constants: Constants,
@@ -840,6 +843,7 @@ impl Settings {
         let drawing = DrawingSettings::from_config(c)?;
         let stock = StockSettings::from_config(c)?;
         let clearance = ClearanceSettings::from_config(c)?;
+        let placement = PlacementSettings::from_config(c)?;
         let constants = build_constants(c, &screws, &printer, counterbore_extra, &expr)?;
         Ok(Settings {
             backups,
@@ -861,6 +865,7 @@ impl Settings {
             drawing,
             stock,
             clearance,
+            placement,
             constants,
         })
     }

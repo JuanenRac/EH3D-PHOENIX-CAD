@@ -1867,6 +1867,18 @@ impl Window {
         ))
     }
 
+    /// The table of where the placed parts are (with the mates applied) and the box of the whole
+    /// assembly, as comma separated values; with `explode` the parts are pulled apart by that
+    /// percentage first (see [`crate::placement`]).
+    pub fn placement_csv_text(&self, explode: Option<u32>) -> Result<String, CadError> {
+        let mut placed =
+            crate::assembly::place(self.built.enclosure.parts(), self.built.enclosure.mates())?;
+        if let Some(percent) = explode {
+            placed = crate::placement::explode(&placed, percent, &self.settings.placement)?;
+        }
+        crate::placement::table(&placed).map(|t| crate::placement::table_csv(&t))
+    }
+
     fn refresh_fields(&mut self) {
         self.fields = self.make_fields();
     }
@@ -6522,6 +6534,24 @@ total,0,
         // and a minimum of zero turns the check off
         w.settings.clearance.min_gap = Length::ZERO;
         assert!(w.clearance_report().unwrap().pairs.is_empty());
+    }
+
+    #[test]
+    fn the_placements_of_the_assembly_follow_the_mates_and_can_be_pulled_apart() {
+        let mut w = fresh();
+        assert!(w.open(&assembly_path()), "{:?}", w.status);
+        let csv = w.placement_csv_text(None).unwrap();
+        let rows = csv.lines().count();
+        assert!(rows > 3, "{csv}");
+        assert!(csv.lines().last().unwrap().starts_with("total,"), "{csv}");
+        // the same number of lines when pulled apart, and different positions
+        let apart = w.placement_csv_text(Some(100)).unwrap();
+        assert_eq!(apart.lines().count(), rows);
+        assert_ne!(apart, csv);
+        assert_eq!(w.placement_csv_text(Some(0)).unwrap(), csv);
+        // more than the settings allow is refused with the code of the part
+        let err = w.placement_csv_text(Some(501)).unwrap_err();
+        assert_eq!(err.code(), "PHOENIX-CAD-045");
     }
 
     #[test]
