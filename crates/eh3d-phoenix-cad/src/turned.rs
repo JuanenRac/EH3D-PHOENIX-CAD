@@ -230,12 +230,12 @@ mod tests {
 
     #[test]
     fn a_full_turn_has_the_volume_and_the_mass_of_the_tube() {
-        // pi (15^2 - 5^2) 10 = 6283.185 mm3; at 7850 kg/m3 that is 49.322 g
+        // pi (15^2 - 5^2) 10 = 6283.185 mm3; at 7850 kg/m3 that is 49.323 g
         let b = body(&spec());
         let v = b.volume_nm3().unwrap();
         assert!((v as f64 / 1e18 - 6283.185).abs() < 0.001, "{v}");
         let g = b.mass_ug(7850).unwrap() as f64 / 1e6;
-        assert!((g - 49.322).abs() < 0.001, "{g}");
+        assert!((g - 49.323).abs() < 0.001, "{g}");
     }
 
     #[test]
