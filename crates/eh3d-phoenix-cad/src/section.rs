@@ -9,7 +9,8 @@
 //! sides gives one point, named by the pair of vertices of the edge, and the two points of a
 //! triangle make a segment. Because the surfaces are closed, the segments join end to end by those
 //! names, with no comparison of coordinates, into closed outlines. The segment of a triangle runs
-//! in the direction that keeps the material on its left, so an outer outline turns counter-
+//! from the edge where the walk round the triangle (counter-clockwise from outside) goes down
+//! through the plane to the one where it goes up, which keeps the material on its left, so an outer outline turns counter-
 //! clockwise and a hole clockwise in the plane of the drawing, and the signed areas add up to the
 //! area of the material.
 //!
@@ -56,14 +57,6 @@ pub struct Section {
     pub contours: Vec<Contour>,
 }
 
-fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
 /// The closed outlines where the plane `axis = position` cuts the closed surface of a mesh, as
 /// lists of corners in the plane of the drawing (see the module documentation).
 fn cut_mesh(mesh: &Mesh, axis: usize, position: f64) -> Vec<Vec<(f64, f64)>> {
@@ -72,8 +65,6 @@ fn cut_mesh(mesh: &Mesh, axis: usize, position: f64) -> Vec<Vec<(f64, f64)>> {
         1 => (0, 2),
         _ => (0, 1),
     };
-    let mut unit = [0.0f64; 3];
-    unit[axis] = 1.0;
     let mut next: BTreeMap<EdgeKey, EdgeKey> = BTreeMap::new();
     let mut at: BTreeMap<EdgeKey, (f64, f64)> = BTreeMap::new();
     for t in &mesh.triangles {
@@ -82,32 +73,40 @@ fn cut_mesh(mesh: &Mesh, axis: usize, position: f64) -> Vec<Vec<(f64, f64)>> {
         if above[0] == above[1] && above[1] == above[2] {
             continue;
         }
-        let mut crossing: Vec<(EdgeKey, (f64, f64))> = Vec::with_capacity(2);
+        // the edges that cross, as the point where they meet the plane, the name of the point and
+        // whether the walk round the triangle goes down through the plane there
+        let mut down: Option<(EdgeKey, (f64, f64))> = None;
+        let mut up: Option<(EdgeKey, (f64, f64))> = None;
         for (i, j) in [(0usize, 1usize), (1, 2), (2, 0)] {
             if above[i] == above[j] {
                 continue;
             }
             let (a, b) = (corners[i], corners[j]);
-            let s = (position - a[axis]) / (b[axis] - a[axis]);
-            let point = (a[iu] + s * (b[iu] - a[iu]), a[iv] + s * (b[iv] - a[iv]));
+            // a vertex that lies on the plane is the point itself, exactly
+            let (u, v) = if a[axis] == position {
+                (a[iu], a[iv])
+            } else if b[axis] == position {
+                (b[iu], b[iv])
+            } else {
+                let s = (position - a[axis]) / (b[axis] - a[axis]);
+                (a[iu] + s * (b[iu] - a[iu]), a[iv] + s * (b[iv] - a[iv]))
+            };
             let key = if t[i] < t[j] {
                 (t[i], t[j])
             } else {
                 (t[j], t[i])
             };
-            crossing.push((key, point));
+            if above[i] {
+                down = Some((key, (u, v)));
+            } else {
+                up = Some((key, (u, v)));
+            }
         }
-        if crossing.len() != 2 {
+        // the triangle is counter-clockwise seen from outside, so the material is on the left of
+        // the segment that goes from the edge where the walk goes down to the one where it goes
+        // up; this holds when the segment has no length too, which the coordinates cannot tell
+        let (Some(from), Some(to)) = (down, up) else {
             continue;
-        }
-        // the material is on the left of the direction `plane normal x surface normal`
-        let way = cross(unit, mesh.normal(t));
-        let (p, q) = (crossing[0].1, crossing[1].1);
-        let along = (q.0 - p.0) * way[iu] + (q.1 - p.1) * way[iv];
-        let (from, to) = if along >= 0.0 {
-            (crossing[0], crossing[1])
-        } else {
-            (crossing[1], crossing[0])
         };
         next.insert(from.0, to.0);
         at.insert(from.0, from.1);
