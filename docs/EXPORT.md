@@ -13,9 +13,10 @@ The model is written to a file from the **Export** menu of the window or with th
 | SVG | `svg` | `.svg` | the same views, scaled to a page, with dimensions |
 | Report | `report` | `.txt` | the fit report |
 | Bill | `bill` | `.csv` | the bill of materials of the parts placed in the model |
+| Order sheet | `order` | `.html` | the bars to buy, the holes to drill and the parts with their cost, as one self-contained page |
 
 ```
-eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill
+eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill|order
                         [--view top|front|side] [--out FILE] [--overwrite] [--ascii|--binary]
 ```
 
@@ -23,6 +24,16 @@ eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|sc
 * A file that exists is **never** written over unless `--overwrite` is given (in the window, unless the box of the dialog is ticked); the project that is open and a name that belongs to a project or a sketch are never written over. The check is the one of [`export::check_target`](../crates/eh3d-phoenix-cad/src/export.rs): `PHOENIX-CAD-040` when the file exists, `PHOENIX-CAD-041` for the other refusals.
 * `--view` is for `dxf` and `svg` only (`top` is the default); `--ascii` and `--binary` are for `stl` only and override `mesh.stl_binary`.
 * The exit code is 0 when the file was written and 1 when it was not; the code of the reason is printed.
+
+## The order sheet
+
+`eh3d_phoenix_cad::ordersheet` and `export --format order` (or **Order sheet (.html)** in the Export menu) write what has to be bought and made to build the model on one page, in the language of `--lang` or of the window:
+
+* **Profile cuts:** for each profile and material the bars to buy (`stock.*` of the settings say the length of the bar, the kerf and the trim) with the pieces sawn from each bar and its offcut, and the number of bars in all; the figures are the ones of the command `cutplan`.
+* **Holes to drill:** the schedule of the holes of the box (tag, name, face, position, diameter and shape), as the command `holes` gives it.
+* **Parts of the catalog:** the bill of materials with its quantities, masses and cost (the price of the material and the markup of the settings), then the pieces, volume and mass in all and the subtotal, the markup and the total.
+* **A page that can be opened anywhere.** The style is inside the file and there is no script, picture, font or link, so nothing is fetched when it is opened or printed; every name, material and library word that comes from the project is written with `&`, `<`, `>`, `"` and `'` as entities, so a name cannot add markup to the page. A model with no part and no hole gets one line that says there is nothing to order.
+* **The limit:** a table with more rows than `order.max_rows` (2000 by default) is refused with `PHOENIX-CAD-050` and nothing is written; the file goes through the checks of every export (never over a file that exists unless `--overwrite` is given, and the size is limited by `export.max_kib`).
 
 ## The STL file
 
@@ -129,7 +140,7 @@ With `title_block.enabled = 1` the DXF and SVG drawings of the views and of a sk
 | `title_block.width` | 120 mm | the width of the block, from 60 mm to 400 mm |
 | `title_block.row` | 7 mm | the height of each of the four rows, from 4 mm to 20 mm |
 
-In `phoenix-cad-window.default.cfg`: `export.format` (the format the dialog starts with: `script`, `step`, `stl`, `dxf-top`, `dxf-front`, `dxf-side`, `svg-top`, `svg-front`, `svg-side`, `report`, `bill`, `obj` or `3mf`), `export.overwrite` and `export.max_kib`.
+In `phoenix-cad-window.default.cfg`: `export.format` (the format the dialog starts with: `script`, `step`, `stl`, `dxf-top`, `dxf-front`, `dxf-side`, `svg-top`, `svg-front`, `svg-side`, `report`, `bill`, `obj`, `3mf` or `order`), `export.overwrite` and `export.max_kib`.
 
 ## A section of the model
 

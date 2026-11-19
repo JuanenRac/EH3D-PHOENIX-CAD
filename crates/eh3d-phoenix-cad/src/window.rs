@@ -639,6 +639,7 @@ pub fn format_msg(format: Format) -> Msg {
         Format::Bill => Msg::ExportBill,
         Format::Obj => Msg::ExportObj,
         Format::ThreeMf => Msg::ExportThreeMf,
+        Format::Order => Msg::ExportOrder,
     }
 }
 
@@ -2110,6 +2111,27 @@ impl Window {
     /// The bill of materials as comma separated values.
     pub fn bill_csv_text(&self) -> Result<String, CadError> {
         self.bill().map(|bill| catalog::bill_csv(&bill))
+    }
+
+    /// The order sheet of the model as a self-contained HTML page in the language of the window:
+    /// the bars to buy and what is sawn from each, the holes to drill and the parts of the
+    /// catalog with their quantities and cost (see [`crate::ordersheet`]).
+    pub fn order_sheet_html(&self) -> Result<String, CadError> {
+        let plan = self.stock_plan()?;
+        let holes = crate::schedule::rows(&self.built.enclosure);
+        let bom = self.bom()?;
+        let name = export::suggested_name(self.path.as_deref(), Format::Order);
+        let title = name
+            .rsplit_once('.')
+            .map_or(name.as_str(), |(stem, _)| stem);
+        crate::ordersheet::html(&crate::ordersheet::Sheet {
+            title,
+            lang: self.lang,
+            plan: &plan,
+            holes: &holes,
+            bom: &bom,
+            max_rows: self.settings.design.order_max_rows as usize,
+        })
     }
 
     /// The cutting plan of the profiles placed in the model: the pieces of the cut list fitted
@@ -4352,6 +4374,7 @@ impl Window {
     pub fn export_bytes(&self, format: Format) -> Result<Vec<u8>, CadError> {
         let text = match format {
             Format::Bill => self.bill_csv_text()?,
+            Format::Order => self.order_sheet_html()?,
             Format::Report => self.report_text(),
             _ => String::new(),
         };
@@ -7797,6 +7820,50 @@ mod tests {
         // and a project without parts has no such lines
         let plain = example().report_text();
         assert!(!plain.contains("Parts:"));
+    }
+
+    #[test]
+    fn the_order_sheet_of_the_frame_has_the_bars_the_parts_and_the_cost_in_one_page() {
+        let dir = Scratch::new("order");
+        let mut w = fresh();
+        assert!(w.open(&frame_path()), "{:?}", w.status);
+        assert_eq!(w.export_name(Format::Order), "frame.html");
+        let page = w.order_sheet_html().unwrap();
+        assert!(page.contains("<title>Order sheet: frame</title>"), "{page}");
+        assert!(page.contains("<h2>Profile cuts</h2>"), "{page}");
+        assert!(page.contains("<h2>Parts of the catalog</h2>"), "{page}");
+        // the figures are the ones of the bill and the cutting plan
+        let bom = w.bom().unwrap();
+        assert!(page.contains(&format!("pieces: {}", bom.pieces)), "{page}");
+        assert!(
+            page.contains(&format!(
+                "total {} EUR",
+                crate::bom::money_text(bom.total_milli)
+            )),
+            "{page}"
+        );
+        let bars = w.stock_plan().unwrap().bars();
+        assert!(page.contains(&format!("Bars to buy: {bars}")), "{page}");
+        assert!(!page.contains("<script") && !page.contains("http"));
+        // it is exported like the other formats, never over a file that exists
+        let target = dir.0.join("frame.html");
+        assert!(w.export_to(Format::Order, &target, false), "{:?}", w.status);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), page);
+        assert!(!w.export_to(Format::Order, &target, false));
+        // the words follow the language of the window
+        w.lang = Lang::De;
+        let german = w.order_sheet_html().unwrap();
+        assert!(german.contains("<html lang=\"de\">"), "{german}");
+        assert!(german.contains("<h2>Profilzuschnitte</h2>"), "{german}");
+        // a project with no part lists its holes only
+        let plain = example().order_sheet_html().unwrap();
+        assert!(plain.contains("<h2>Holes to drill</h2>"), "{plain}");
+        assert!(!plain.contains("Parts of the catalog") && !plain.contains("Profile cuts"));
+        // and the limit of the settings stops a table that is too long
+        let mut small = example();
+        small.settings.design.order_max_rows = 1;
+        let e = small.order_sheet_html().unwrap_err();
+        assert_eq!(e.code(), "PHOENIX-CAD-050");
     }
 
     #[test]

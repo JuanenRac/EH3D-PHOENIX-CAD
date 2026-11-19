@@ -112,6 +112,7 @@ pub mod messages;
 pub mod mount;
 pub mod names;
 pub mod nesting;
+pub mod ordersheet;
 pub mod panels;
 pub mod parametric;
 pub mod partlist;

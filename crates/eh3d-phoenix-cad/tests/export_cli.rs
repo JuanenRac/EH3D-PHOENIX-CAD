@@ -231,3 +231,36 @@ fn a_settings_file_changes_the_sides_of_the_circles_and_the_limit() {
     assert_eq!(code, 1);
     assert!(err.contains("multiple of 4"), "{err}");
 }
+
+#[test]
+fn the_order_sheet_is_written_as_one_html_page_in_the_language_asked() {
+    let dir = Scratch::new("order");
+    let out = dir.file("frame.html");
+    let (code, text, error) = run(&["export", FRAME, "--format", "order", "--out", &out]);
+    assert_eq!(code, 0, "{error}");
+    assert!(text.contains("frame.html"), "{text}");
+    let page = fs::read_to_string(&out).unwrap();
+    assert!(page.starts_with("<!DOCTYPE html>"), "{page}");
+    assert!(page.contains("<h2>Profile cuts</h2>"), "{page}");
+    assert!(page.contains("<h2>Parts of the catalog</h2>"), "{page}");
+    assert!(!page.contains("<script"));
+    // never over a file that exists, and the words follow --lang
+    let (code, _, error) = run(&["export", FRAME, "--format", "order", "--out", &out]);
+    assert_ne!(code, 0);
+    assert!(error.contains("PHOENIX-CAD-040"), "{error}");
+    let (code, _, error) = run(&[
+        "export",
+        FRAME,
+        "--format",
+        "order",
+        "--out",
+        &out,
+        "--overwrite",
+        "--lang",
+        "es",
+    ]);
+    assert_eq!(code, 0, "{error}");
+    let page = fs::read_to_string(&out).unwrap();
+    assert!(page.contains("<h2>Cortes de perfil</h2>"), "{page}");
+    assert!(page.contains("<html lang=\"es\">"), "{page}");
+}

@@ -58,11 +58,14 @@ pub enum Format {
     Obj,
     /// The solids of the model as a 3MF package.
     ThreeMf,
+    /// The order sheet: the bars to buy, the holes to drill and the parts with their cost, as one
+    /// self-contained HTML page.
+    Order,
 }
 
 impl Format {
     /// Every format, in the order of the menu.
-    pub const ALL: [Format; 13] = [
+    pub const ALL: [Format; 14] = [
         Format::Script,
         Format::Step,
         Format::Stl,
@@ -76,6 +79,7 @@ impl Format {
         Format::Bill,
         Format::Obj,
         Format::ThreeMf,
+        Format::Order,
     ];
 
     /// The extension of the files of the format, without the dot.
@@ -90,6 +94,7 @@ impl Format {
             Format::Bill => "csv",
             Format::Obj => "obj",
             Format::ThreeMf => "3mf",
+            Format::Order => "html",
         }
     }
 
@@ -109,6 +114,7 @@ impl Format {
             Format::Bill => "bill",
             Format::Obj => "obj",
             Format::ThreeMf => "3mf",
+            Format::Order => "order",
         }
     }
 
@@ -142,7 +148,7 @@ impl Format {
 
 /// The bytes of a format for a model: text, or the binary STL file. `text` is the text of the
 /// formats that are not a property of the enclosure alone: the fit report for [`Format::Report`]
-/// and the bill of materials for [`Format::Bill`], which need the language. The STEP file can be
+/// the bill of materials for [`Format::Bill`] and the order sheet for [`Format::Order`], which need the language. The STEP file can be
 /// refused with `PHOENIX-CAD-022`; the STL file with `PHOENIX-CAD-048`, `-049` or `-050`; a
 /// drawing with `PHOENIX-CAD-050`.
 pub fn render(
@@ -169,7 +175,7 @@ pub fn render_titled(
     match format {
         Format::Script => text_of(to_scad(enclosure)),
         Format::Step => text_of(export_step(enclosure)?),
-        Format::Report | Format::Bill => text_of(text.to_owned()),
+        Format::Report | Format::Bill | Format::Order => text_of(text.to_owned()),
         Format::Stl | Format::Obj | Format::ThreeMf => {
             let bodies = solid::bodies(enclosure, &settings.mesh)?;
             let list: Vec<(&str, &mesh::Mesh)> =
@@ -381,7 +387,8 @@ mod tests {
                 ("txt", "report"),
                 ("csv", "bill"),
                 ("obj", "obj"),
-                ("3mf", "3mf")
+                ("3mf", "3mf"),
+                ("html", "order")
             ]
         );
         for f in Format::ALL {

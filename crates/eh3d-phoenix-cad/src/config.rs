@@ -94,6 +94,8 @@ pub struct DesignLimits {
     pub pattern_max: u32,
     /// The most positions of one pattern of parts of the catalog.
     pub part_pattern_max: u32,
+    /// The most rows of any table of the order sheet.
+    pub order_max_rows: u32,
     /// The most fins of one set of cooling fins.
     pub fin_max_count: u32,
     /// The thinnest fin.
@@ -139,6 +141,12 @@ impl DesignLimits {
                 Self::PATTERN_CAP
             )));
         }
+        let order_max_rows = c.number("order.max_rows")?;
+        if !(1..=1_000_000).contains(&order_max_rows) {
+            return Err(CadError::Config(
+                "order.max_rows must be from 1 to 1000000".to_string(),
+            ));
+        }
         let fin_max_count = c.number("fins.max_count")?;
         if !(1..=Self::FIN_CAP).contains(&fin_max_count) {
             return Err(CadError::Config(format!(
@@ -166,6 +174,7 @@ impl DesignLimits {
         Ok(DesignLimits {
             pattern_max,
             part_pattern_max,
+            order_max_rows,
             fin_max_count,
             fin_min_thickness,
             fin_min_gap,
@@ -1459,12 +1468,16 @@ markup_percent = 1000
             "[pattern]\nmax_parts = 1\n",
             "[pattern]\nmax_parts = 10001\n",
             "[pattern]\nmax_parts = many\n",
+            "[order]\nmax_rows = 0\n",
+            "[order]\nmax_rows = 1000001\n",
+            "[order]\nmax_rows = all\n",
         ] {
             let err = Settings::with_user_config(text).unwrap_err();
             assert_eq!(err.code(), "PHOENIX-CAD-011", "{text:?}: {err}");
         }
         assert_eq!(DesignLimits::shipped().pattern_max, 256);
         assert_eq!(DesignLimits::shipped().part_pattern_max, 64);
+        assert_eq!(DesignLimits::shipped().order_max_rows, 2000);
         let few = Settings::with_user_config("[pattern]\nmax_parts = 3\n").unwrap();
         assert_eq!(few.design.part_pattern_max, 3);
         for text in [
