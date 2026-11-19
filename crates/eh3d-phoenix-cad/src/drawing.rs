@@ -666,6 +666,63 @@ impl Drawing {
         self.entities.extend(rect_lines(Layer::Frame, lo, hi));
     }
 
+    /// The sheet of paper that a DXF drawing would be printed on: the size of the paper of the
+    /// A series (`paper` 1 to 5, upright with `portrait`) and the standard scale at which what is
+    /// drawn, with its dimension lines, its legend and `extra` (the corners of something that is
+    /// still to be added, such as the title block), fits inside `margin` millimetres of paper
+    /// margin, put round the middle of all that. `None` when `paper` is no size or nothing is
+    /// drawn. The drawing is not changed: [`Drawing::add_paper_sheet`] draws the sheet.
+    pub fn paper_sheet(
+        &self,
+        paper: u8,
+        portrait: bool,
+        margin: f64,
+        extra: Option<((f64, f64), (f64, f64))>,
+    ) -> Option<PaperSheet> {
+        let (paper_w, paper_h) = paper_size(paper, portrait)?;
+        if self.entities.is_empty() {
+            return None;
+        }
+        let (mut lo, mut hi) = self.bounds();
+        if self.dxf_dimensions {
+            let room = self.dimension_room();
+            lo = (lo.0 - room, lo.1 - room);
+            hi.0 = hi.0.max(self.legend_right());
+        }
+        if let Some((a, b)) = extra {
+            lo = (lo.0.min(a.0), lo.1.min(a.1));
+            hi = (hi.0.max(b.0), hi.1.max(b.1));
+        }
+        let room = 2.0 * margin.max(0.0);
+        let fit = ((paper_w - room).max(1.0) / (hi.0 - lo.0).max(1e-9))
+            .min((paper_h - room).max(1.0) / (hi.1 - lo.1).max(1e-9));
+        let scale = standard_scale(fit);
+        let (w, h) = (paper_w / scale, paper_h / scale);
+        let middle = ((lo.0 + hi.0) / 2.0, (lo.1 + hi.1) / 2.0);
+        Some(PaperSheet {
+            scale,
+            lo: (middle.0 - w / 2.0, middle.1 - h / 2.0),
+            hi: (middle.0 + w / 2.0, middle.1 + h / 2.0),
+            inset: margin.max(0.0) / scale,
+        })
+    }
+
+    /// Draws a sheet of paper (see [`Drawing::paper_sheet`]) on the layer of the border: the edge
+    /// of the paper and, inside it, the line of its margin. The drawing stays at full size, so the
+    /// sheet is as many times larger than the paper as the scale says.
+    pub fn add_paper_sheet(&mut self, sheet: &PaperSheet) {
+        self.entities
+            .extend(rect_lines(Layer::Frame, sheet.lo, sheet.hi));
+        if sheet.inset > 0.0 {
+            let inner_lo = (sheet.lo.0 + sheet.inset, sheet.lo.1 + sheet.inset);
+            let inner_hi = (sheet.hi.0 - sheet.inset, sheet.hi.1 - sheet.inset);
+            if inner_hi.0 > inner_lo.0 && inner_hi.1 > inner_lo.1 {
+                self.entities
+                    .extend(rect_lines(Layer::Frame, inner_lo, inner_hi));
+            }
+        }
+    }
+
     /// The drawing moved by `dx` and `dy` millimetres: what is drawn, the dimensions and the labels.
     fn shifted(mut self, dx: f64, dy: f64) -> Drawing {
         let at = |p: (f64, f64)| (p.0 + dx, p.1 + dy);
@@ -1406,6 +1463,20 @@ pub fn scale_label(scale: f64, standard: bool) -> String {
         return format!("1:{}", inverse.round());
     }
     format!("1:{inverse:.2}")
+}
+
+/// The sheet of paper of a drawing that is printed at a standard scale (see
+/// [`Drawing::paper_sheet`]), in the millimetres of the model.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PaperSheet {
+    /// Millimetres of paper for each millimetre of the model.
+    pub scale: f64,
+    /// The lower left corner of the edge of the paper.
+    pub lo: (f64, f64),
+    /// The upper right corner of the edge of the paper.
+    pub hi: (f64, f64),
+    /// How far inside the edge the line of the margin runs, in millimetres of the model.
+    pub inset: f64,
 }
 
 /// The rectangle that a box of the model makes in a view, on the outline layer.
@@ -2374,6 +2445,90 @@ frame_margin = 1001 mm
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn a_dxf_sheet_has_the_size_of_the_paper_times_the_standard_scale_round_the_drawing() {
+        let e = model();
+        let d = Drawing::of(&e, View::Top, &settings()).unwrap();
+        let (lo, hi) = d.bounds();
+        let sheet = d.paper_sheet(4, false, 10.0, None).unwrap();
+        // the sheet is the paper of an A4 (297 x 210) at a standard scale
+        let (w, h) = (sheet.hi.0 - sheet.lo.0, sheet.hi.1 - sheet.lo.1);
+        assert!((w * sheet.scale - 297.0).abs() < 1e-9 && (h * sheet.scale - 210.0).abs() < 1e-9);
+        assert!(STANDARD_SCALES.contains(&sheet.scale));
+        // everything drawn lies inside the margin of the paper, and the next scale up would not fit
+        assert!(sheet.lo.0 + sheet.inset <= lo.0 && sheet.hi.0 - sheet.inset >= hi.0);
+        assert!(sheet.lo.1 + sheet.inset <= lo.1 && sheet.hi.1 - sheet.inset >= hi.1);
+        assert!((sheet.inset * sheet.scale - 10.0).abs() < 1e-9);
+        let larger = STANDARD_SCALES.iter().rev().find(|s| **s > sheet.scale);
+        if let Some(next) = larger {
+            let (cw, ch) = (hi.0 - lo.0, hi.1 - lo.1);
+            assert!(
+                cw * next > 277.0 + 1e-6 || ch * next > 190.0 + 1e-6,
+                "{next}"
+            );
+        }
+        // upright paper swaps the sides, and no paper or nothing drawn is no sheet
+        let up = d.paper_sheet(4, true, 10.0, None).unwrap();
+        assert!(((up.hi.0 - up.lo.0) * up.scale - 210.0).abs() < 1e-9);
+        assert!(d.paper_sheet(0, false, 10.0, None).is_none());
+        assert!(d.paper_sheet(6, false, 10.0, None).is_none());
+        let mut empty = d.clone();
+        empty.entities.clear();
+        assert!(empty.paper_sheet(4, false, 10.0, None).is_none());
+        // a larger sheet of the series is at a scale at least as large
+        let a2 = d.paper_sheet(2, false, 10.0, None).unwrap();
+        assert!(a2.scale >= sheet.scale);
+        // what is still to be added makes the scale smaller when it does not fit
+        let far = ((hi.0, lo.1 - 5000.0), (hi.0 + 10.0, lo.1));
+        let with_block = d.paper_sheet(4, false, 10.0, Some(far)).unwrap();
+        assert!(with_block.scale < sheet.scale);
+    }
+
+    #[test]
+    fn the_sheet_is_drawn_on_the_layer_of_the_frame_with_its_margin_and_nothing_else_changes() {
+        let e = model();
+        let mut d = Drawing::of(&e, View::Top, &settings()).unwrap();
+        let before = d.entities.len();
+        let sheet = d.paper_sheet(3, false, 10.0, None).unwrap();
+        assert_eq!(
+            d.entities.len(),
+            before,
+            "asking for the sheet draws nothing"
+        );
+        d.add_paper_sheet(&sheet);
+        assert_eq!(d.count(Layer::Frame), 8);
+        assert_eq!(d.entities.len(), before + 8);
+        let dxf = d.to_dxf();
+        assert!(dxf.contains("\nMARCO\n"));
+        // no margin, no inner line
+        let mut bare = Drawing::of(&e, View::Top, &settings()).unwrap();
+        let none = bare.paper_sheet(3, false, 0.0, None).unwrap();
+        bare.add_paper_sheet(&none);
+        assert_eq!(bare.count(Layer::Frame), 4);
+        // a margin as large as the paper leaves no inner line either
+        let mut huge = Drawing::of(&e, View::Top, &settings()).unwrap();
+        let sheet = huge.paper_sheet(5, false, 100.0, None).unwrap();
+        huge.add_paper_sheet(&sheet);
+        assert_eq!(huge.count(Layer::Frame), 4);
+    }
+
+    #[test]
+    fn the_sheet_counts_the_dimensions_and_the_legend_only_when_the_dxf_has_them() {
+        let mut e = model();
+        hole(&mut e, 1, Face::Front, 60, 17, 6, HoleStyle::Plain);
+        let mut with = Drawing::of(&e, View::Front, &settings()).unwrap();
+        with.add_legend(&e, &settings(), Lang::En);
+        let mut without = with.clone();
+        without.dxf_dimensions = false;
+        let a = with.paper_sheet(4, false, 10.0, None).unwrap();
+        let b = without.paper_sheet(4, false, 10.0, None).unwrap();
+        // the same paper, and a sheet that holds the dimension lines and the legend as well
+        assert!(a.scale <= b.scale);
+        let (lo, hi) = with.bounds();
+        assert!(a.lo.0 < lo.0 - with.dimension_room() + 1e-6);
+        assert!(a.hi.0 > hi.0.max(with.legend_right()) - 1e-6);
     }
 
     fn on_paper(paper: u8) -> DrawingSettings {

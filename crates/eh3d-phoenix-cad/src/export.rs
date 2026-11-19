@@ -235,14 +235,38 @@ pub fn render_titled(
             let tb = &settings.title_block;
             let dxf = format.extension() == "dxf";
             if !tb.enabled {
+                if dxf {
+                    if let Some(sheet) = drawing.paper_sheet(
+                        settings.drawing.paper,
+                        settings.drawing.paper_portrait,
+                        settings.drawing.paper_margin.get() as f64 / 1_000_000.0,
+                        None,
+                    ) {
+                        drawing.add_paper_sheet(&sheet);
+                    }
+                }
                 text_of(if dxf {
                     drawing.to_dxf()
                 } else {
                     drawing.to_svg(&settings.drawing)
                 })
             } else if dxf {
-                let block =
-                    drawing.title_block(tb, name, "1:1", 6.0 + drawing.dimension_reach(), lang);
+                let gap = 6.0 + drawing.dimension_reach();
+                let first = drawing.title_block(tb, name, "1:1", gap, lang);
+                let sheet = drawing.paper_sheet(
+                    settings.drawing.paper,
+                    settings.drawing.paper_portrait,
+                    settings.drawing.paper_margin.get() as f64 / 1_000_000.0,
+                    Some((first.lo, first.hi)),
+                );
+                let label = sheet.map_or_else(
+                    || "1:1".to_owned(),
+                    |sheet| crate::drawing::scale_label(sheet.scale, true),
+                );
+                let block = drawing.title_block(tb, name, &label, gap, lang);
+                if let Some(sheet) = &sheet {
+                    drawing.add_paper_sheet(sheet);
+                }
                 text_of(drawing.to_dxf_with(Some(&block)))
             } else {
                 text_of(drawing.to_svg_with(&settings.drawing, Some((tb, name, lang))))
