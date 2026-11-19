@@ -1434,6 +1434,131 @@ mod tests {
         assert_eq!(m.point(c).unwrap(), (mm(0), mm(3)));
     }
 
+    /// The next number of a fixed sequence (xorshift), so that a failure can be repeated.
+    fn next(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    /// A whole number of millimetres from `-range` to `range`.
+    fn pick(state: &mut u64, range: i64) -> i64 {
+        (next(state) % (2 * range as u64 + 1)) as i64 - range
+    }
+
+    fn distance(k: &Sketch, a: ElementId, b: ElementId) -> f64 {
+        let (ax, ay) = k.point(a).unwrap();
+        let (bx, by) = k.point(b).unwrap();
+        let (dx, dy) = ((ax.get() - bx.get()) as f64, (ay.get() - by.get()) as f64);
+        (dx * dx + dy * dy).sqrt()
+    }
+
+    #[test]
+    fn a_point_is_equidistant_from_two_others_for_random_positions_with_a_fixed_seed() {
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let (mut tried, mut held) = (0, 0);
+        while tried < 300 {
+            let (ax, ay) = (pick(&mut state, 60), pick(&mut state, 60));
+            let (bx, by) = (pick(&mut state, 60), pick(&mut state, 60));
+            let (px, py) = (pick(&mut state, 60), pick(&mut state, 60));
+            // two ends that are at least 4 mm apart and a point that is on neither
+            if (ax - bx).abs() + (ay - by).abs() < 4
+                || (px - ax).abs() + (py - ay).abs() < 2
+                || (px - bx).abs() + (py - by).abs() < 2
+            {
+                continue;
+            }
+            tried += 1;
+            let mut k = sketch();
+            let a = k.add_point(mm(ax), mm(ay)).unwrap();
+            let b = k.add_point(mm(bx), mm(by)).unwrap();
+            let p = k.add_point(mm(px), mm(py)).unwrap();
+            k.fix_point(a).unwrap();
+            k.fix_point(b).unwrap();
+            k.add_constraint(Constraint::Equidistant { point: p, a, b })
+                .unwrap();
+            if let Outcome::Solved { residual, .. } = k.solve(&s()).unwrap() {
+                if residual <= 1e-8 {
+                    held += 1;
+                    let gap = (distance(&k, p, a) - distance(&k, p, b)).abs();
+                    assert!(gap <= 50.0, "case {tried}: {gap} nm apart");
+                }
+            }
+        }
+        // every case the solver gives a solution for is checked, and it gives one for them all
+        assert_eq!(held, tried);
+    }
+
+    #[test]
+    fn two_pairs_of_lines_make_the_same_angle_for_random_positions_with_a_fixed_seed() {
+        let mut state = 0xD1B5_4A32_D192_ED03u64;
+        let (mut tried, mut checked) = (0, 0);
+        while tried < 200 {
+            // the first pair: two lines from one point to two others, not on one line; the second
+            // pair from another point to a fourth and to a free end
+            let q: Vec<(i64, i64)> = (0..5)
+                .map(|_| (pick(&mut state, 40), pick(&mut state, 40)))
+                .collect();
+            let free = (pick(&mut state, 40), pick(&mut state, 40));
+            let long = |a: (i64, i64), b: (i64, i64)| (a.0 - b.0).abs() + (a.1 - b.1).abs() >= 8;
+            let cross = |o: (i64, i64), a: (i64, i64), b: (i64, i64)| {
+                (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+            };
+            if !(long(q[0], q[1]) && long(q[0], q[2]) && long(q[3], q[4]) && long(q[3], free))
+                || cross(q[0], q[1], q[2]).abs() < 200
+                || cross(q[3], q[4], free).abs() < 200
+            {
+                continue;
+            }
+            tried += 1;
+            let mut k = sketch();
+            let ids: Vec<_> = q
+                .iter()
+                .map(|(x, y)| k.add_point(mm(*x), mm(*y)).unwrap())
+                .collect();
+            let end = k.add_point(mm(free.0), mm(free.1)).unwrap();
+            for id in &ids {
+                k.fix_point(*id).unwrap();
+            }
+            let l1 = k.add_line(ids[0], ids[1]).unwrap();
+            let l2 = k.add_line(ids[0], ids[2]).unwrap();
+            let l3 = k.add_line(ids[3], ids[4]).unwrap();
+            let l4 = k.add_line(ids[3], end).unwrap();
+            k.add_constraint(Constraint::EqualAngle {
+                a: l1,
+                b: l2,
+                c: l3,
+                d: l4,
+            })
+            .unwrap();
+            let Outcome::Solved { residual, .. } = k.solve(&s()).unwrap() else {
+                continue;
+            };
+            if residual > 1e-8 || distance(&k, ids[3], end) < 1000.0 {
+                continue;
+            }
+            checked += 1;
+            // the direction of a line, from its first to its second point
+            let angle = |from: ElementId, to: ElementId| {
+                let (fx, fy) = k.point(from).unwrap();
+                let (tx, ty) = k.point(to).unwrap();
+                ((ty.get() - fy.get()) as f64).atan2((tx.get() - fx.get()) as f64)
+            };
+            let first = angle(ids[0], ids[2]) - angle(ids[0], ids[1]);
+            let second = angle(ids[3], end) - angle(ids[3], ids[4]);
+            // the same angle, up to half turns (a line has no direction)
+            let turns = (first - second) / std::f64::consts::PI;
+            assert!(
+                (turns - turns.round()).abs() < 1e-6,
+                "case {tried}: {first} against {second}"
+            );
+        }
+        // the solver finds a solution for nearly all of them (a line that collapses to a point is
+        // not an angle and is not counted)
+        assert!(checked >= 150, "{checked} of {tried}");
+    }
+
     #[test]
     fn the_midpoint_and_the_diameter_are_exact() {
         let mut k = sketch();

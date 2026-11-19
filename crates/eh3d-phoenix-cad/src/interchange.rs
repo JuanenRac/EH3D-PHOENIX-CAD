@@ -230,7 +230,12 @@ fn nanometres(text: &str, per_unit: f64, what: &str) -> Result<f64, String> {
     if !v.is_finite() {
         return Err(format!("{what}: {text} is not a finite number"));
     }
-    Ok((v * per_unit).round())
+    let nm = (v * per_unit).round();
+    // a thousand kilometres is far outside the range of the model and keeps every sum finite
+    if nm.abs() > 1.0e15 {
+        return Err(format!("{what}: {text} is too far from the origin"));
+    }
+    Ok(nm)
 }
 
 /// The solids of a Wavefront OBJ file, read back (millimetres, as [`obj`] writes them).
@@ -652,6 +657,154 @@ mod tests {
         assert!(read_file_bytes("a", &obj_text).is_err());
         assert!(read_file_bytes("a.obj", &[0xFF, 0xFE]).is_err());
         assert!(read_file_bytes("a.stl", b"short").is_err());
+    }
+
+    /// The next number of a fixed sequence (xorshift), so that a failure can be repeated.
+    fn next(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    /// A damaged copy of a text: a line dropped, repeated or swapped, a character changed, a word
+    /// from a pool put in, or the text cut short (some of them damaged twice).
+    fn damaged_text(text: &str, state: &mut u64) -> String {
+        const POOL: [&str; 8] = [
+            "f 1 2 3",
+            "v 1 2",
+            "f -1 -2 -3",
+            "o",
+            "v 1e999 0 0",
+            "f 0 1 2",
+            "f 1/2/3 2 3",
+            "",
+        ];
+        let mut out = text.to_owned();
+        for _ in 0..1 + next(state) % 2 {
+            let mut lines: Vec<String> = out.lines().map(str::to_owned).collect();
+            let n = lines.len().max(1);
+            let at = (next(state) % n as u64) as usize;
+            match next(state) % 6 {
+                0 if at < lines.len() => {
+                    lines.remove(at);
+                }
+                1 if at < lines.len() => {
+                    let copy = lines[at].clone();
+                    lines.insert(at, copy);
+                }
+                2 => {
+                    let other = (next(state) % n as u64) as usize;
+                    if at < lines.len() && other < lines.len() {
+                        lines.swap(at, other);
+                    }
+                }
+                3 => {
+                    let word = POOL[(next(state) % POOL.len() as u64) as usize];
+                    lines.insert(at.min(lines.len()), word.to_owned());
+                }
+                4 if at < lines.len() => {
+                    let mut chars: Vec<char> = lines[at].chars().collect();
+                    if !chars.is_empty() {
+                        let k = (next(state) % chars.len() as u64) as usize;
+                        chars[k] = ['0', '9', '-', '.', 'x', ' ', '"'][(next(state) % 7) as usize];
+                        lines[at] = chars.into_iter().collect();
+                    }
+                }
+                _ => {
+                    let keep = (next(state) % (lines.len() as u64 + 1)) as usize;
+                    lines.truncate(keep);
+                }
+            }
+            out = lines.join("\n");
+        }
+        out
+    }
+
+    #[test]
+    fn damaged_obj_and_3mf_files_are_read_or_refused_and_never_panic_with_a_fixed_seed() {
+        let a = cube(0.0);
+        let b = cube(20.0);
+        let obj_text = obj(&[("box", &a), ("part", &b)]);
+        let model = three_mf_model(&[("box", &a), ("part", &b)]);
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let (mut read, mut refused) = (0, 0);
+        for _ in 0..3000 {
+            // OBJ: what is read is written and read again to the same surfaces
+            let text = damaged_text(&obj_text, &mut state);
+            match read_obj(&text) {
+                Ok(bodies) => {
+                    read += 1;
+                    for (_, mesh) in &bodies {
+                        for t in &mesh.triangles {
+                            assert!(t.iter().all(|v| (*v as usize) < mesh.vertices.len()));
+                        }
+                        assert!(mesh.vertices.iter().flatten().all(|v| v.abs() <= 1.0e15));
+                    }
+                    let refs: Vec<(&str, &Mesh)> =
+                        bodies.iter().map(|(n, m)| (n.as_str(), m)).collect();
+                    let again = read_obj(&obj(&refs)).unwrap();
+                    assert_eq!(
+                        again.iter().map(|(_, m)| m).collect::<Vec<_>>(),
+                        bodies.iter().map(|(_, m)| m).collect::<Vec<_>>(),
+                        "{text}"
+                    );
+                }
+                Err(why) => {
+                    refused += 1;
+                    assert!(!why.is_empty());
+                }
+            }
+            // 3MF: the model damaged inside a package that is whole
+            let xml = damaged_text(&model, &mut state);
+            let package = zip_stored(&[("3D/3dmodel.model", xml.into_bytes())]);
+            match read_three_mf(&package) {
+                Ok(bodies) => {
+                    read += 1;
+                    for (_, mesh) in &bodies {
+                        for t in &mesh.triangles {
+                            assert!(t.iter().all(|v| (*v as usize) < mesh.vertices.len()));
+                        }
+                    }
+                }
+                Err(why) => {
+                    refused += 1;
+                    assert!(!why.is_empty());
+                }
+            }
+            // STL: the bytes cut short or changed
+            let mut bytes = crate::mesh::stl_binary(&[("box", &a)]);
+            let at = (next(&mut state) % bytes.len() as u64) as usize;
+            if next(&mut state).is_multiple_of(2) {
+                bytes.truncate(at);
+            } else {
+                bytes[at] ^= 1 << (next(&mut state) % 8);
+            }
+            match read_file_bytes("x.stl", &bytes) {
+                Ok(bodies) => {
+                    read += 1;
+                    assert_eq!(bodies.len(), 1);
+                }
+                Err(why) => {
+                    refused += 1;
+                    assert!(!why.is_empty());
+                }
+            }
+        }
+        // both outcomes happen: the damage is neither always seen nor never
+        assert!(
+            read > 1000 && refused > 1000,
+            "{read} read, {refused} refused"
+        );
+    }
+
+    #[test]
+    fn a_number_too_far_from_the_origin_is_refused_by_the_readers() {
+        let e = read_obj("v 1e300 0 0\n").unwrap_err();
+        assert!(e.contains("too far"), "{e}");
+        assert!(read_obj("v 999999999 0 0\n").is_ok());
+        assert!(read_obj("v 1000000000 0 0\n").is_ok());
+        assert!(read_obj("v 1000000001 0 0\n").is_err());
     }
 
     #[test]
