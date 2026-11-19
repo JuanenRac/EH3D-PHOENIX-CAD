@@ -987,9 +987,29 @@ impl Drawing {
         } else {
             4.0
         };
-        let (width, height) = (hi.0 - lo.0 + 2.0 * margin, hi.1 - lo.1 + 2.0 * margin);
-        let page = mm(settings.svg_width.get());
-        let scale = page / width;
+        let (content_w, content_h) = (hi.0 - lo.0 + 2.0 * margin, hi.1 - lo.1 + 2.0 * margin);
+        let (page, scale, width, height, off_x, off_y) =
+            match paper_size(settings.paper, settings.paper_portrait) {
+                None => {
+                    let page = mm(settings.svg_width.get());
+                    (page, page / content_w, content_w, content_h, 0.0, 0.0)
+                }
+                Some((paper_w, paper_h)) => {
+                    let room = 2.0 * mm(settings.paper_margin.get());
+                    let fit = ((paper_w - room).max(1.0) / content_w)
+                        .min((paper_h - room).max(1.0) / content_h);
+                    let scale = standard_scale(fit);
+                    let (w, h) = (paper_w / scale, paper_h / scale);
+                    (
+                        paper_w,
+                        scale,
+                        w,
+                        h,
+                        (w - content_w) / 2.0,
+                        (h - content_h) / 2.0,
+                    )
+                }
+            };
         let line = 0.3 / scale;
         let text_size = 3.2 / scale;
         let num = |v: f64| {
@@ -1001,8 +1021,8 @@ impl Drawing {
                 t
             }
         };
-        let px = |x: f64| x - lo.0 + margin;
-        let py = |y: f64| hi.1 - y + margin;
+        let px = |x: f64| x - lo.0 + margin + off_x;
+        let py = |y: f64| hi.1 - y + margin + off_y;
         let mut o = String::new();
         let _ = writeln!(o, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
         let _ = writeln!(
@@ -1182,7 +1202,13 @@ impl Drawing {
             o.push_str("</g>\n");
         }
         if let Some((tb, fallback, lang)) = title {
-            let block = self.title_block(tb, fallback, &format!("1:{:.2}", 1.0 / scale), gap, lang);
+            let block = self.title_block(
+                tb,
+                fallback,
+                &scale_label(scale, settings.paper != 0),
+                gap,
+                lang,
+            );
             let _ = writeln!(
                 o,
                 "<g id=\"{}\" fill=\"#111111\" stroke=\"#111111\" stroke-width=\"{}\" font-family=\"sans-serif\">",
@@ -1217,15 +1243,68 @@ impl Drawing {
         }
         let _ = writeln!(
             o,
-            "<text x=\"{}\" y=\"{}\" font-family=\"sans-serif\" font-size=\"{}\" fill=\"#555555\">1:{:.2}</text>",
+            "<text x=\"{}\" y=\"{}\" font-family=\"sans-serif\" font-size=\"{}\" fill=\"#555555\">{}</text>",
             num(2.0),
             num(height - 2.0),
             num(text_size),
-            1.0 / scale
+            scale_label(scale, settings.paper != 0)
         );
         o.push_str("</svg>\n");
         o
     }
+}
+
+/// The standard scales of a drawing (millimetres of paper for each millimetre of the model), from
+/// 50:1 down to 1:100.
+const STANDARD_SCALES: [f64; 12] = [
+    50.0, 20.0, 10.0, 5.0, 2.0, 1.0, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01,
+];
+
+/// The size in millimetres (across, then up) of the sheet of the A series given by `paper` (1 to
+/// 5 for A1 to A5), standing upright when `portrait` is set; `None` for 0 or a number past 5.
+pub fn paper_size(paper: u8, portrait: bool) -> Option<(f64, f64)> {
+    let (long, short) = match paper {
+        1 => (841.0, 594.0),
+        2 => (594.0, 420.0),
+        3 => (420.0, 297.0),
+        4 => (297.0, 210.0),
+        5 => (210.0, 148.0),
+        _ => return None,
+    };
+    Some(if portrait {
+        (short, long)
+    } else {
+        (long, short)
+    })
+}
+
+/// The largest standard scale that is not larger than `fit` (the scale that would just fill the
+/// paper); below 1:100 the exact `fit` is kept so that nothing is cut off.
+pub fn standard_scale(fit: f64) -> f64 {
+    if !(fit.is_finite() && fit > 0.0) {
+        return 1.0;
+    }
+    STANDARD_SCALES
+        .iter()
+        .copied()
+        .find(|s| *s <= fit * (1.0 + 1e-9))
+        .unwrap_or(fit)
+}
+
+/// The scale as written on a drawing: `2:1`, `1:5`; a drawing that is not on paper keeps two
+/// decimals (`1:1.52`), because its scale is whatever fits the width.
+pub fn scale_label(scale: f64, standard: bool) -> String {
+    if !standard {
+        return format!("1:{:.2}", 1.0 / scale);
+    }
+    if scale >= 1.0 && (scale - scale.round()).abs() < 1e-9 {
+        return format!("{}:1", scale.round());
+    }
+    let inverse = 1.0 / scale;
+    if (inverse - inverse.round()).abs() < 1e-6 {
+        return format!("1:{}", inverse.round());
+    }
+    format!("1:{inverse:.2}")
 }
 
 /// The rectangle that a box of the model makes in a view, on the outline layer.
@@ -1962,6 +2041,191 @@ frame_margin = -1 mm
             "[drawing]
 frame_margin = 1001 mm
 ",
+        ] {
+            assert!(
+                crate::config::Settings::with_user_config(bad).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    fn on_paper(paper: u8) -> DrawingSettings {
+        DrawingSettings {
+            paper,
+            ..settings()
+        }
+    }
+
+    fn svg_size(svg: &str) -> (f64, f64) {
+        let read = |key: &str| -> f64 {
+            let at = svg.find(key).unwrap() + key.len();
+            svg[at..].split("mm").next().unwrap().parse().unwrap()
+        };
+        (read("width=\""), read("height=\""))
+    }
+
+    #[test]
+    fn the_paper_sizes_are_the_a_series_across_or_upright() {
+        assert_eq!(paper_size(0, false), None);
+        assert_eq!(paper_size(6, false), None);
+        assert_eq!(paper_size(4, false), Some((297.0, 210.0)));
+        assert_eq!(paper_size(4, true), Some((210.0, 297.0)));
+        assert_eq!(paper_size(3, false), Some((420.0, 297.0)));
+        // each size is half of the one before it along its long side
+        for n in 1..5u8 {
+            let (a, b) = paper_size(n, false).unwrap();
+            let (c, d) = paper_size(n + 1, false).unwrap();
+            assert!(
+                (a / c - 1.414).abs() < 0.02 && (b / d - 1.414).abs() < 0.02,
+                "A{n}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_standard_scale_is_the_largest_that_fits() {
+        assert_eq!(standard_scale(1.0), 1.0);
+        assert_eq!(standard_scale(1.99), 1.0);
+        assert_eq!(standard_scale(2.0), 2.0);
+        assert_eq!(standard_scale(0.49), 0.2);
+        assert_eq!(standard_scale(0.5), 0.5);
+        assert_eq!(standard_scale(1000.0), 50.0);
+        // below 1:100 the exact fit is kept so that nothing is cut off
+        assert_eq!(standard_scale(0.004), 0.004);
+        // a value that is not a scale gives 1:1
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(standard_scale(bad), 1.0);
+        }
+        // the list is in decreasing order
+        for pair in STANDARD_SCALES.windows(2) {
+            assert!(pair[0] > pair[1]);
+        }
+    }
+
+    #[test]
+    fn the_scale_is_written_as_a_ratio() {
+        assert_eq!(scale_label(1.0, true), "1:1");
+        assert_eq!(scale_label(2.0, true), "2:1");
+        assert_eq!(scale_label(0.5, true), "1:2");
+        assert_eq!(scale_label(0.01, true), "1:100");
+        assert_eq!(scale_label(0.004, true), "1:250");
+        assert_eq!(scale_label(1.0 / 1.52, true), "1:1.52");
+        assert_eq!(scale_label(1.0 / 1.52, false), "1:1.52");
+        assert_eq!(scale_label(1.0, false), "1:1.00");
+    }
+
+    #[test]
+    fn the_svg_drawing_on_paper_has_the_size_of_the_sheet_and_a_standard_scale() {
+        let e = model();
+        let d = Drawing::of(&e, View::Front, &settings()).unwrap();
+        for (paper, portrait, size) in [
+            (4u8, false, (297.0, 210.0)),
+            (4, true, (210.0, 297.0)),
+            (3, false, (420.0, 297.0)),
+            (5, false, (210.0, 148.0)),
+        ] {
+            let s = DrawingSettings {
+                paper,
+                paper_portrait: portrait,
+                ..settings()
+            };
+            let svg = d.to_svg(&s);
+            let (w, h) = svg_size(&svg);
+            assert!(
+                (w - size.0).abs() < 1e-3 && (h - size.1).abs() < 1e-3,
+                "{paper} {svg}"
+            );
+            // the label at the foot is a standard scale
+            let label = svg.rsplit("fill=\"#555555\">").next().unwrap();
+            let label = label.split("</text>").next().unwrap();
+            assert!(label.ends_with(":1") || label.starts_with("1:"), "{label}");
+            assert!(!label.contains('.'), "{label}");
+        }
+        // without paper the width is the one of the settings
+        let (w, _) = svg_size(&d.to_svg(&settings()));
+        assert!((w - 200.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn the_drawing_on_paper_is_centred_and_fits_inside_the_margin() {
+        let e = model();
+        let d = Drawing::of(&e, View::Top, &settings()).unwrap();
+        let s = on_paper(4);
+        let svg = d.to_svg(&s);
+        let view_box: Vec<f64> = svg
+            .split("viewBox=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .split(' ')
+            .map(|v| v.parse().unwrap())
+            .collect();
+        let scale = 297.0 / view_box[2];
+        // a box of 100 by 60 inside fits an A4 sheet at 2:1 or less, and the scale is standard
+        assert!(
+            [2.0, 1.0, 0.5].contains(&((scale * 1e6).round() / 1e6)),
+            "{scale}"
+        );
+        // every point of the outline lies inside the sheet, with the margin of the settings
+        let margin = 10.0 / scale;
+        for line in svg.lines().filter(|l| l.starts_with("<line")) {
+            for key in ["x1", "x2"] {
+                let at = line.find(&format!("{key}=\"")).unwrap() + 4;
+                let v: f64 = line[at..].split('"').next().unwrap().parse().unwrap();
+                assert!(
+                    v >= margin - 1e-3 && v <= view_box[2] - margin + 1e-3,
+                    "{line}"
+                );
+            }
+        }
+        // a wider margin makes the scale smaller or equal, never larger
+        let wide = DrawingSettings {
+            paper_margin: Length::new(60_000_000).unwrap(),
+            ..on_paper(4)
+        };
+        let svg_wide = d.to_svg(&wide);
+        let wide_box = svg_wide.split("viewBox=\"").nth(1).unwrap();
+        let wide_w: f64 = wide_box.split(' ').nth(2).unwrap().parse().unwrap();
+        assert!(297.0 / wide_w <= scale + 1e-9);
+    }
+
+    #[test]
+    fn the_title_block_carries_the_standard_scale_of_the_paper() {
+        let e = model();
+        let d = Drawing::of(&e, View::Front, &settings()).unwrap();
+        let tb =
+            crate::config::Settings::with_user_config("[title_block]\nenabled = 1\ntitle = Lid\n")
+                .unwrap()
+                .title_block;
+        let svg = d.to_svg_with(&on_paper(3), Some((&tb, "x", Lang::En)));
+        let svg_scale = svg.rsplit("fill=\"#555555\">").next().unwrap();
+        let label = svg_scale.split("</text>").next().unwrap();
+        assert!(!label.contains('.'), "{label}");
+        assert!(svg.contains(&format!(">{label}</text>")));
+        let (w, h) = svg_size(&svg);
+        assert!((w - 420.0).abs() < 1e-3 && (h - 297.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn the_paper_settings_have_their_defaults_and_their_limits() {
+        assert_eq!(settings().paper, 0);
+        assert_eq!(settings().paper_margin.get(), 10_000_000);
+        assert!(!settings().paper_portrait);
+        let own = crate::config::Settings::with_user_config(
+            "[drawing]\npaper = 3\npaper_margin = 0 mm\npaper_portrait = 1\n",
+        )
+        .unwrap()
+        .drawing;
+        assert_eq!(own.paper, 3);
+        assert_eq!(own.paper_margin, Length::ZERO);
+        assert!(own.paper_portrait);
+        for bad in [
+            "[drawing]\npaper = 6\n",
+            "[drawing]\npaper_margin = -1 mm\n",
+            "[drawing]\npaper_margin = 101 mm\n",
+            "[drawing]\npaper_portrait = 2\n",
         ] {
             assert!(
                 crate::config::Settings::with_user_config(bad).is_err(),

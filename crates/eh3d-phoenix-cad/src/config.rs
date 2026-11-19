@@ -390,6 +390,13 @@ pub struct DrawingSettings {
     /// The air between two views on the sheet, from 0 to 1000 mm, besides the room their
     /// dimension lines take.
     pub sheet_gap: Length,
+    /// The paper of the SVG drawing: 0 scales the drawing to `svg_width`, 1 to 5 put it on a
+    /// sheet of the A series (A1 to A5) at the largest standard scale that fits, centred.
+    pub paper: u8,
+    /// The air between the drawing and the edge of the paper, from 0 to 100 mm.
+    pub paper_margin: Length,
+    /// Whether the paper is turned to stand upright (1) or lies across (0).
+    pub paper_portrait: bool,
 }
 
 impl DrawingSettings {
@@ -474,6 +481,18 @@ impl DrawingSettings {
                 "drawing.sheet_gap must be from 0 mm to 1000 mm".into(),
             ));
         }
+        let paper = c.number("drawing.paper")?;
+        if paper > 5 {
+            return Err(CadError::Config(
+                "drawing.paper must be 0 (none) or 1 to 5 (A1 to A5)".into(),
+            ));
+        }
+        let paper_margin = c.length("drawing.paper_margin")?;
+        if paper_margin.get() < 0 || paper_margin.get() > 100_000_000 {
+            return Err(CadError::Config(
+                "drawing.paper_margin must be from 0 mm to 100 mm".into(),
+            ));
+        }
         Ok(DrawingSettings {
             max_entities,
             svg_width,
@@ -490,6 +509,9 @@ impl DrawingSettings {
             frame_margin,
             sheet_angle,
             sheet_gap,
+            paper: paper as u8,
+            paper_margin,
+            paper_portrait: flag("drawing.paper_portrait")?,
         })
     }
 }
@@ -1595,6 +1617,9 @@ markup_percent = 1000
                 frame_margin: Length::new(5_000_000).unwrap(),
                 sheet_angle: 1,
                 sheet_gap: Length::new(20_000_000).unwrap(),
+                paper: 0,
+                paper_margin: Length::new(10_000_000).unwrap(),
+                paper_portrait: false,
             }
         );
         let own = Settings::with_user_config(
