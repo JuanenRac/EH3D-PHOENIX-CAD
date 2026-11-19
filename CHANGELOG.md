@@ -4,6 +4,7 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **Mates panel with a trial of a new mate, in the eight languages:** a new entry of the Reports menu lists the mates of the model in words (`2. Part 2 on Part 1: offset x 40 mm`), any mate the model refused and the pairs of parts that share volume, and has an editor for a new mate of any of the six kinds (`gap`, `align`, `stack`, `offset`, `symmetric`, `turn`, with the values of `new_step.mate_*` as the start). Before the mate is added the panel tries it on a copy of the window and says whether the model accepts it, where the placed part would be and which pairs of parts would share volume, so a mate that is refused or that leaves a conflict is seen without changing the project; **Add the mate** puts it in the recipe as one step of the history (`Window::mates_panel_text`, `mate_from_draft`, `add_mate_from_draft`).
 - **The CI and the release build take the shared libraries at their newest releases:** the pins of the sibling repositories in the workflows are raised to the releases the program now needs, so that the build and the binaries of a release use them.
 ## [0.0.7] - Reports for cutting plans, holes, clearance and mass, turned and swept bodies in the model, more mates, sections with hatching, a DXF import window, a bill of materials with cost and automatic dimensions
 

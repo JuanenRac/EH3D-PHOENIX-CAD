@@ -77,6 +77,10 @@ step 0 aligned add-mate 018bcfe5-6800-7004-8000-000000000004 018bcfe5-6800-7001-
 
 After the id of the mate come the id of the fixed part, the id of the part it places and the kind with its values; a distance is a whole number of nanometres from zero up.
 
+## Mates panel
+
+The Reports menu has a panel for the mates (`Window::mates_panel_text`). It lists every mate of the model in words (the placed part, the fixed part and the kind with its values, for example `offset x 40 mm`), any mate the model refused with the reason, and the report of the interferences. Below that it holds the editor of a new mate: the two parts, the kind (`gap`, `align`, `stack`, `offset`, `symmetric` or `turn`) and the values that kind needs, which start from the keys `new_step.mate_*` of the window settings. Before anything is added the panel tries the mate on a copy of the window and says whether the model accepts it, where the placed part would be and which pairs of parts would share volume; **Add the mate** then puts it in the recipe as one step of the history, with the same checks as the button of the tree.
+
 ## Clearance between parts
 
 `eh3d_phoenix_cad::clearance` lists the pairs of placed parts that do not touch and are closer than `clearance.min_gap` (2 mm by default; 0 turns the check off), for example to keep room for a tool, a cable or a screw. The distance between two parts is the distance between their bounding boxes: along each axis the gap is zero when the ranges overlap, and the distance is the root of the sum of the squares of the three gaps, compared as squares in integers. A pair that touches (a stack, a gap of zero) is placed so on purpose and a pair that overlaps belongs to the interference check, so neither is listed. The parts are the ones the mates give. The command `eh3d-phoenix-cad clearance PROJECT` prints `part_a,part_b,distance_mm` with the closest pair first (at most `clearance.max_pairs` lines) and a line `total,N,`, and exits with 1 when there is a pair.

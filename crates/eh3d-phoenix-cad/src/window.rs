@@ -7,6 +7,8 @@
 //! transaction: the new recipe is built first and the change is kept only when the model accepts
 //! it, so a refused value leaves the project exactly as it was.
 
+mod mates;
+
 use crate::assembly::{Dim, Edge, Mate, MateKind, Report};
 use crate::body::{Built, Step, StepState};
 use crate::catalog::{self, Axis, Kind as PartKind, Library, Orientation, PartInstance, Shape};
@@ -2364,7 +2366,7 @@ impl Window {
             Panel::PartList => self.part_list().map(|l| crate::partlist::text_in(&l, lang)),
             Panel::Bom => self.bom().map(|b| crate::bom::text_in(&b, lang)),
             Panel::Balance => self.balance().map(|b| panels::balance_text_in(&b, lang)),
-            Panel::Section | Panel::ImportDxf => Ok(String::new()),
+            Panel::Section | Panel::ImportDxf | Panel::Mates => Ok(String::new()),
             Panel::SketchExport | Panel::Revolve => Ok(if self.mech.sketches.is_empty() {
                 Msg::PanelNoSketch.tr(lang).to_string()
             } else {
@@ -8568,5 +8570,125 @@ mass: "
         assert!(!w.write_section_drawing(Dim::Z, "500", SketchFormat::Svg, "empty.svg", false));
         assert!(!dir.0.join("empty.svg").exists());
         assert_eq!(w.model_name(), "box");
+    }
+
+    #[test]
+    fn the_mates_panel_tries_a_new_mate_on_a_copy_and_tells_the_conflicts_it_would_leave() {
+        use crate::panels::{Panel, PanelOptions};
+        let mut w = two_tubes_in_the_window();
+        let mut draft = w.mate_draft_new();
+        assert_eq!(
+            (draft.kind.as_str(), draft.fixed, draft.placed),
+            ("stack", 0, 1)
+        );
+        assert_eq!(w.mate_choices().len(), 2);
+        assert_eq!(w.panel_text(Panel::Mates, &PanelOptions::default()), "");
+        // no mate yet; the stack would put the second tube on the first one without a conflict
+        let t = w.mates_panel_text(&draft);
+        assert!(
+            t.starts_with(
+                "No mate is in the model.
+"
+            ),
+            "{t}"
+        );
+        assert!(t.contains("New mate: Part 2 on Part 1: stack"), "{t}");
+        assert!(t.contains("Part 2 would be at"), "{t}");
+        assert!(t.contains("no pair of parts would share volume"), "{t}");
+        // the trial left the project as it was
+        assert_eq!(w.mech.steps.len(), 2);
+        assert!(w.enclosure().mates().is_empty());
+        // an alignment of the lower faces in x puts the tubes one over the other
+        draft.kind = "align".into();
+        draft.axis = "x".into();
+        let t = w.mates_panel_text(&draft);
+        assert!(
+            t.contains("New mate: Part 2 on Part 1: align x lower"),
+            "{t}"
+        );
+        assert!(t.contains("1 pairs of parts would share volume"), "{t}");
+        assert!(t.contains("Part 1"), "{t}");
+        assert_eq!(w.mech.steps.len(), 2);
+        // the same part twice, a part that is not there and a value that is not a length
+        draft.placed = 0;
+        assert!(w.mates_panel_text(&draft).contains("two different parts"));
+        draft.placed = 5;
+        assert!(w.mates_panel_text(&draft).contains("The mate is refused"));
+        draft.placed = 1;
+        draft.kind = "offset".into();
+        draft.distance = "far".into();
+        assert!(w.mates_panel_text(&draft).contains("The mate is refused"));
+        draft.kind = "diagonal".into();
+        assert!(w.mates_panel_text(&draft).contains("The mate is refused"));
+        // the new kinds are written in words
+        draft.kind = "offset".into();
+        draft.distance = "50".into();
+        let mate = w.mate_from_draft(&draft).unwrap();
+        assert_eq!(w.mate_words(&mate), "offset x 50 mm");
+        draft.kind = "symmetric".into();
+        draft.plane = "10 mm".into();
+        assert_eq!(
+            w.mate_words(&w.mate_from_draft(&draft).unwrap()),
+            "symmetric x 10 mm"
+        );
+        draft.kind = "turn".into();
+        draft.turn = "270".into();
+        assert_eq!(
+            w.mate_words(&w.mate_from_draft(&draft).unwrap()),
+            "turn 270"
+        );
+        draft.turn = "45".into();
+        assert!(w.mate_from_draft(&draft).is_err());
+        draft.kind = "gap".into();
+        draft.direction = "+z".into();
+        draft.distance = "5".into();
+        assert_eq!(
+            w.mate_words(&w.mate_from_draft(&draft).unwrap()),
+            "gap +z 5 mm"
+        );
+        // the text follows the language
+        w.lang = Lang::Es;
+        draft.kind = "stack".into();
+        let es = w.mates_panel_text(&draft);
+        assert!(
+            es.starts_with("No hay ninguna restricción de montaje"),
+            "{es}"
+        );
+        w.lang = Lang::En;
+    }
+
+    #[test]
+    fn a_mate_written_in_the_panel_is_added_listed_and_refused_like_one_of_the_tree() {
+        let mut w = two_tubes_in_the_window();
+        let mut draft = w.mate_draft_new();
+        assert!(w.add_mate_from_draft(&draft), "{:?}", w.status);
+        assert_eq!(w.enclosure().mates().len(), 1);
+        assert_eq!(placed_at(&w, "Part 2"), [24, 0, 300]);
+        assert!(w
+            .mates_panel_text(&draft)
+            .contains("1. Part 2 on Part 1: stack"));
+        // a second mate along the same axis is refused and the project stays as it was
+        let steps = w.mech.steps.len();
+        draft.kind = "gap".into();
+        draft.distance = "10".into();
+        assert!(!w.add_mate_from_draft(&draft));
+        assert!(w.status.text(Lang::En).contains("PHOENIX-CAD-046"));
+        assert_eq!(w.mech.steps.len(), steps);
+        // a mate along another axis is added
+        draft.kind = "offset".into();
+        draft.axis = "x".into();
+        draft.distance = "40".into();
+        assert!(w.add_mate_from_draft(&draft), "{:?}", w.status);
+        assert_eq!(placed_at(&w, "Part 2"), [40, 0, 300]);
+        let t = w.mates_panel_text(&draft);
+        assert!(t.contains("2. Part 2 on Part 1: offset x 40 mm"), "{t}");
+        // and it is one step of the history
+        w.undo();
+        assert_eq!(w.enclosure().mates().len(), 1);
+        // a model with one part has nothing to mate
+        let one = fresh();
+        assert!(one
+            .mates_panel_text(&one.mate_draft_new())
+            .contains("A mate needs two parts in the model."));
     }
 }

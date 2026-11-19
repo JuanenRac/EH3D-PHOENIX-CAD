@@ -108,7 +108,8 @@ struct App {
 
 impl App {
     fn new(win: Window, sketch: SketchEditor, workspace: StartView) -> App {
-        let panels = PanelState::new(&win.ui.panels, win.ui.export.overwrite);
+        let mut panels = PanelState::new(&win.ui.panels, win.ui.export.overwrite);
+        panels.mate = win.mate_draft_new();
         App {
             win,
             panels,
@@ -881,6 +882,13 @@ impl App {
         let mut write = false;
         let mut choose = false;
         let mut import = false;
+        let mut add_mate = false;
+        let choices: Vec<String> = self
+            .win
+            .mate_choices()
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect();
         let mut text = String::new();
         let title = panel.title().tr(lang).trim_end_matches("...");
         egui::Window::new(title)
@@ -901,6 +909,124 @@ impl App {
                                         .desired_width(60.0),
                                 );
                             });
+                        }
+                    }
+                    Panel::Mates if choices.len() >= 2 => {
+                        let draft = &mut self.panels.mate;
+                        if draft.fixed >= choices.len() {
+                            draft.fixed = 0;
+                        }
+                        if draft.placed >= choices.len() {
+                            draft.placed = 1;
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label(Msg::FieldMateA.tr(lang));
+                            egui::ComboBox::from_id_salt("panel-mate-fixed")
+                                .selected_text(choices[draft.fixed].clone())
+                                .show_ui(ui, |ui| {
+                                    for (i, n) in choices.iter().enumerate() {
+                                        ui.selectable_value(&mut draft.fixed, i, n.as_str());
+                                    }
+                                });
+                            ui.label(Msg::FieldMateB.tr(lang));
+                            egui::ComboBox::from_id_salt("panel-mate-placed")
+                                .selected_text(choices[draft.placed].clone())
+                                .show_ui(ui, |ui| {
+                                    for (i, n) in choices.iter().enumerate() {
+                                        ui.selectable_value(&mut draft.placed, i, n.as_str());
+                                    }
+                                });
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(Msg::FieldMateKind.tr(lang));
+                            for (word, msg) in [
+                                ("gap", Msg::MateGap),
+                                ("align", Msg::MateAlign),
+                                ("stack", Msg::MateStack),
+                                ("offset", Msg::MateOffset),
+                                ("symmetric", Msg::MateSymmetric),
+                                ("turn", Msg::MateTurn),
+                            ] {
+                                ui.selectable_value(
+                                    &mut draft.kind,
+                                    word.to_string(),
+                                    msg.tr(lang),
+                                );
+                            }
+                        });
+                        let kind = draft.kind.clone();
+                        if kind == "gap" {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(Msg::FieldMateDirection.tr(lang));
+                                for a in catalog::Axis::ALL {
+                                    ui.selectable_value(
+                                        &mut draft.direction,
+                                        a.name().to_string(),
+                                        a.name(),
+                                    );
+                                }
+                            });
+                        }
+                        if ["align", "offset", "symmetric"].contains(&kind.as_str()) {
+                            ui.horizontal(|ui| {
+                                ui.label(Msg::FieldMateAxis.tr(lang));
+                                for name in ["x", "y", "z"] {
+                                    ui.selectable_value(&mut draft.axis, name.to_string(), name);
+                                }
+                            });
+                        }
+                        if kind == "align" {
+                            ui.horizontal(|ui| {
+                                ui.label(Msg::FieldMateEdge.tr(lang));
+                                for (word, msg) in [
+                                    ("min", Msg::MateEdgeMin),
+                                    ("max", Msg::MateEdgeMax),
+                                    ("center", Msg::MateEdgeCenter),
+                                ] {
+                                    ui.selectable_value(
+                                        &mut draft.edge,
+                                        word.to_string(),
+                                        msg.tr(lang),
+                                    );
+                                }
+                            });
+                        }
+                        if kind == "gap" || kind == "offset" {
+                            ui.horizontal(|ui| {
+                                ui.label(if kind == "gap" {
+                                    Msg::FieldMateDistance.tr(lang)
+                                } else {
+                                    Msg::FieldMateOffset.tr(lang)
+                                });
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut draft.distance)
+                                        .desired_width(80.0),
+                                );
+                            });
+                        }
+                        if kind == "symmetric" {
+                            ui.horizontal(|ui| {
+                                ui.label(Msg::FieldMatePlane.tr(lang));
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut draft.plane)
+                                        .desired_width(80.0),
+                                );
+                            });
+                        }
+                        if kind == "turn" {
+                            ui.horizontal(|ui| {
+                                ui.label(Msg::FieldMateTurn.tr(lang));
+                                for degrees in ["0", "90", "180", "270"] {
+                                    ui.selectable_value(
+                                        &mut draft.turn,
+                                        degrees.to_string(),
+                                        degrees,
+                                    );
+                                }
+                            });
+                        }
+                        if ui.button(Msg::MatesAddDo.tr(lang)).clicked() {
+                            add_mate = true;
                         }
                     }
                     Panel::Revolve if !names.is_empty() => {
@@ -1075,6 +1201,8 @@ impl App {
                 } else {
                     text = if panel == Panel::ImportDxf {
                         self.panels.import_report.clone()
+                    } else if panel == Panel::Mates {
+                        self.win.mates_panel_text(&self.panels.mate)
                     } else if panel == Panel::Section {
                         self.win
                             .section_panel_text(self.panels.section_axis, &self.panels.section_at)
@@ -1104,6 +1232,10 @@ impl App {
                     });
                 }
             });
+        if add_mate {
+            let draft = self.panels.mate.clone();
+            self.win.add_mate_from_draft(&draft);
+        }
         if choose {
             self.open_dxf_dialog();
         }

@@ -52,11 +52,13 @@ pub enum Panel {
     ImportDxf,
     /// The bill of materials with the mass and the cost of each line.
     Bom,
+    /// The mates of the model, the conflicts they leave and the editor of a new mate.
+    Mates,
 }
 
 impl Panel {
     /// Every panel, in the order of the menu.
-    pub const ALL: [Panel; 11] = [
+    pub const ALL: [Panel; 12] = [
         Panel::CutPlan,
         Panel::Holes,
         Panel::Clearance,
@@ -68,6 +70,7 @@ impl Panel {
         Panel::Section,
         Panel::ImportDxf,
         Panel::Bom,
+        Panel::Mates,
     ];
 
     /// The title of the panel, which is also the text of its menu entry.
@@ -84,6 +87,49 @@ impl Panel {
             Panel::Section => Msg::PanelSection,
             Panel::ImportDxf => Msg::PanelImportDxf,
             Panel::Bom => Msg::PanelBom,
+            Panel::Mates => Msg::PanelMates,
+        }
+    }
+}
+
+/// A mate being written in the mates panel: every value as the text the person types or picks, so
+/// that a half-typed value is kept until the mate is added. The parts are places in the list that
+/// [`crate::window::Window::mate_choices`] gives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MateDraft {
+    /// The kind of mate: `gap`, `align`, `stack`, `offset`, `symmetric` or `turn`.
+    pub kind: String,
+    /// The place of the part that stays, in the list of parts.
+    pub fixed: usize,
+    /// The place of the part that is placed, in the list of parts.
+    pub placed: usize,
+    /// The side of a `gap`: `+x`, `-x`, `+y`, `-y`, `+z` or `-z`.
+    pub direction: String,
+    /// The axis of an `align`, an `offset` or a `symmetric`: `x`, `y` or `z`.
+    pub axis: String,
+    /// The faces an `align` puts on one plane: `min`, `max` or `center`.
+    pub edge: String,
+    /// The distance of a `gap` or of an `offset`, typed as a length.
+    pub distance: String,
+    /// The position of the plane of a `symmetric`, typed as a length.
+    pub plane: String,
+    /// The roll of a `turn` in degrees (0, 90, 180 or 270).
+    pub turn: String,
+}
+
+impl Default for MateDraft {
+    /// A stack of the second part on the first, with the values of the shipped settings.
+    fn default() -> MateDraft {
+        MateDraft {
+            kind: "stack".to_string(),
+            fixed: 0,
+            placed: 1,
+            direction: "+z".to_string(),
+            axis: "z".to_string(),
+            edge: "min".to_string(),
+            distance: "0".to_string(),
+            plane: "0".to_string(),
+            turn: "90".to_string(),
         }
     }
 }
@@ -169,6 +215,8 @@ pub struct PanelState {
     pub import_unit: String,
     /// What the last import read, as text in the language it was made in; empty before one.
     pub import_report: String,
+    /// The mate being written in the mates panel.
+    pub mate: MateDraft,
 }
 
 impl PanelState {
@@ -193,6 +241,7 @@ impl PanelState {
             import_face: settings.import_face,
             import_unit: settings.import_unit.clone(),
             import_report: String::new(),
+            mate: MateDraft::default(),
         }
     }
 
