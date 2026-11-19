@@ -78,6 +78,7 @@ The three views look at the box from above (`top`: `x` to the right, `y` up), fr
 | `EJES` | the centre lines of the box and of every hole drawn, `drawing.axis_overshoot` past what they mark |
 | `COTAS` | the dimensions (lines, extension lines and texts), when `drawing.dxf_dimensions = 1`; the SVG file has them in a group of the same name when `drawing.dimensions = 1` |
 | `RAYADO` | the hatching of a section (see below); the drawings of the views have none |
+| `MARCO` | the border round the views, their dimension lines and their legend, `drawing.frame_margin` away from them, when `drawing.frame = 1` (it is 0 by default, so a drawing is what it was) |
 | `OCULTAS` | the cavity of the box (the inside of the walls, the floor and the lid) as a dashed rectangle, which the view does not see: `drawing.hidden_lines = 0` leaves it out. The DXF file then has a second line type `DASHED` for the layer, and the SVG file a dash for its group |
 
 The DXF file is R12 text with the entities `LINE`, `CIRCLE` and `ARC` and the header variable `$INSUNITS` set to millimetres. The SVG file is scaled to `drawing.svg_width`; with `drawing.dimensions = 1` it has the width and the height of the box as dimension lines, the size of every hole as a label (`⌀6`, `⌀3 / ⌀8` for a countersink, `4×10` for a slot) and the scale in the corner. Posts, the lip and the inside of the box are not drawn, because they are not seen from outside. A drawing with more than `drawing.max_entities` entities is refused (`PHOENIX-CAD-050`). Neither format has been opened in a drawing program.
@@ -124,6 +125,8 @@ In `phoenix-cad.default.cfg` (the `config` command writes them):
 | `drawing.legend` | 1 | the list of the dimensions (box, thickness, holes) to the right of the box |
 | `drawing.legend_gap` | 10 mm | the room between the box and the legend |
 | `drawing.hidden_lines` | 1 | the cavity of the box as dashed lines on the layer `OCULTAS` |
+| `drawing.frame` | 0 | a border on the layer `MARCO` round the views, their dimensions and their legend |
+| `drawing.frame_margin` | 5 mm | the air between what is drawn and the border, from 0 mm to 1000 mm |
 
 ### The title block
 

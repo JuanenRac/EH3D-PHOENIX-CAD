@@ -88,6 +88,8 @@ pub enum Layer {
     Hatch,
     /// The cavity of the box, which the view does not see, as dashed lines.
     Hidden,
+    /// The border drawn round the views, their dimensions and their legend.
+    Frame,
 }
 
 impl Layer {
@@ -99,6 +101,7 @@ impl Layer {
             Layer::Axes => "EJES",
             Layer::Hatch => "RAYADO",
             Layer::Hidden => "OCULTAS",
+            Layer::Frame => "MARCO",
         }
     }
 
@@ -110,6 +113,7 @@ impl Layer {
             Layer::Axes => 1,
             Layer::Hatch => 8,
             Layer::Hidden => 6,
+            Layer::Frame => 7,
         }
     }
 
@@ -121,6 +125,7 @@ impl Layer {
             Layer::Axes => "#d03030",
             Layer::Hatch => "#8a8a8a",
             Layer::Hidden => "#7a3f9d",
+            Layer::Frame => "#333333",
         }
     }
 }
@@ -566,6 +571,35 @@ impl Drawing {
             .fold(f64::MIN, f64::max)
     }
 
+    /// How far the dimension lines (and their text) reach under and to the left of the drawing, in
+    /// millimetres, whether or not the files will carry them (zero when nothing is dimensioned).
+    fn dimension_room(&self) -> f64 {
+        if self.notes.iter().any(|n| n.measures.is_some()) {
+            DIM_OFFSET + DIM_STEP * f64::from(self.levels()) + 2.0 * DIM_TEXT
+        } else {
+            0.0
+        }
+    }
+
+    /// Draws a border (layer `MARCO`) round everything the drawing holds: what is drawn, the
+    /// dimension lines under and to the left of it, and the legend to the right of it, with
+    /// `margin` millimetres of air on every side. A second call draws a second border outside the
+    /// first, so a drawing that already has one is left as it is.
+    pub fn add_frame(&mut self, margin: f64) {
+        if self.count(Layer::Frame) > 0 || self.entities.is_empty() {
+            return;
+        }
+        let (lo, mut hi) = self.bounds();
+        let room = self.dimension_room();
+        let legend = self.legend_right();
+        if legend > hi.0 {
+            hi.0 = legend;
+        }
+        let lo = (lo.0 - margin - room, lo.1 - margin - room);
+        let hi = (hi.0 + margin, hi.1 + margin);
+        self.entities.extend(rect_lines(Layer::Frame, lo, hi));
+    }
+
     /// The most dimension lines that lie one above the other.
     fn levels(&self) -> u32 {
         self.notes
@@ -686,8 +720,10 @@ impl Drawing {
         put(2, "LAYER");
         let dimensioned = self.dxf_dimensions && !self.notes.is_empty();
         let hatched = self.count(Layer::Hatch) > 0;
+        let framed = self.count(Layer::Frame) > 0;
         let layers = 3
             + usize::from(hatched)
+            + usize::from(framed)
             + usize::from(hidden)
             + usize::from(block.is_some())
             + usize::from(dimensioned);
@@ -698,8 +734,12 @@ impl Drawing {
             Layer::Axes,
             Layer::Hatch,
             Layer::Hidden,
+            Layer::Frame,
         ] {
-            if (layer == Layer::Hatch && !hatched) || (layer == Layer::Hidden && !hidden) {
+            if (layer == Layer::Hatch && !hatched)
+                || (layer == Layer::Hidden && !hidden)
+                || (layer == Layer::Frame && !framed)
+            {
                 continue;
             }
             put(0, "LAYER");
@@ -916,6 +956,7 @@ impl Drawing {
             Layer::Axes,
             Layer::Hatch,
             Layer::Hidden,
+            Layer::Frame,
         ] {
             let always = matches!(layer, Layer::Outline | Layer::Holes | Layer::Axes);
             if !always && self.count(layer) == 0 {
@@ -1724,5 +1765,120 @@ mod tests {
         let svg = d.to_svg_with(&settings(), Some((&own, "box", Lang::En)));
         assert!(svg.contains(">Front &lt;panel&gt;</text>"));
         assert!(!svg.contains(">box</text>"));
+    }
+
+    #[test]
+    fn the_frame_goes_round_the_views_the_dimension_lines_and_the_legend() {
+        let mut e = model();
+        hole(&mut e, 1, Face::Front, 60, 17, 6, HoleStyle::Plain);
+        let mut d = Drawing::of(&e, View::Front, &settings()).unwrap();
+        d.add_legend(&e, &settings(), Lang::En);
+        let ((lx, ly), (hx, _)) = d.bounds();
+        let right = d.legend_right();
+        let room = d.dimension_room();
+        assert!(room > 0.0);
+        d.add_frame(5.0);
+        assert_eq!(d.count(Layer::Frame), 4);
+        let frame: Vec<_> = d
+            .entities
+            .iter()
+            .filter(|(l, _)| *l == Layer::Frame)
+            .collect();
+        let xs: Vec<f64> = frame
+            .iter()
+            .flat_map(|(_, e)| match *e {
+                Entity::Line(a, b) => vec![a.0, b.0],
+                _ => vec![],
+            })
+            .collect();
+        let ys: Vec<f64> = frame
+            .iter()
+            .flat_map(|(_, e)| match *e {
+                Entity::Line(a, b) => vec![a.1, b.1],
+                _ => vec![],
+            })
+            .collect();
+        let min = |v: &[f64]| v.iter().copied().fold(f64::MAX, f64::min);
+        let max = |v: &[f64]| v.iter().copied().fold(f64::MIN, f64::max);
+        assert_eq!(min(&xs), lx - 5.0 - room);
+        assert_eq!(min(&ys), ly - 5.0 - room);
+        assert_eq!(max(&xs), right.max(hx) + 5.0);
+        // the legend is inside it, further right than the box
+        assert!(right > hx);
+    }
+
+    #[test]
+    fn a_second_frame_is_not_drawn_and_an_empty_drawing_has_none() {
+        let mut d = Drawing::of(&model(), View::Top, &settings()).unwrap();
+        d.add_frame(2.0);
+        let n = d.entities.len();
+        d.add_frame(9.0);
+        assert_eq!(d.entities.len(), n);
+        let mut empty = d.clone();
+        empty.entities.clear();
+        empty.add_frame(2.0);
+        assert_eq!(empty.count(Layer::Frame), 0);
+    }
+
+    #[test]
+    fn the_frame_has_its_layer_in_the_dxf_and_its_group_in_the_svg_and_only_when_asked() {
+        let e = model();
+        let plain = Drawing::of(&e, View::Top, &settings()).unwrap();
+        assert!(!plain.to_dxf().contains("MARCO"));
+        assert!(!plain.to_svg(&settings()).contains("MARCO"));
+        let mut d = plain.clone();
+        d.add_frame(5.0);
+        let dxf = d.to_dxf();
+        // the layer is counted in its table, with its own line each side
+        assert!(dxf.contains("2
+MARCO
+70
+0
+62
+7
+6
+CONTINUOUS
+"));
+        assert_eq!(dxf.matches("0
+LINE
+8
+MARCO
+").count(), 4);
+        let layers = |t: &str| t.matches("0
+LAYER
+2
+").count();
+        assert_eq!(layers(&dxf), layers(&plain.to_dxf()) + 1);
+        let svg = d.to_svg(&settings());
+        assert!(svg.contains("<g id=\"MARCO\""));
+        assert_eq!(svg.matches("<line").count(), plain.to_svg(&settings()).matches("<line").count() + 4);
+    }
+
+    #[test]
+    fn the_settings_ask_for_the_frame_and_it_is_off_by_default() {
+        assert!(!settings().frame);
+        assert_eq!(settings().frame_margin.get(), 5_000_000);
+        let own = crate::config::Settings::with_user_config(
+            "[drawing]
+frame = 1
+frame_margin = 12 mm
+",
+        )
+        .unwrap();
+        assert!(own.drawing.frame);
+        assert_eq!(own.drawing.frame_margin.get(), 12_000_000);
+        for bad in [
+            "[drawing]
+frame = 2
+",
+            "[drawing]
+frame_margin = -1 mm
+",
+            "[drawing]
+frame_margin = 1001 mm
+",
+        ] {
+            assert!(crate::config::Settings::with_user_config(bad).is_err(), "{bad}");
+        }
     }
 }

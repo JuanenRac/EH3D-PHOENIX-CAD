@@ -193,6 +193,9 @@ pub fn render_titled(
             if settings.drawing.legend {
                 drawing.add_legend(enclosure, &settings.drawing, lang);
             }
+            if settings.drawing.frame {
+                drawing.add_frame(settings.drawing.frame_margin.get() as f64 / 1_000_000.0);
+            }
             let tb = &settings.title_block;
             let dxf = format.extension() == "dxf";
             if !tb.enabled {
@@ -636,5 +639,28 @@ number = P-7
         // the other formats do not have one
         let step = render_titled(Format::Script, &e, "", &on, Lang::En, "plate").unwrap();
         assert!(!String::from_utf8(step).unwrap().contains("ROTULO"));
+    }
+
+    #[test]
+    fn a_drawing_has_a_frame_only_when_the_settings_ask_for_it() {
+        let e = enclosure();
+        let off = Settings::with_user_config("[drawing]
+legend = 0
+").unwrap();
+        let on = Settings::with_user_config("[drawing]
+legend = 0
+frame = 1
+frame_margin = 8 mm
+")
+            .unwrap();
+        for format in [Format::DxfTop, Format::SvgFront] {
+            let plain = String::from_utf8(render(format, &e, "", &off).unwrap()).unwrap();
+            let framed = String::from_utf8(render(format, &e, "", &on).unwrap()).unwrap();
+            assert!(!plain.contains("MARCO"), "{format:?}");
+            assert!(framed.contains("MARCO"), "{format:?}");
+        }
+        // the other formats are not drawings
+        let script = String::from_utf8(render(Format::Script, &e, "", &on).unwrap()).unwrap();
+        assert!(!script.contains("MARCO"));
     }
 }

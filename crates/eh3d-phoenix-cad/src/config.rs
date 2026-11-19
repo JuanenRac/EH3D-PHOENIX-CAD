@@ -378,6 +378,11 @@ pub struct DrawingSettings {
     /// Whether the drawing of a view draws the cavity of the box (the inside of its walls, floor
     /// and lid) as dashed hidden lines on their own layer (1) or not (0).
     pub hidden_lines: bool,
+    /// Whether the drawing of a view has a border (layer `MARCO`) round the views, their
+    /// dimensions and their legend (1) or not (0).
+    pub frame: bool,
+    /// The air between what is drawn and the border, from 0 to 1000 mm.
+    pub frame_margin: Length,
 }
 
 impl DrawingSettings {
@@ -441,6 +446,12 @@ impl DrawingSettings {
                 "drawing.legend_gap must be from 0 mm to 1000 mm".into(),
             ));
         }
+        let frame_margin = c.length("drawing.frame_margin")?;
+        if frame_margin.get() < 0 || frame_margin.get() > 1_000_000_000 {
+            return Err(CadError::Config(
+                "drawing.frame_margin must be from 0 mm to 1000 mm".into(),
+            ));
+        }
         Ok(DrawingSettings {
             max_entities,
             svg_width,
@@ -453,6 +464,8 @@ impl DrawingSettings {
             legend: flag("drawing.legend")?,
             legend_gap,
             hidden_lines: flag("drawing.hidden_lines")?,
+            frame: flag("drawing.frame")?,
+            frame_margin,
         })
     }
 }
@@ -1554,6 +1567,8 @@ markup_percent = 1000
                 legend: true,
                 legend_gap: Length::new(10_000_000).unwrap(),
                 hidden_lines: true,
+                frame: false,
+                frame_margin: Length::new(5_000_000).unwrap(),
             }
         );
         let own = Settings::with_user_config(
