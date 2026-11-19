@@ -178,6 +178,8 @@ pub struct PanelOptions {
     pub holes_tools: bool,
     /// Pull the parts apart by this percentage first.
     pub explode: Option<u32>,
+    /// Add the totals of the bill of materials by material or by kind of piece.
+    pub bom_group: Option<crate::bom::GroupBy>,
 }
 
 /// The state of the panels of the window: which one is open and what is chosen in it.
@@ -191,6 +193,8 @@ pub struct PanelState {
     pub explode: bool,
     /// The percentage being typed for the exploded view.
     pub explode_text: String,
+    /// The totals the bill of materials panel adds to its lines, if any.
+    pub bom_group: Option<crate::bom::GroupBy>,
     /// The number of the sketch being drawn, among the sketches of the project.
     pub sketch: usize,
     /// The format of the drawing of a sketch.
@@ -235,6 +239,7 @@ impl PanelState {
             holes_tools: settings.holes_tools,
             explode: settings.explode,
             explode_text: settings.explode_percent.to_string(),
+            bom_group: None,
             sketch: 0,
             format: settings.sketch_format,
             file: String::new(),
@@ -264,6 +269,7 @@ impl PanelState {
             } else {
                 None
             },
+            bom_group: self.bom_group,
         }
     }
 }

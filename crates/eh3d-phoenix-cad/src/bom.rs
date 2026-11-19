@@ -222,6 +222,157 @@ pub(crate) fn cell(text: &str) -> String {
     s
 }
 
+/// What the totals of the bill are grouped by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupBy {
+    /// One group for each material.
+    Material,
+    /// One group for each kind of piece (profile, screw, bracket, turned body, swept body).
+    Kind,
+}
+
+impl GroupBy {
+    /// The word of the command line.
+    pub fn name(self) -> &'static str {
+        match self {
+            GroupBy::Material => "material",
+            GroupBy::Kind => "kind",
+        }
+    }
+
+    /// The grouping with a word of the command line.
+    pub fn from_name(name: &str) -> Option<GroupBy> {
+        match name {
+            "material" => Some(GroupBy::Material),
+            "kind" => Some(GroupBy::Kind),
+            _ => None,
+        }
+    }
+}
+
+/// The totals of the lines of the bill that share a material or a kind of piece. The cost is the
+/// one of the lines, before the markup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Group {
+    /// The material, or the kind of piece (the word of the comma separated values, or the word of
+    /// the language in the text).
+    pub name: String,
+    /// How many lines of the bill are in the group.
+    pub lines: usize,
+    /// How many pieces.
+    pub pieces: u32,
+    /// The volume of all of them, in cubic nanometres.
+    pub volume_nm3: i128,
+    /// The mass of all of them, in micrograms.
+    pub mass_ug: i128,
+    /// The cost of all of them, in thousandths of the currency.
+    pub cost_milli: i128,
+}
+
+fn kind_label(line: &Line, lang: Lang) -> &'static str {
+    if line.turned {
+        Msg::KindTurned.tr(lang)
+    } else if line.swept {
+        Msg::KindSwept.tr(lang)
+    } else {
+        kind_msg(line.kind).tr(lang)
+    }
+}
+
+/// The totals of the bill by material or by kind, in the order of the names. With a language the
+/// kinds are named in it; without one they are the words of the comma separated values.
+pub fn groups(bom: &Bom, by: GroupBy, lang: Option<Lang>) -> Vec<Group> {
+    let mut found: BTreeMap<String, Group> = BTreeMap::new();
+    for l in &bom.lines {
+        let name = match (by, lang) {
+            (GroupBy::Material, _) => l.material.clone(),
+            (GroupBy::Kind, None) => kind_word(l).to_string(),
+            (GroupBy::Kind, Some(lang)) => kind_label(l, lang).to_string(),
+        };
+        let g = found.entry(name.clone()).or_insert(Group {
+            name,
+            lines: 0,
+            pieces: 0,
+            volume_nm3: 0,
+            mass_ug: 0,
+            cost_milli: 0,
+        });
+        let quantity = i128::from(l.quantity);
+        g.lines += 1;
+        g.pieces = g.pieces.saturating_add(l.quantity);
+        g.volume_nm3 = g
+            .volume_nm3
+            .saturating_add(l.unit_volume_nm3.saturating_mul(quantity));
+        g.mass_ug = g.mass_ug.saturating_add(l.total_mass_ug());
+        g.cost_milli = g.cost_milli.saturating_add(l.total_cost_milli());
+    }
+    found.into_values().collect()
+}
+
+/// The totals by group as comma separated values, the same text in any language: a row for each
+/// group and a last row `total` with the figures of the whole bill (the cost before the markup).
+pub fn groups_csv(bom: &Bom, by: GroupBy) -> String {
+    let mut out = format!(
+        "{},lines,pieces,volume_mm3,mass_g,cost,currency\n",
+        by.name()
+    );
+    let mut row = |name: &str, lines: usize, g: (u32, i128, i128, i128)| {
+        let _ = writeln!(
+            out,
+            "{},{},{},{},{},{},{}",
+            cell(name),
+            lines,
+            g.0,
+            scaled(g.1, NM3_PER_MM3),
+            mass_g_text(g.2),
+            money_text(g.3),
+            bom.currency
+        );
+    };
+    for g in groups(bom, by, None) {
+        row(
+            &g.name,
+            g.lines,
+            (g.pieces, g.volume_nm3, g.mass_ug, g.cost_milli),
+        );
+    }
+    row(
+        "total",
+        bom.lines.len(),
+        (bom.pieces, bom.volume_nm3, bom.mass_ug, bom.subtotal_milli),
+    );
+    out
+}
+
+/// The totals by group as lines of text in a language: the way they are grouped and a line for
+/// each group.
+pub fn groups_text_in(bom: &Bom, by: GroupBy, lang: Lang) -> String {
+    let title = match by {
+        GroupBy::Material => Msg::BomByMaterial,
+        GroupBy::Kind => Msg::BomByKind,
+    };
+    let mut out = format!("{}\n", title.tr(lang));
+    for g in groups(bom, by, Some(lang)) {
+        let _ = writeln!(
+            out,
+            "{}",
+            fill(
+                Msg::BomGroupLine.tr(lang),
+                &[
+                    &g.name,
+                    &g.lines.to_string(),
+                    &g.pieces.to_string(),
+                    &scaled(g.volume_nm3, NM3_PER_MM3),
+                    &mass_g_text(g.mass_ug),
+                    &money_text(g.cost_milli),
+                    &bom.currency,
+                ]
+            )
+        );
+    }
+    out
+}
+
 fn kind_word(line: &Line) -> &'static str {
     if line.turned {
         "turned"
@@ -306,13 +457,7 @@ pub fn csv(bom: &Bom) -> String {
 pub fn text_in(bom: &Bom, lang: Lang) -> String {
     let mut out = String::new();
     for l in &bom.lines {
-        let kind = if l.turned {
-            Msg::KindTurned.tr(lang)
-        } else if l.swept {
-            Msg::KindSwept.tr(lang)
-        } else {
-            kind_msg(l.kind).tr(lang)
-        };
+        let kind = kind_label(l, lang);
         let size = format!(
             "{} x {} x {} mm",
             mm_text(l.size[0]),
@@ -434,6 +579,79 @@ mod tests {
             row("d", "cube", "aluminium", 2700, 2_700_000),
             body("ring", "PLA", 1240, 12_400_000),
         ])
+    }
+
+    #[test]
+    fn the_totals_by_material_and_by_kind_add_up_to_the_bill_before_the_markup() {
+        let bom = from_list(&sample(), &cost(100, 10)).unwrap();
+        // by material: aluminium 0.100, PLA 0.348, steel 3 x 0.116 = 0.348
+        let by_material = groups(&bom, GroupBy::Material, None);
+        let summary: Vec<(&str, usize, u32, i128)> = by_material
+            .iter()
+            .map(|g| (g.name.as_str(), g.lines, g.pieces, g.cost_milli))
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                ("PLA", 1, 1, 348),
+                ("aluminium", 1, 1, 100),
+                ("steel", 1, 3, 348)
+            ]
+        );
+        assert_eq!(by_material[2].mass_ug, 3 * 8_000_000);
+        assert_eq!(
+            by_material.iter().map(|g| g.cost_milli).sum::<i128>(),
+            bom.subtotal_milli
+        );
+        // by kind: the three cubes and the aluminium one are profiles, the ring is a turned body
+        let by_kind = groups(&bom, GroupBy::Kind, None);
+        let kinds: Vec<(&str, usize, u32)> = by_kind
+            .iter()
+            .map(|g| (g.name.as_str(), g.lines, g.pieces))
+            .collect();
+        assert_eq!(kinds, vec![("profile", 2, 4), ("turned", 1, 1)]);
+        assert_eq!(by_kind.iter().map(|g| g.pieces).sum::<u32>(), bom.pieces);
+        assert_eq!(by_kind.iter().map(|g| g.mass_ug).sum::<i128>(), bom.mass_ug);
+        assert_eq!(
+            by_kind.iter().map(|g| g.volume_nm3).sum::<i128>(),
+            bom.volume_nm3
+        );
+        // the kinds are named in the language when it is given
+        let es = groups(&bom, GroupBy::Kind, Some(Lang::Es));
+        assert!(es.iter().any(|g| g.name == Msg::KindTurned.tr(Lang::Es)));
+        assert_eq!(GroupBy::from_name("kind"), Some(GroupBy::Kind));
+        assert_eq!(GroupBy::from_name("size"), None);
+        assert_eq!(GroupBy::Material.name(), "material");
+    }
+
+    #[test]
+    fn the_totals_by_group_are_written_as_values_and_as_text_in_each_language() {
+        let bom = from_list(&sample(), &cost(100, 10)).unwrap();
+        let csv = groups_csv(&bom, GroupBy::Material);
+        assert_eq!(
+            csv,
+            "material,lines,pieces,volume_mm3,mass_g,cost,currency\n\
+PLA,1,1,10000.000,12.400,0.348,EUR\n\
+aluminium,1,1,1000.000,2.700,0.100,EUR\n\
+steel,1,3,3000.000,24.000,0.348,EUR\n\
+total,3,5,14000.000,39.100,0.796,EUR\n"
+        );
+        assert!(groups_csv(&bom, GroupBy::Kind).starts_with("kind,lines,pieces,"));
+        let text = groups_text_in(&bom, GroupBy::Material, Lang::En);
+        assert!(text.starts_with("Totals by material\n"), "{text}");
+        assert!(text.contains("steel: 1 lines, 3 pieces,"), "{text}");
+        assert!(text.contains("cost 0.348 EUR"), "{text}");
+        for lang in Lang::ALL {
+            for by in [GroupBy::Material, GroupBy::Kind] {
+                let t = groups_text_in(&bom, by, lang);
+                assert!(t.lines().count() >= 3, "{t}");
+                assert!(!t.contains('{'), "{t}");
+            }
+        }
+        // a name that could be taken for a formula is quoted as in the bill
+        let mut risky = bom.clone();
+        risky.lines[0].material = "=SUM(A1)".into();
+        assert!(groups_csv(&risky, GroupBy::Material).contains("\n'=SUM(A1),"));
     }
 
     #[test]

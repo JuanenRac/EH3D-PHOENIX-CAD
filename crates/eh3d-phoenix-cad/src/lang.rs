@@ -607,6 +607,10 @@ messages! {
     LegendThickness => ["wall {0}, floor {1}, lid {2}", "pared {0}, suelo {1}, tapa {2}", "Wand {0}, Boden {1}, Deckel {2}", "paroi {0}, fond {1}, couvercle {2}", "parete {0}, fondo {1}, coperchio {2}", "壁 {0}、底 {1}、蓋 {2}", "壁厚 {0}，底厚 {1}，盖厚 {2}", "parede {0}, fundo {1}, tampa {2}"],
     LegendHole => ["{0}: {1} at {2}, {3}", "{0}: {1} en {2}, {3}", "{0}: {1} bei {2}, {3}", "{0} : {1} en {2}, {3}", "{0}: {1} in {2}, {3}", "{0}: {1}（位置 {2}, {3}）", "{0}：{1}，位置 {2}, {3}", "{0}: {1} em {2}, {3}"],
     LegendMore => ["{0} more holes are not listed", "{0} agujeros más no se listan", "{0} weitere Bohrungen sind nicht aufgeführt", "{0} autres trous ne sont pas listés", "altri {0} fori non sono elencati", "ほかの穴 {0} 個は一覧にありません", "另有 {0} 个孔未列出", "mais {0} furos não estão listados"],
+    BomGroupNone => ["No totals by group", "Sin totales por grupo", "Keine Summen nach Gruppe", "Pas de totaux par groupe", "Nessun totale per gruppo", "グループ別の合計なし", "不按组汇总", "Sem totais por grupo"],
+    BomByMaterial => ["Totals by material", "Totales por material", "Summen nach Material", "Totaux par matériau", "Totali per materiale", "材料別の合計", "按材料汇总", "Totais por material"],
+    BomByKind => ["Totals by kind of piece", "Totales por tipo de pieza", "Summen nach Art des Teils", "Totaux par type de pièce", "Totali per tipo di pezzo", "部品の種類別の合計", "按零件类型汇总", "Totais por tipo de peça"],
+    BomGroupLine => ["{0}: {1} lines, {2} pieces, {3} mm3, {4} g, cost {5} {6}", "{0}: {1} líneas, {2} piezas, {3} mm3, {4} g, coste {5} {6}", "{0}: {1} Zeilen, {2} Teile, {3} mm3, {4} g, Kosten {5} {6}", "{0} : {1} lignes, {2} pièces, {3} mm3, {4} g, coût {5} {6}", "{0}: {1} righe, {2} parti, {3} mm3, {4} g, costo {5} {6}", "{0}: {1} 行、{2} 部品、{3} mm3、{4} g、費用 {5} {6}", "{0}：{1} 行，{2} 个零件，{3} mm3，{4} g，成本 {5} {6}", "{0}: {1} linhas, {2} peças, {3} mm3, {4} g, custo {5} {6}"],
 }
 
 impl Msg {

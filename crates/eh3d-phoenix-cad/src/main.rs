@@ -28,7 +28,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad cutplan PROJECT.phoenixproj [--text] [--lang CODE] [--config FILE]            the cutting plan of the profiles placed in a project: the pieces of the cut list fitted into bars (the longest cut each profile comes in) with the kerf of the saw and the trimmed ends, as comma separated values or, with --text, as lines for a person
   eh3d-phoenix-cad clearance PROJECT.phoenixproj [--text] [--lang CODE] [--config FILE]                  lists, as comma separated values, the pairs of placed parts that do not touch and are closer than clearance.min_gap (exit 1 when there is one)
   eh3d-phoenix-cad placements PROJECT.phoenixproj [--explode PERCENT] [--text] [--lang CODE] [--config FILE]   where each placed part is (the corner and the size in millimetres and the turn) and the size of the whole assembly, as comma separated values; with --explode the parts are first pulled apart from the middle of the assembly by that percentage
-  eh3d-phoenix-cad bom PROJECT.phoenixproj [--text] [--lang CODE] [--config FILE]                  the bill of materials with cost: the parts and bodies grouped into lines with quantity, material, mass, the price of the material (price_per_kg of the settings) and the cost, with the subtotal, the markup and the total, as comma separated values for a spreadsheet; --text prints lines for a person in the language of --lang (any of the eight)
+  eh3d-phoenix-cad bom PROJECT.phoenixproj [--text] [--group material|kind] [--lang CODE] [--config FILE]                  the bill of materials with cost: the parts and bodies grouped into lines with quantity, material, mass, the price of the material (price_per_kg of the settings) and the cost, with the subtotal, the markup and the total, as comma separated values for a spreadsheet; --text prints lines for a person in the language of --lang (any of the eight)
   eh3d-phoenix-cad partlist PROJECT.phoenixproj [--text] [--lang CODE] [--config FILE]           the placed parts with their properties (name, kind, part, material, density, volume, mass, corner and size of the box) and the totals, as comma separated values; --text prints lines for a person in the language of --lang (any of the eight)
   eh3d-phoenix-cad holes PROJECT.phoenixproj [--tools] [--text] [--lang CODE] [--config FILE]            the schedule of the holes of the box for the person who drills (a tag, the face, the position, the diameter and the shape of each) as comma separated values, or with --tools the drills and cutters they need grouped by diameter and shape
   eh3d-phoenix-cad sketch-export PROJECT.phoenixproj|SKETCH.phoenixsketch --format dxf|svg [--sketch NAME] [--out FILE] [--overwrite] [--lang CODE] [--config FILE]   writes a sketch (the only one of the project, or the one named) as a flat drawing of its closed outlines for a laser or a router; never over a file that exists unless --overwrite is given
@@ -301,11 +301,32 @@ fn run_partlist(args: &[String]) -> Result<bool, String> {
 fn run_bom(args: &[String]) -> Result<bool, String> {
     let (lang, args) = take_lang(args)?;
     let text = args.iter().any(|a| a == "--text");
-    let rest: Vec<String> = args.iter().filter(|a| *a != "--text").cloned().collect();
+    // `--group material|kind` prints the totals by group instead of the lines
+    let mut group = None;
+    let mut rest: Vec<String> = Vec::new();
+    let mut words = args.iter().filter(|a| *a != "--text");
+    while let Some(word) = words.next() {
+        if word == "--group" {
+            let by = words
+                .next()
+                .ok_or_else(|| "--group needs material or kind".to_string())?;
+            group = Some(
+                eh3d_phoenix_cad::bom::GroupBy::from_name(by)
+                    .ok_or_else(|| format!("--group {by}: not material or kind"))?,
+            );
+        } else {
+            rest.push(word.clone());
+        }
+    }
     let (file, config) = file_and_config(&rest, "project file")?;
     let win = open_for_report(&file, config.as_deref(), lang)?;
-    let out =
-        if text { win.bom_text() } else { win.bom_csv() }.map_err(|e| error_text(&e, lang))?;
+    let out = match (group, text) {
+        (Some(by), true) => win.bom_groups_text(by),
+        (Some(by), false) => win.bom_groups_csv(by),
+        (None, true) => win.bom_text(),
+        (None, false) => win.bom_csv(),
+    }
+    .map_err(|e| error_text(&e, lang))?;
     print!("{out}");
     Ok(win.info.failed == 0)
 }

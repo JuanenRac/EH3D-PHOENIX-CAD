@@ -2297,6 +2297,19 @@ impl Window {
         self.bom().map(|b| crate::bom::text_in(&b, self.lang))
     }
 
+    /// The totals of the bill of materials by material or by kind of piece as comma separated
+    /// values.
+    pub fn bom_groups_csv(&self, by: crate::bom::GroupBy) -> Result<String, CadError> {
+        self.bom().map(|b| crate::bom::groups_csv(&b, by))
+    }
+
+    /// The totals of the bill of materials by material or by kind of piece as lines of text in the
+    /// language of the window.
+    pub fn bom_groups_text(&self, by: crate::bom::GroupBy) -> Result<String, CadError> {
+        self.bom()
+            .map(|b| crate::bom::groups_text_in(&b, by, self.lang))
+    }
+
     /// The list of the placed parts as comma separated values.
     pub fn part_list_csv(&self) -> Result<String, CadError> {
         self.part_list().map(|l| crate::partlist::csv(&l))
@@ -2366,7 +2379,14 @@ impl Window {
                 crate::placement::table(&placed).map(|t| panels::placements_text_in(&t, lang))
             }),
             Panel::PartList => self.part_list().map(|l| crate::partlist::text_in(&l, lang)),
-            Panel::Bom => self.bom().map(|b| crate::bom::text_in(&b, lang)),
+            Panel::Bom => self.bom().map(|b| {
+                let mut text = crate::bom::text_in(&b, lang);
+                if let Some(by) = options.bom_group {
+                    text.push('\n');
+                    text.push_str(&crate::bom::groups_text_in(&b, by, lang));
+                }
+                text
+            }),
             Panel::Balance => self.balance().map(|b| panels::balance_text_in(&b, lang)),
             Panel::Section | Panel::ImportDxf | Panel::Mates => Ok(String::new()),
             Panel::History => Ok(self.history_text()),
@@ -7640,6 +7660,7 @@ total,0,
             &PanelOptions {
                 holes_tools: false,
                 explode: Some(50),
+                ..PanelOptions::default()
             },
         );
         assert_ne!(plain, apart);
@@ -7651,6 +7672,7 @@ total,0,
             &PanelOptions {
                 holes_tools: false,
                 explode: Some(0),
+                ..PanelOptions::default()
             },
         );
         assert_eq!(zero, plain);
@@ -7660,6 +7682,7 @@ total,0,
             &PanelOptions {
                 holes_tools: false,
                 explode: Some(501),
+                ..PanelOptions::default()
             },
         );
         assert!(over.starts_with("PHOENIX-CAD-045 "), "{over}");
@@ -7679,6 +7702,7 @@ total,0,
             &PanelOptions {
                 holes_tools: true,
                 explode: None,
+                ..PanelOptions::default()
             },
         );
         assert!(tools.ends_with(&format!("holes: {n}\n")), "{tools}");
@@ -8461,6 +8485,60 @@ mass: "
         // a new project has no part
         assert_eq!(
             fresh().panel_text(Panel::Bom, &PanelOptions::default()),
+            Msg::PanelNoParts.tr(Lang::En)
+        );
+    }
+
+    #[test]
+    fn the_bill_panel_can_add_the_totals_by_material_or_by_kind_and_they_add_up() {
+        use crate::bom::GroupBy;
+        use crate::panels::{Panel, PanelOptions, PanelState};
+        let mut w = fresh();
+        assert!(w.open(&frame_path()), "{:?}", w.status);
+        let bom = w.bom().unwrap();
+        let plain = w.panel_text(Panel::Bom, &PanelOptions::default());
+        let by_material = w.panel_text(
+            Panel::Bom,
+            &PanelOptions {
+                bom_group: Some(GroupBy::Material),
+                ..PanelOptions::default()
+            },
+        );
+        // the lines of the bill come first and the totals by group after an empty line
+        assert!(by_material.starts_with(&plain), "{by_material}");
+        let totals = &by_material[plain.len()..];
+        assert!(totals.starts_with("\nTotals by material\n"), "{totals}");
+        assert_eq!(
+            totals.lines().count(),
+            2 + crate::bom::groups(&bom, GroupBy::Material, None).len()
+        );
+        assert_eq!(
+            totals,
+            format!("\n{}", w.bom_groups_text(GroupBy::Material).unwrap())
+        );
+        // the rows of the values add up to the bill: the last one is the whole of it
+        let csv = w.bom_groups_csv(GroupBy::Kind).unwrap();
+        assert!(csv.starts_with("kind,lines,pieces,"), "{csv}");
+        let last = csv.lines().last().unwrap();
+        assert!(
+            last.starts_with(&format!("total,{},{},", bom.lines.len(), bom.pieces)),
+            "{last}"
+        );
+        let pieces: u32 = csv
+            .lines()
+            .skip(1)
+            .filter(|l| !l.starts_with("total,"))
+            .map(|l| l.split(',').nth(2).unwrap().parse::<u32>().unwrap())
+            .sum();
+        assert_eq!(pieces, bom.pieces);
+        // the state of the panel passes the choice on
+        let mut state = PanelState::new(&w.ui.panels, false);
+        assert_eq!(state.options().bom_group, None);
+        state.bom_group = Some(GroupBy::Kind);
+        assert_eq!(state.options().bom_group, Some(GroupBy::Kind));
+        // a new project has no part, with or without totals
+        assert_eq!(
+            fresh().panel_text(Panel::Bom, &state.options()),
             Msg::PanelNoParts.tr(Lang::En)
         );
     }

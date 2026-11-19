@@ -915,6 +915,25 @@ impl App {
                             });
                         }
                     }
+                    Panel::Bom => {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.selectable_value(
+                                &mut self.panels.bom_group,
+                                None,
+                                Msg::BomGroupNone.tr(lang),
+                            );
+                            ui.selectable_value(
+                                &mut self.panels.bom_group,
+                                Some(crate::bom::GroupBy::Material),
+                                Msg::BomByMaterial.tr(lang),
+                            );
+                            ui.selectable_value(
+                                &mut self.panels.bom_group,
+                                Some(crate::bom::GroupBy::Kind),
+                                Msg::BomByKind.tr(lang),
+                            );
+                        });
+                    }
                     Panel::History => {
                         ui.horizontal(|ui| {
                             let undo = egui::Button::new(Msg::Undo.tr(lang));
