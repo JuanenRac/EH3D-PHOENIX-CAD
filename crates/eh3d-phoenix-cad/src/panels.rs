@@ -205,6 +205,8 @@ pub struct PanelState {
     pub section_axis: Dim,
     /// The position of the plane being typed for the section panel.
     pub section_at: String,
+    /// The other planes typed for the section panel, as `axis=position` separated by commas.
+    pub section_extra: String,
     /// The path of the DXF drawing being typed for the import panel.
     pub import_file: String,
     /// The name being typed for the sketch of the import panel; empty means the name of the file.
@@ -236,6 +238,7 @@ impl PanelState {
             revolve_material: String::new(),
             section_axis: settings.section_axis,
             section_at: crate::scad::mm_text(settings.section_position.get()),
+            section_extra: String::new(),
             import_file: String::new(),
             import_name: String::new(),
             import_face: settings.import_face,

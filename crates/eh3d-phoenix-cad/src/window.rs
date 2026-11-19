@@ -8,6 +8,7 @@
 //! it, so a refused value leaves the project exactly as it was.
 
 mod mates;
+mod sections;
 
 use crate::assembly::{Dim, Edge, Mate, MateKind, Report};
 use crate::body::{Built, Step, StepState};
@@ -8655,6 +8656,101 @@ mass: "
             "{es}"
         );
         w.lang = Lang::En;
+    }
+
+    #[test]
+    fn the_section_panel_cuts_several_planes_at_once_and_pictures_each_cut() {
+        let w = fresh();
+        // the planes: the one asked for and the others, separated by commas or semicolons
+        let planes = w.section_planes(Dim::Z, "15", "x=10, y = 5 mm; ,").unwrap();
+        assert_eq!(
+            planes,
+            vec![
+                (Dim::Z, "15".to_string()),
+                (Dim::X, "10".to_string()),
+                (Dim::Y, "5 mm".to_string())
+            ]
+        );
+        assert_eq!(w.section_planes(Dim::Z, "15", "").unwrap().len(), 1);
+        assert!(w.section_planes(Dim::Z, "15", "w=3").is_err());
+        assert!(w.section_planes(Dim::Z, "15", "x").is_err());
+        let seven = "x=1, x=2, x=3, x=4, x=5, x=6";
+        assert!(w.section_planes(Dim::Z, "15", seven).is_err());
+        assert_eq!(
+            w.section_planes(Dim::Z, "15", "x=1, x=2, x=3, x=4, x=5")
+                .unwrap()
+                .len(),
+            6
+        );
+        // the reports come one after the other; one plane reads as before
+        assert_eq!(
+            w.sections_panel_text(Dim::Z, "15", ""),
+            w.section_panel_text(Dim::Z, "15")
+        );
+        let t = w.sections_panel_text(Dim::Z, "15", "x=0");
+        let first = t.find("section plane: z = 15 mm").unwrap();
+        let second = t.find("section plane: x = 0 mm").unwrap();
+        assert!(
+            first < second && t.contains("\n\nsection plane: x = 0 mm"),
+            "{t}"
+        );
+        assert!(w
+            .sections_panel_text(Dim::Z, "15", "w=3")
+            .starts_with("PHOENIX-CAD-"));
+        assert!(w
+            .sections_panel_text(Dim::Z, "far", "")
+            .starts_with("PHOENIX-CAD-008"));
+        // a picture for each plane, from the size of the settings; a plane that cuts nothing is
+        // pictured with no line
+        let pictures = w.section_pictures(Dim::Z, "15", "x=500");
+        assert_eq!(pictures.len(), 2);
+        assert_eq!(pictures[0].0, "section plane: z = 15 mm");
+        assert_eq!(pictures[0].1.len(), 8);
+        assert!(pictures[1].1.is_empty());
+        let side = f64::from(w.ui.panels.section_preview_size);
+        assert!(pictures[0]
+            .1
+            .iter()
+            .all(|l| l.a.0 >= 0.0 && l.a.0 <= side && l.a.1 >= 0.0 && l.a.1 <= side));
+        assert!(w.section_pictures(Dim::Z, "far", "").is_empty());
+        assert!(w.section_pictures(Dim::Z, "15", "q=1").is_empty());
+    }
+
+    #[test]
+    fn the_drawings_of_several_planes_are_written_next_to_the_project_each_in_its_own_file() {
+        use crate::panels::SketchFormat;
+        let mut w = fresh();
+        let dir = Scratch::new("section-set");
+        assert!(w.save_to(&dir.0.join("box.phoenixproj")), "{:?}", w.status);
+        assert_eq!(
+            w.write_section_set(Dim::Z, "15", "x=50", SketchFormat::Dxf, false),
+            2
+        );
+        assert!(dir.0.join("section-z-15.dxf").exists());
+        assert!(dir.0.join("section-x-50.dxf").exists());
+        // the files that exist are not written over unless the box says so
+        assert_eq!(
+            w.write_section_set(Dim::Z, "15", "x=50", SketchFormat::Dxf, false),
+            0
+        );
+        assert!(w.status.is_problem());
+        assert_eq!(
+            w.write_section_set(Dim::Z, "15", "x=50", SketchFormat::Dxf, true),
+            2
+        );
+        // a plane that cuts nothing stops the set after the planes before it
+        assert_eq!(
+            w.write_section_set(Dim::Y, "20", "x=500", SketchFormat::Svg, false),
+            1
+        );
+        assert!(dir.0.join("section-y-20.svg").exists());
+        assert!(!dir.0.join("section-x-500.svg").exists());
+        // a plane that is not understood writes nothing
+        assert_eq!(
+            w.write_section_set(Dim::Z, "15", "w=1", SketchFormat::Svg, false),
+            0
+        );
+        assert!(w.status.is_problem());
     }
 
     #[test]

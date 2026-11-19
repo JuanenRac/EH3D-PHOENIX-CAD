@@ -590,6 +590,9 @@ messages! {
     MatesDraftAt => ["{0} would be at {1}", "{0} quedaría en {1}", "{0} läge bei {1}", "{0} serait en {1}", "{0} sarebbe in {1}", "{0} の位置: {1}", "{0} 将位于 {1}", "{0} ficaria em {1}"],
     MatesDraftNeedTwo => ["A mate needs two parts in the model.", "Una restricción necesita dos piezas en el modelo.", "Eine Bedingung braucht zwei Teile im Modell.", "Une contrainte demande deux pièces dans le modèle.", "Un vincolo richiede due parti nel modello.", "拘束にはモデル内に 2 つの部品が必要です。", "约束需要模型中有两个零件。", "Uma restrição precisa de duas peças no modelo."],
     MatesAddDo => ["Add the mate", "Añadir la restricción", "Bedingung hinzufügen", "Ajouter la contrainte", "Aggiungi il vincolo", "拘束を追加する", "添加该约束", "Adicionar a restrição"],
+    PanelSectionMore => ["More planes (axis=position, ...)", "Más planos (eje=posición, ...)", "Weitere Ebenen (Achse=Lage, ...)", "Autres plans (axe=position, ...)", "Altri piani (asse=posizione, ...)", "ほかの平面（軸=位置, ...）", "更多平面（轴=位置, ...）", "Mais planos (eixo=posição, ...)"],
+    PanelSectionPictures => ["Outline of the cut", "Contorno del corte", "Umriss des Schnitts", "Contour de la coupe", "Contorno del taglio", "切断の輪郭", "剖切轮廓", "Contorno do corte"],
+    PanelSectionWriteAll => ["Write a drawing for every plane", "Escribir un dibujo de cada plano", "Für jede Ebene eine Zeichnung schreiben", "Écrire un dessin pour chaque plan", "Scrivi un disegno per ogni piano", "すべての平面の図面を書き出す", "为每个平面写出图纸", "Escrever um desenho de cada plano"],
 }
 
 impl Msg {

@@ -299,6 +299,63 @@ pub fn drawing_of(section: &Section) -> Drawing {
     drawing
 }
 
+/// One line of the small picture of a section, in the pixels of the pane it is drawn in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PreviewLine {
+    /// The start of the line.
+    pub a: (f64, f64),
+    /// The end of the line.
+    pub b: (f64, f64),
+    /// True when the line belongs to a hole (an outline that turns clockwise), false for the
+    /// outer outline of the material.
+    pub hole: bool,
+}
+
+/// The outlines of a section as lines fitted in a pane of `width` x `height` pixels with a
+/// `margin` all round: the drawing is scaled to fit with the same scale along both axes, centred,
+/// and turned so that the second axis of the drawing points up the pane. A section with no
+/// outline, or a pane too small for the margin, gives no line.
+pub fn preview(section: &Section, width: f64, height: f64, margin: f64) -> Vec<PreviewLine> {
+    let points = || section.contours.iter().flat_map(|c| c.points.iter());
+    let Some(first) = points().next() else {
+        return Vec::new();
+    };
+    let (mut lo, mut hi) = (*first, *first);
+    for p in points() {
+        lo = (lo.0.min(p.0), lo.1.min(p.1));
+        hi = (hi.0.max(p.0), hi.1.max(p.1));
+    }
+    let (room_w, room_h) = (width - 2.0 * margin, height - 2.0 * margin);
+    if !(room_w > 0.0 && room_h > 0.0) {
+        return Vec::new();
+    }
+    let (dx, dy) = (hi.0 - lo.0, hi.1 - lo.1);
+    // a section that is a single point or a line still gets a scale
+    let scale = match (dx > 0.0, dy > 0.0) {
+        (true, true) => (room_w / dx).min(room_h / dy),
+        (true, false) => room_w / dx,
+        (false, true) => room_h / dy,
+        (false, false) => 1.0,
+    };
+    let (left, top) = (
+        margin + (room_w - dx * scale) / 2.0,
+        margin + (room_h - dy * scale) / 2.0,
+    );
+    let at = |p: (f64, f64)| (left + (p.0 - lo.0) * scale, top + (hi.1 - p.1) * scale);
+    let mut out = Vec::new();
+    for c in &section.contours {
+        for (i, p) in c.points.iter().enumerate() {
+            let q = c.points[(i + 1) % c.points.len()];
+            out.push(PreviewLine {
+                a: at(*p),
+                b: at(q),
+                hole: c.area_nm2 < 0.0,
+            });
+        }
+    }
+    out
+}
+
 /// The text of the DXF or SVG file of a section, with a title block under the drawing when
 /// `title.enabled` is true (its title is `name` when the settings give none). Refused with
 /// `PHOENIX-CAD-041` when the plane does not cut the model and with `PHOENIX-CAD-050` when the
@@ -410,6 +467,60 @@ mod tests {
 
     fn square_mm2(nm2: f64) -> f64 {
         nm2 / 1e12
+    }
+
+    #[test]
+    fn the_preview_fits_the_outlines_in_the_pane_keeping_the_proportions_and_marks_the_holes() {
+        // 104 x 64 mm outside and 100 x 60 mm inside, cut at half the height
+        let s = section_of(&model(), Dim::Z, 15);
+        let lines = preview(&s, 220.0, 200.0, 10.0);
+        assert_eq!(lines.len(), s.segments());
+        assert_eq!(lines.iter().filter(|l| l.hole).count(), 4);
+        // the wide side fills the room: 200 pixels for 104 mm
+        let xs: Vec<f64> = lines.iter().flat_map(|l| [l.a.0, l.b.0]).collect();
+        let ys: Vec<f64> = lines.iter().flat_map(|l| [l.a.1, l.b.1]).collect();
+        let span = |v: &[f64]| {
+            v.iter().cloned().fold(f64::MIN, f64::max) - v.iter().cloned().fold(f64::MAX, f64::min)
+        };
+        assert!((span(&xs) - 200.0).abs() < 1e-6, "{}", span(&xs));
+        assert!(
+            (span(&ys) - 200.0 * 64.0 / 104.0).abs() < 1e-6,
+            "{}",
+            span(&ys)
+        );
+        assert!(xs.iter().all(|x| (10.0..=210.0).contains(x)));
+        assert!(ys.iter().all(|y| (10.0..=190.0).contains(y)));
+        // the outer outline is outside the holes in the pane, and a plane that cuts nothing gives
+        // no line
+        let outer_left = lines
+            .iter()
+            .filter(|l| !l.hole)
+            .map(|l| l.a.0)
+            .fold(f64::MAX, f64::min);
+        let hole_left = lines
+            .iter()
+            .filter(|l| l.hole)
+            .map(|l| l.a.0)
+            .fold(f64::MAX, f64::min);
+        assert!(outer_left < hole_left);
+        assert!(preview(&section_of(&model(), Dim::X, 500), 220.0, 200.0, 10.0).is_empty());
+        // a pane with no room for the margin draws nothing
+        assert!(preview(&s, 15.0, 200.0, 10.0).is_empty());
+        // a plane across x is 64 mm wide and 35 mm tall: the wide side fills the room and the
+        // drawing is centred in the pane
+        let upright = section_of(&model(), Dim::X, 50);
+        let up = preview(&upright, 220.0, 200.0, 10.0);
+        let rows: Vec<f64> = up.iter().flat_map(|l| [l.a.1, l.b.1]).collect();
+        let (low, high) = (
+            rows.iter().cloned().fold(f64::MAX, f64::min),
+            rows.iter().cloned().fold(f64::MIN, f64::max),
+        );
+        assert!(
+            (high - low - 200.0 * 35.0 / 64.0).abs() < 1e-6,
+            "{}",
+            high - low
+        );
+        assert!(((low + high) / 2.0 - 100.0).abs() < 1e-6);
     }
 
     #[test]

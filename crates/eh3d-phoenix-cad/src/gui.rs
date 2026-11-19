@@ -883,6 +883,7 @@ impl App {
         let mut choose = false;
         let mut import = false;
         let mut add_mate = false;
+        let mut write_all = false;
         let choices: Vec<String> = self
             .win
             .mate_choices()
@@ -1142,6 +1143,50 @@ impl App {
                             );
                         });
                         ui.horizontal(|ui| {
+                            ui.label(Msg::PanelSectionMore.tr(lang));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.panels.section_extra)
+                                    .desired_width(200.0),
+                            );
+                        });
+                        let pictures = self.win.section_pictures(
+                            self.panels.section_axis,
+                            &self.panels.section_at,
+                            &self.panels.section_extra,
+                        );
+                        let side = self.win.ui.panels.section_preview_size as f32;
+                        if !pictures.is_empty() {
+                            ui.label(
+                                egui::RichText::new(Msg::PanelSectionPictures.tr(lang)).color(DIM),
+                            );
+                        }
+                        ui.horizontal_wrapped(|ui| {
+                            for (title, lines) in &pictures {
+                                ui.vertical(|ui| {
+                                    ui.label(egui::RichText::new(title.as_str()).color(DIM));
+                                    let (response, painter) = ui.allocate_painter(
+                                        Vec2::new(side, side),
+                                        egui::Sense::hover(),
+                                    );
+                                    let rect = response.rect;
+                                    painter.rect_filled(rect, 0.0, BACKGROUND);
+                                    for l in lines {
+                                        let at = |p: (f64, f64)| {
+                                            Pos2::new(
+                                                rect.min.x + p.0 as f32,
+                                                rect.min.y + p.1 as f32,
+                                            )
+                                        };
+                                        let colour = if l.hole { ACCENT } else { OK };
+                                        painter.line_segment(
+                                            [at(l.a), at(l.b)],
+                                            Stroke::new(1.5, colour),
+                                        );
+                                    }
+                                });
+                            }
+                        });
+                        ui.horizontal(|ui| {
                             ui.label(Msg::PanelFormat.tr(lang));
                             ui.selectable_value(&mut self.panels.format, SketchFormat::Dxf, "DXF");
                             ui.selectable_value(&mut self.panels.format, SketchFormat::Svg, "SVG");
@@ -1160,9 +1205,14 @@ impl App {
                             );
                         });
                         ui.checkbox(&mut self.panels.overwrite, Msg::ExportOverwrite.tr(lang));
-                        if ui.button(Msg::PanelWrite.tr(lang)).clicked() {
-                            write = true;
-                        }
+                        ui.horizontal(|ui| {
+                            if ui.button(Msg::PanelWrite.tr(lang)).clicked() {
+                                write = true;
+                            }
+                            if ui.button(Msg::PanelSectionWriteAll.tr(lang)).clicked() {
+                                write_all = true;
+                            }
+                        });
                     }
                     _ => {}
                 }
@@ -1204,8 +1254,11 @@ impl App {
                     } else if panel == Panel::Mates {
                         self.win.mates_panel_text(&self.panels.mate)
                     } else if panel == Panel::Section {
-                        self.win
-                            .section_panel_text(self.panels.section_axis, &self.panels.section_at)
+                        self.win.sections_panel_text(
+                            self.panels.section_axis,
+                            &self.panels.section_at,
+                            &self.panels.section_extra,
+                        )
                     } else if panel == Panel::Revolve && !names.is_empty() {
                         let material = (!self.panels.revolve_material.is_empty())
                             .then_some(self.panels.revolve_material.as_str());
@@ -1251,6 +1304,14 @@ impl App {
         if copy {
             ctx.copy_text(text);
             self.win.report_copied();
+        } else if write_all && panel == Panel::Section {
+            self.win.write_section_set(
+                self.panels.section_axis,
+                &self.panels.section_at,
+                &self.panels.section_extra,
+                self.panels.format,
+                self.panels.overwrite,
+            );
         } else if write && panel == Panel::Section {
             let file = if self.panels.file.trim().is_empty() {
                 self.win.section_file_name(
