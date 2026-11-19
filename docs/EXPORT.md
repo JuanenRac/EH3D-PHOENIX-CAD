@@ -79,6 +79,8 @@ The three views are dimensioned by themselves, in the DXF file (on the layer `CO
 * `drawing.dxf_dimensions = 0` writes the DXF file as it was before, with the three layers and no dimension; `drawing.max_dimensions` (40 by default) is the most positions in one view, and a view with more is refused with `PHOENIX-CAD-050`;
 * the text of a dimension is the length in millimetres; the one to the left is turned a quarter and a character that is not printable ASCII is written as the escape of every DXF text. With a title block in the DXF file, the block is put below the dimensions and not over them.
 
+* **The legend.** To the right of the box (`drawing.legend_gap`, 10 mm by default) the drawing lists its dimensions as text in the language of the export: the title, the size of the box, the thickness of the walls, the floor and the lid, and one line for each hole of the face the view looks at with the tag of the hole schedule (`H1`, `H2`, ...), its diameter (the width for a rectangle or a slot) and its position, up to `drawing.max_dimensions` of them and then a line that counts the rest. The lines are written where the dimensions are (the layer `COTAS` of the DXF file and the group `COTAS` of the SVG file, whose page grows to the right to hold them) and not when those are off. `drawing.legend = 0` leaves it out (`Drawing::add_legend`).
+
 The sizes are not tolerances (nothing here knows ISO 286 fits), a hole of a countersink or a slot is dimensioned by its centre, and the dimension lines are plain lines with no arrow heads: they are for reading a drawing, not for a drawing standard.
 
 ## The hole schedule
@@ -107,6 +109,8 @@ In `phoenix-cad.default.cfg` (the `config` command writes them):
 | `drawing.hole_dimensions` | 1 | the positions of the holes of the face of the view are dimensioned from the corner |
 | `drawing.max_dimensions` | 40 | the most dimensions of hole positions in one view |
 | `drawing.hatch_spacing` | 2 mm | the distance between the hatching lines of a section drawing (0 leaves the hatching out) |
+| `drawing.legend` | 1 | the list of the dimensions (box, thickness, holes) to the right of the box |
+| `drawing.legend_gap` | 10 mm | the room between the box and the legend |
 
 ### The title block
 

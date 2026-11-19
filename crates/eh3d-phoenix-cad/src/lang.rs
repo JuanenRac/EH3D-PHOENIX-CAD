@@ -602,6 +602,11 @@ messages! {
     HistoryLater => ["({0} more changes to redo are not shown)", "({0} cambios más por rehacer no se muestran)", "({0} weitere Änderungen zum Wiederholen werden nicht angezeigt)", "({0} autres modifications à rétablir ne sont pas affichées)", "({0} altre modifiche da ripristinare non vengono mostrate)", "（やり直せる変更 {0} 件は表示されません）", "（另有 {0} 个可重做的更改未显示）", "(mais {0} alterações por refazer não são apresentadas)"],
     HistoryGoto => ["Go to step", "Ir al paso", "Zu Schritt", "Aller à l'étape", "Vai al passo", "ステップへ移動", "转到步骤", "Ir para o passo"],
     HistoryGo => ["Go", "Ir", "Los", "Aller", "Vai", "移動", "转到", "Ir"],
+    LegendTitle => ["Dimensions (mm)", "Cotas (mm)", "Maße (mm)", "Cotes (mm)", "Quote (mm)", "寸法 (mm)", "尺寸 (mm)", "Cotas (mm)"],
+    LegendBox => ["box: {0} x {1} x {2}", "caja: {0} x {1} x {2}", "Gehäuse: {0} x {1} x {2}", "boîtier : {0} x {1} x {2}", "scatola: {0} x {1} x {2}", "筐体: {0} x {1} x {2}", "盒体：{0} x {1} x {2}", "caixa: {0} x {1} x {2}"],
+    LegendThickness => ["wall {0}, floor {1}, lid {2}", "pared {0}, suelo {1}, tapa {2}", "Wand {0}, Boden {1}, Deckel {2}", "paroi {0}, fond {1}, couvercle {2}", "parete {0}, fondo {1}, coperchio {2}", "壁 {0}、底 {1}、蓋 {2}", "壁厚 {0}，底厚 {1}，盖厚 {2}", "parede {0}, fundo {1}, tampa {2}"],
+    LegendHole => ["{0}: {1} at {2}, {3}", "{0}: {1} en {2}, {3}", "{0}: {1} bei {2}, {3}", "{0} : {1} en {2}, {3}", "{0}: {1} in {2}, {3}", "{0}: {1}（位置 {2}, {3}）", "{0}：{1}，位置 {2}, {3}", "{0}: {1} em {2}, {3}"],
+    LegendMore => ["{0} more holes are not listed", "{0} agujeros más no se listan", "{0} weitere Bohrungen sind nicht aufgeführt", "{0} autres trous ne sont pas listés", "altri {0} fori non sono elencati", "ほかの穴 {0} 個は一覧にありません", "另有 {0} 个孔未列出", "mais {0} furos não estão listados"],
 }
 
 impl Msg {

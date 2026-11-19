@@ -349,6 +349,13 @@ pub struct DrawingSettings {
     /// The distance between the hatching lines of a section drawing, measured across them; zero
     /// leaves the hatching out.
     pub hatch_spacing: Length,
+    /// Whether the drawing of a view has a legend with the list of its dimensions (the size of the
+    /// box, the thickness of its walls, floor and lid, and the tag, diameter and position of each
+    /// hole of the face the view looks at) to the right of the box (1) or not (0). It is written
+    /// where the dimensions are.
+    pub legend: bool,
+    /// The room between the box and the legend, from 0 to 1000 mm.
+    pub legend_gap: Length,
 }
 
 impl DrawingSettings {
@@ -406,6 +413,12 @@ impl DrawingSettings {
                 Self::DIMENSIONS_CAP
             )));
         }
+        let legend_gap = c.length("drawing.legend_gap")?;
+        if legend_gap.get() < 0 || legend_gap.get() > 1_000_000_000 {
+            return Err(CadError::Config(
+                "drawing.legend_gap must be from 0 mm to 1000 mm".into(),
+            ));
+        }
         Ok(DrawingSettings {
             max_entities,
             svg_width,
@@ -415,6 +428,8 @@ impl DrawingSettings {
             hole_dimensions: flag("drawing.hole_dimensions")?,
             max_dimensions,
             hatch_spacing,
+            legend: flag("drawing.legend")?,
+            legend_gap,
         })
     }
 }
@@ -1503,6 +1518,8 @@ markup_percent = 1000
                 hole_dimensions: true,
                 max_dimensions: 40,
                 hatch_spacing: Length::new(2_000_000).unwrap(),
+                legend: true,
+                legend_gap: Length::new(10_000_000).unwrap(),
             }
         );
         let own = Settings::with_user_config(

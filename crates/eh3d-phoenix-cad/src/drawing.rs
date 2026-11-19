@@ -19,8 +19,9 @@
 
 use crate::config::DrawingSettings;
 use crate::enclosure::{Enclosure, Face, FeatureKind, Hole, HoleStyle, Treatment};
-use crate::lang::Lang;
+use crate::lang::{fill, Lang, Msg};
 use crate::scad::mm_text;
+use crate::schedule;
 use crate::solid::Frame;
 use crate::titleblock::{self, Block, Item, TitleBlockSettings};
 use crate::CadError;
@@ -141,6 +142,13 @@ const DIM_TEXT: f64 = 2.5;
 
 /// The layer of the dimensions in the DXF file.
 pub const DIMENSION_LAYER: &str = "COTAS";
+
+/// The level that marks a note as a line of the legend (a label, not a dimension).
+pub const LEGEND_LEVEL: u32 = u32::MAX;
+
+/// How wide a character of the legend is taken to be when the SVG page is made wide enough for it,
+/// in millimetres.
+const LEGEND_CHAR: f64 = 2.0;
 
 /// A dimension or a label of the drawing.
 #[derive(Debug, Clone, PartialEq)]
@@ -472,6 +480,72 @@ impl Drawing {
         })
     }
 
+    /// Adds the legend to the right of the box: the title, the size of the box, the thickness of
+    /// its walls, floor and lid and, for the holes of the face the view looks at, one line each
+    /// with its tag (the one of the hole schedule), its diameter (or width) and its position, up
+    /// to `drawing.max_dimensions` of them. The lines are labels at the level [`LEGEND_LEVEL`], so
+    /// they are written where the dimensions are.
+    pub fn add_legend(&mut self, enclosure: &Enclosure, settings: &DrawingSettings, lang: Lang) {
+        let params = enclosure.params();
+        let (x, y, z) = params.outer();
+        let mut lines = vec![
+            Msg::LegendTitle.tr(lang).to_string(),
+            fill(
+                Msg::LegendBox.tr(lang),
+                &[&mm_text(x.get()), &mm_text(y.get()), &mm_text(z.get())],
+            ),
+            fill(
+                Msg::LegendThickness.tr(lang),
+                &[
+                    &mm_text(params.wall.get()),
+                    &mm_text(params.floor.get()),
+                    &mm_text(params.lid.get()),
+                ],
+            ),
+        ];
+        let near = self.view.face().name();
+        let rows: Vec<_> = schedule::rows(enclosure)
+            .into_iter()
+            .filter(|r| r.face == near)
+            .collect();
+        let shown = settings.max_dimensions as usize;
+        for r in rows.iter().take(shown) {
+            let size = match r.shape {
+                HoleStyle::Rectangular { .. } | HoleStyle::Oval { .. } => mm_text(r.diameter),
+                _ => format!("\u{2300}{}", mm_text(r.diameter)),
+            };
+            lines.push(fill(
+                Msg::LegendHole.tr(lang),
+                &[&r.tag, &size, &mm_text(r.u), &mm_text(r.v)],
+            ));
+        }
+        if rows.len() > shown {
+            lines.push(fill(
+                Msg::LegendMore.tr(lang),
+                &[&(rows.len() - shown).to_string()],
+            ));
+        }
+        let left = self.extent.0 + mm(settings.legend_gap.get());
+        for (i, text) in lines.into_iter().enumerate() {
+            self.notes.push(Note {
+                at: (left, self.extent.1 - DIM_TEXT - 2.0 * DIM_TEXT * i as f64),
+                text,
+                measures: None,
+                level: LEGEND_LEVEL,
+            });
+        }
+    }
+
+    /// How far to the right the legend reaches, an estimate from the number of characters of its
+    /// lines (the very least number when there is none).
+    fn legend_right(&self) -> f64 {
+        self.notes
+            .iter()
+            .filter(|n| n.level == LEGEND_LEVEL)
+            .map(|n| n.at.0 + n.text.chars().count() as f64 * LEGEND_CHAR)
+            .fold(f64::MIN, f64::max)
+    }
+
     /// The most dimension lines that lie one above the other.
     fn levels(&self) -> u32 {
         self.notes
@@ -737,6 +811,9 @@ impl Drawing {
         title: Option<(&TitleBlockSettings, &str, Lang)>,
     ) -> String {
         let (mut lo, mut hi) = self.bounds();
+        if settings.dimensions {
+            hi.0 = hi.0.max(self.legend_right());
+        }
         let stack = DIM_STEP * f64::from(self.levels());
         let gap = if settings.dimensions {
             16.0 + stack
@@ -1201,6 +1278,107 @@ mod tests {
                     .map(|(a, b)| (n.text.clone(), n.level, a.1 == b.1))
             })
             .collect()
+    }
+
+    fn legend(d: &Drawing) -> Vec<String> {
+        d.notes
+            .iter()
+            .filter(|n| n.level == LEGEND_LEVEL)
+            .map(|n| n.text.clone())
+            .collect()
+    }
+
+    #[test]
+    fn the_legend_lists_the_box_the_thickness_and_the_holes_of_the_face_of_the_view() {
+        let mut e = model();
+        hole(&mut e, 1, Face::Front, 60, 17, 6, HoleStyle::Plain);
+        hole(
+            &mut e,
+            2,
+            Face::Front,
+            30,
+            17,
+            4,
+            HoleStyle::Rectangular { height: mmv(3) },
+        );
+        hole(&mut e, 3, Face::Top, 10, 10, 3, HoleStyle::Plain);
+        let mut d = Drawing::of(&e, View::Front, &settings()).unwrap();
+        let before = dimensions(&d);
+        d.add_legend(&e, &settings(), Lang::En);
+        let lines = legend(&d);
+        assert_eq!(lines.len(), 5, "{lines:?}");
+        assert_eq!(lines[0], "Dimensions (mm)");
+        assert_eq!(lines[1], "box: 104 x 64 x 35");
+        assert_eq!(lines[2], "wall 2, floor 2, lid 3");
+        // the holes of the face of the view, with the tag of the hole schedule: a diameter for a
+        // round hole and the width for a rectangle
+        assert!(lines[3].ends_with(": 4 at 30, 17"), "{lines:?}");
+        assert!(lines[4].ends_with(": \u{2300}6 at 60, 17"), "{lines:?}");
+        let tags: Vec<&str> = lines[3..]
+            .iter()
+            .map(|l| &l[..l.find(':').unwrap()])
+            .collect();
+        assert!(tags.iter().all(|t| t.starts_with('H')), "{tags:?}");
+        // the legend is on the right of the box, going down one line after the other, and it does
+        // not change the dimensions
+        let legend_notes: Vec<&Note> = d.notes.iter().filter(|n| n.level == LEGEND_LEVEL).collect();
+        assert!(legend_notes
+            .iter()
+            .all(|n| n.at.0 == 104.0 + 10.0 && n.measures.is_none()));
+        assert!(legend_notes.windows(2).all(|p| p[0].at.1 > p[1].at.1));
+        assert_eq!(dimensions(&d), before);
+        // the top view lists its own hole only
+        let mut top = Drawing::of(&e, View::Top, &settings()).unwrap();
+        top.add_legend(&e, &settings(), Lang::Es);
+        let es = legend(&top);
+        assert_eq!(es.len(), 4, "{es:?}");
+        assert_eq!(es[0], "Cotas (mm)");
+        assert_eq!(es[1], "caja: 104 x 64 x 35");
+        assert_eq!(es[2], "pared 2, suelo 2, tapa 3");
+        assert!(es[3].ends_with(": \u{2300}3 en 10, 10"), "{es:?}");
+        // more holes than the settings allow dimensions are counted and not listed
+        let few = DrawingSettings {
+            max_dimensions: 1,
+            ..settings()
+        };
+        let mut front = Drawing::of(&e, View::Front, &settings()).unwrap();
+        front.add_legend(&e, &few, Lang::En);
+        let lines = legend(&front);
+        assert_eq!(lines.len(), 5);
+        assert_eq!(lines[4], "1 more holes are not listed");
+    }
+
+    #[test]
+    fn the_legend_is_in_the_files_where_the_dimensions_are_and_widens_the_svg_page() {
+        let mut e = model();
+        hole(&mut e, 1, Face::Front, 60, 17, 6, HoleStyle::Plain);
+        let plain = Drawing::of(&e, View::Front, &settings()).unwrap();
+        let mut d = plain.clone();
+        d.add_legend(&e, &settings(), Lang::En);
+        // the DXF file has the lines as text on the layer of the dimensions
+        let dxf = d.to_dxf();
+        assert!(dxf.contains("1\nDimensions (mm)\n"));
+        assert!(dxf.contains("1\nbox: 104 x 64 x 35\n"));
+        assert!(!plain.to_dxf().contains("Dimensions (mm)"));
+        // without the dimensions in the DXF file the legend goes with them
+        let mut off = d.clone();
+        off.dxf_dimensions = false;
+        assert!(!off.to_dxf().contains("Dimensions (mm)"));
+        // the SVG page grows to the right to hold it, and does not when the settings leave the
+        // dimensions out
+        let svg = d.to_svg(&settings());
+        assert!(svg.contains(">Dimensions (mm)</text>"));
+        let width = |text: &str| -> f64 {
+            let at = text.find("viewBox=\"0 0 ").unwrap() + 13;
+            text[at..].split(' ').next().unwrap().parse().unwrap()
+        };
+        assert!(width(&svg) > width(&plain.to_svg(&settings())));
+        let none = DrawingSettings {
+            dimensions: false,
+            ..settings()
+        };
+        assert!(!d.to_svg(&none).contains("Dimensions (mm)"));
+        assert_eq!(width(&d.to_svg(&none)), width(&plain.to_svg(&none)));
     }
 
     #[test]

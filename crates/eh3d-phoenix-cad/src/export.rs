@@ -183,7 +183,10 @@ pub fn render_titled(
         }
         _ => {
             let view = format.view().unwrap_or(View::Top);
-            let drawing = Drawing::of(enclosure, view, &settings.drawing)?;
+            let mut drawing = Drawing::of(enclosure, view, &settings.drawing)?;
+            if settings.drawing.legend {
+                drawing.add_legend(enclosure, &settings.drawing, lang);
+            }
             let tb = &settings.title_block;
             let dxf = format.extension() == "dxf";
             if !tb.enabled {
@@ -590,7 +593,9 @@ o enclosure
     #[test]
     fn a_drawing_has_a_title_block_only_when_the_settings_ask_for_it() {
         let e = enclosure();
-        let off = Settings::defaults();
+        // the legend is written in the language, so it is off to see that the language changes
+        // nothing in a drawing without a title block
+        let off = Settings::with_user_config("[drawing]\nlegend = 0\n").unwrap();
         for format in [Format::DxfTop, Format::SvgFront] {
             let plain = render(format, &e, "", &off).unwrap();
             assert!(!String::from_utf8(plain.clone()).unwrap().contains("ROTULO"));
