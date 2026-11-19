@@ -67,6 +67,7 @@ The three views look at the box from above (`top`: `x` to the right, `y` up), fr
 | `EJES` | the centre lines of the box and of every hole drawn, `drawing.axis_overshoot` past what they mark |
 | `COTAS` | the dimensions (lines, extension lines and texts), when `drawing.dxf_dimensions = 1`; the SVG file has them in a group of the same name when `drawing.dimensions = 1` |
 | `RAYADO` | the hatching of a section (see below); the drawings of the views have none |
+| `OCULTAS` | the cavity of the box (the inside of the walls, the floor and the lid) as a dashed rectangle, which the view does not see: `drawing.hidden_lines = 0` leaves it out. The DXF file then has a second line type `DASHED` for the layer, and the SVG file a dash for its group |
 
 The DXF file is R12 text with the entities `LINE`, `CIRCLE` and `ARC` and the header variable `$INSUNITS` set to millimetres. The SVG file is scaled to `drawing.svg_width`; with `drawing.dimensions = 1` it has the width and the height of the box as dimension lines, the size of every hole as a label (`⌀6`, `⌀3 / ⌀8` for a countersink, `4×10` for a slot) and the scale in the corner. Posts, the lip and the inside of the box are not drawn, because they are not seen from outside. A drawing with more than `drawing.max_entities` entities is refused (`PHOENIX-CAD-050`). Neither format has been opened in a drawing program.
 
@@ -76,7 +77,7 @@ The three views are dimensioned by themselves, in the DXF file (on the layer `CO
 
 * the **width** under the box and the **height** to the left of it, as the overall dimensions;
 * the **position of every hole** of the face that the view looks at, measured from the lower left corner of the box: one dimension for each distinct position across (`u`) under the box and for each distinct position up (`v`) to the left, so two holes on one row share the height. They are stacked like a baseline dimensioning, the nearest position on the line next to the box and every next one 6 mm farther out, with the overall dimension outermost; the first line is 8 mm from the box. `drawing.hole_dimensions = 0` leaves the positions out and keeps the two overall dimensions;
-* `drawing.dxf_dimensions = 0` writes the DXF file as it was before, with the three layers and no dimension; `drawing.max_dimensions` (40 by default) is the most positions in one view, and a view with more is refused with `PHOENIX-CAD-050`;
+* `drawing.dxf_dimensions = 0` writes the DXF file as it was before, with the three layers (and the layer of the hidden lines, unless `drawing.hidden_lines = 0`) and no dimension; `drawing.max_dimensions` (40 by default) is the most positions in one view, and a view with more is refused with `PHOENIX-CAD-050`;
 * the text of a dimension is the length in millimetres; the one to the left is turned a quarter and a character that is not printable ASCII is written as the escape of every DXF text. With a title block in the DXF file, the block is put below the dimensions and not over them.
 
 * **The legend.** To the right of the box (`drawing.legend_gap`, 10 mm by default) the drawing lists its dimensions as text in the language of the export: the title, the size of the box, the thickness of the walls, the floor and the lid, and one line for each hole of the face the view looks at with the tag of the hole schedule (`H1`, `H2`, ...), its diameter (the width for a rectangle or a slot) and its position, up to `drawing.max_dimensions` of them and then a line that counts the rest. The lines are written where the dimensions are (the layer `COTAS` of the DXF file and the group `COTAS` of the SVG file, whose page grows to the right to hold them) and not when those are off. `drawing.legend = 0` leaves it out (`Drawing::add_legend`).
@@ -111,6 +112,7 @@ In `phoenix-cad.default.cfg` (the `config` command writes them):
 | `drawing.hatch_spacing` | 2 mm | the distance between the hatching lines of a section drawing (0 leaves the hatching out) |
 | `drawing.legend` | 1 | the list of the dimensions (box, thickness, holes) to the right of the box |
 | `drawing.legend_gap` | 10 mm | the room between the box and the legend |
+| `drawing.hidden_lines` | 1 | the cavity of the box as dashed lines on the layer `OCULTAS` |
 
 ### The title block
 

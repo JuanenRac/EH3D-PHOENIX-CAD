@@ -86,6 +86,8 @@ pub enum Layer {
     Axes,
     /// The hatching of a section.
     Hatch,
+    /// The cavity of the box, which the view does not see, as dashed lines.
+    Hidden,
 }
 
 impl Layer {
@@ -96,6 +98,7 @@ impl Layer {
             Layer::Holes => "AGUJEROS",
             Layer::Axes => "EJES",
             Layer::Hatch => "RAYADO",
+            Layer::Hidden => "OCULTAS",
         }
     }
 
@@ -106,6 +109,7 @@ impl Layer {
             Layer::Holes => 5,
             Layer::Axes => 1,
             Layer::Hatch => 8,
+            Layer::Hidden => 6,
         }
     }
 
@@ -116,6 +120,7 @@ impl Layer {
             Layer::Holes => "#1f4fd8",
             Layer::Axes => "#d03030",
             Layer::Hatch => "#8a8a8a",
+            Layer::Hidden => "#7a3f9d",
         }
     }
 }
@@ -299,6 +304,21 @@ impl Drawing {
                     }
                 }
             }
+        }
+        // the cavity, which the view does not see: the inside of the walls, the floor and the lid
+        if settings.hidden_lines {
+            let (il, iw, ih) = (
+                mm(params.inner_length.get()),
+                mm(params.inner_width.get()),
+                mm(params.inner_height.get()),
+            );
+            let (wall, floor) = (mm(params.wall.get()), mm(params.floor.get()));
+            let (lo, hi) = match view {
+                View::Top => ((wall, wall), (wall + il, wall + iw)),
+                View::Front => ((wall, floor), (wall + il, floor + ih)),
+                View::Side => ((wall, floor), (wall + iw, floor + ih)),
+            };
+            entities.extend(rect_lines(Layer::Hidden, lo, hi));
         }
         // what stands out of the faces: the extrusions, the fins and the placed parts
         let near = view.face();
@@ -639,9 +659,10 @@ impl Drawing {
         put(0, "ENDSEC");
         put(0, "SECTION");
         put(2, "TABLES");
+        let hidden = self.count(Layer::Hidden) > 0;
         put(0, "TABLE");
         put(2, "LTYPE");
-        put(70, "1");
+        put(70, if hidden { "2" } else { "1" });
         put(0, "LTYPE");
         put(2, "CONTINUOUS");
         put(70, "0");
@@ -649,23 +670,50 @@ impl Drawing {
         put(72, "65");
         put(73, "0");
         put(40, "0.0");
+        if hidden {
+            put(0, "LTYPE");
+            put(2, "DASHED");
+            put(70, "0");
+            put(3, "Dashed line");
+            put(72, "65");
+            put(73, "2");
+            put(40, "4.5");
+            put(49, "3.0");
+            put(49, "-1.5");
+        }
         put(0, "ENDTAB");
         put(0, "TABLE");
         put(2, "LAYER");
         let dimensioned = self.dxf_dimensions && !self.notes.is_empty();
         let hatched = self.count(Layer::Hatch) > 0;
-        let layers =
-            3 + usize::from(hatched) + usize::from(block.is_some()) + usize::from(dimensioned);
+        let layers = 3
+            + usize::from(hatched)
+            + usize::from(hidden)
+            + usize::from(block.is_some())
+            + usize::from(dimensioned);
         put(70, &layers.to_string());
-        for layer in [Layer::Outline, Layer::Holes, Layer::Axes, Layer::Hatch] {
-            if layer == Layer::Hatch && !hatched {
+        for layer in [
+            Layer::Outline,
+            Layer::Holes,
+            Layer::Axes,
+            Layer::Hatch,
+            Layer::Hidden,
+        ] {
+            if (layer == Layer::Hatch && !hatched) || (layer == Layer::Hidden && !hidden) {
                 continue;
             }
             put(0, "LAYER");
             put(2, layer.name());
             put(70, "0");
             put(62, &layer.dxf_colour().to_string());
-            put(6, "CONTINUOUS");
+            put(
+                6,
+                if layer == Layer::Hidden {
+                    "DASHED"
+                } else {
+                    "CONTINUOUS"
+                },
+            );
         }
         if dimensioned {
             put(0, "LAYER");
@@ -862,14 +910,28 @@ impl Drawing {
             num(width),
             num(height)
         );
-        for layer in [Layer::Outline, Layer::Holes, Layer::Axes, Layer::Hatch] {
-            if layer == Layer::Hatch && self.count(Layer::Hatch) == 0 {
-                continue;
+        for layer in [
+            Layer::Outline,
+            Layer::Holes,
+            Layer::Axes,
+            Layer::Hatch,
+            Layer::Hidden,
+        ] {
+            if layer != Layer::Outline && layer != Layer::Holes && layer != Layer::Axes {
+                if self.count(layer) == 0 {
+                    continue;
+                }
             }
             let dash = if layer == Layer::Axes {
                 format!(
                     " stroke-dasharray=\"{} {}\"",
                     num(6.0 / scale),
+                    num(1.5 / scale)
+                )
+            } else if layer == Layer::Hidden {
+                format!(
+                    " stroke-dasharray=\"{} {}\"",
+                    num(3.0 / scale),
                     num(1.5 / scale)
                 )
             } else {
@@ -1113,6 +1175,7 @@ mod tests {
     fn bare() -> DrawingSettings {
         DrawingSettings {
             dxf_dimensions: false,
+            hidden_lines: false,
             ..settings()
         }
     }
@@ -1280,6 +1343,69 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn the_cavity_of_the_box_is_a_dashed_rectangle_in_every_view() {
+        // 100 x 60 x 30 inside, a wall of 2, a floor of 2 and a lid of 3
+        let e = model();
+        let on = settings();
+        let rect = |lo: (f64, f64), hi: (f64, f64)| -> Vec<(Layer, Entity)> {
+            rect_lines(Layer::Hidden, lo, hi)
+        };
+        for (view, lo, hi) in [
+            (View::Top, (2.0, 2.0), (102.0, 62.0)),
+            (View::Front, (2.0, 2.0), (102.0, 32.0)),
+            (View::Side, (2.0, 2.0), (62.0, 32.0)),
+        ] {
+            let d = Drawing::of(&e, view, &on).unwrap();
+            assert_eq!(d.count(Layer::Hidden), 4, "{view:?}");
+            for line in rect(lo, hi) {
+                assert!(d.entities.contains(&line), "{view:?} {line:?}");
+            }
+            // the outline of the box is what it was
+            assert_eq!(
+                d.count(Layer::Outline),
+                Drawing::of(&e, view, &bare())
+                    .unwrap()
+                    .count(Layer::Outline)
+            );
+        }
+        // the setting leaves them out
+        let off = DrawingSettings {
+            hidden_lines: false,
+            ..settings()
+        };
+        assert_eq!(
+            Drawing::of(&e, View::Top, &off)
+                .unwrap()
+                .count(Layer::Hidden),
+            0
+        );
+    }
+
+    #[test]
+    fn the_hidden_lines_have_their_layer_and_a_dashed_line_type_in_the_files() {
+        let e = model();
+        let d = Drawing::of(&e, View::Front, &settings()).unwrap();
+        let dxf = d.to_dxf();
+        // a second line type and a layer that uses it, counted in their tables
+        assert!(dxf.contains("2\nLTYPE\n70\n2\n"));
+        assert!(dxf.contains("0\nLTYPE\n2\nDASHED\n70\n0\n3\nDashed line\n72\n65\n73\n2\n40\n4.5\n49\n3.0\n49\n-1.5\n"));
+        assert!(dxf.contains("2\nOCULTAS\n70\n0\n62\n6\n6\nDASHED\n"));
+        assert_eq!(dxf.matches("0\nLINE\n8\nOCULTAS\n").count(), 4);
+        // without them the file is what it was: one line type and no such layer
+        let plain = Drawing::of(&e, View::Front, &bare()).unwrap().to_dxf();
+        assert!(plain.contains("2\nLTYPE\n70\n1\n"));
+        assert!(!plain.contains("OCULTAS") && !plain.contains("DASHED"));
+        // the SVG file has a group of the layer with a dash that the centre lines do not have
+        let svg = d.to_svg(&settings());
+        assert!(svg.contains("<g id=\"OCULTAS\" fill=\"none\" stroke=\"#7a3f9d\""));
+        assert_eq!(svg.matches("stroke-dasharray").count(), 2);
+        assert!(!Drawing::of(&e, View::Front, &bare())
+            .unwrap()
+            .to_svg(&settings())
+            .contains("OCULTAS"));
+    }
+
     fn legend(d: &Drawing) -> Vec<String> {
         d.notes
             .iter()
@@ -1434,7 +1560,8 @@ mod tests {
     fn the_dxf_file_has_the_dimensions_on_their_own_layer_when_the_settings_say_so() {
         let d = Drawing::of(&model(), View::Top, &settings()).unwrap();
         let dxf = d.to_dxf();
-        assert!(dxf.contains("2\nLAYER\n70\n4\n"));
+        // the three layers, the hidden lines and the dimensions
+        assert!(dxf.contains("2\nLAYER\n70\n5\n"));
         assert!(dxf.contains("2\nCOTAS\n70\n0\n62\n3\n"));
         // three lines and a text for each of the two dimensions of the box
         assert_eq!(dxf.matches("8\nCOTAS\n").count(), 8);

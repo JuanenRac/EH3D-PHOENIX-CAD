@@ -356,6 +356,9 @@ pub struct DrawingSettings {
     pub legend: bool,
     /// The room between the box and the legend, from 0 to 1000 mm.
     pub legend_gap: Length,
+    /// Whether the drawing of a view draws the cavity of the box (the inside of its walls, floor
+    /// and lid) as dashed hidden lines on their own layer (1) or not (0).
+    pub hidden_lines: bool,
 }
 
 impl DrawingSettings {
@@ -430,6 +433,7 @@ impl DrawingSettings {
             hatch_spacing,
             legend: flag("drawing.legend")?,
             legend_gap,
+            hidden_lines: flag("drawing.hidden_lines")?,
         })
     }
 }
@@ -1520,6 +1524,7 @@ markup_percent = 1000
                 hatch_spacing: Length::new(2_000_000).unwrap(),
                 legend: true,
                 legend_gap: Length::new(10_000_000).unwrap(),
+                hidden_lines: true,
             }
         );
         let own = Settings::with_user_config(
