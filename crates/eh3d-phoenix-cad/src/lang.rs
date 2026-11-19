@@ -593,6 +593,15 @@ messages! {
     PanelSectionMore => ["More planes (axis=position, ...)", "Más planos (eje=posición, ...)", "Weitere Ebenen (Achse=Lage, ...)", "Autres plans (axe=position, ...)", "Altri piani (asse=posizione, ...)", "ほかの平面（軸=位置, ...）", "更多平面（轴=位置, ...）", "Mais planos (eixo=posição, ...)"],
     PanelSectionPictures => ["Outline of the cut", "Contorno del corte", "Umriss des Schnitts", "Contour de la coupe", "Contorno del taglio", "切断の輪郭", "剖切轮廓", "Contorno do corte"],
     PanelSectionWriteAll => ["Write a drawing for every plane", "Escribir un dibujo de cada plano", "Für jede Ebene eine Zeichnung schreiben", "Écrire un dessin pour chaque plan", "Scrivi un disegno per ogni piano", "すべての平面の図面を書き出す", "为每个平面写出图纸", "Escrever um desenho de cada plano"],
+    PanelHistory => ["History of changes...", "Historial de cambios...", "Verlauf der Änderungen...", "Historique des modifications...", "Cronologia delle modifiche...", "変更履歴...", "更改历史...", "Histórico de alterações..."],
+    HistoryNone => ["No change has been made yet.", "Todavía no se ha hecho ningún cambio.", "Es wurde noch keine Änderung vorgenommen.", "Aucune modification n'a encore été faite.", "Non è stata ancora fatta alcuna modifica.", "まだ変更はありません。", "尚未进行任何更改。", "Ainda não foi feita nenhuma alteração."],
+    HistoryKept => ["Changes kept: {0} of at most {1}", "Cambios guardados: {0} de un máximo de {1}", "Gespeicherte Änderungen: {0} von höchstens {1}", "Modifications conservées : {0} sur {1} au plus", "Modifiche conservate: {0} su un massimo di {1}", "保持されている変更: {0}（最大 {1}）", "已保留的更改：{0}（最多 {1}）", "Alterações guardadas: {0} de um máximo de {1}"],
+    HistoryOlder => ["({0} older changes are not shown)", "({0} cambios más antiguos no se muestran)", "({0} ältere Änderungen werden nicht angezeigt)", "({0} modifications plus anciennes ne sont pas affichées)", "({0} modifiche più vecchie non vengono mostrate)", "（古い変更 {0} 件は表示されません）", "（{0} 个较早的更改未显示）", "({0} alterações mais antigas não são apresentadas)"],
+    HistoryRow => ["{0}. {1}", "{0}. {1}", "{0}. {1}", "{0}. {1}", "{0}. {1}", "{0}. {1}", "{0}. {1}", "{0}. {1}"],
+    HistoryHere => ["--- the project is here ---", "--- el proyecto está aquí ---", "--- das Projekt steht hier ---", "--- le projet est ici ---", "--- il progetto è qui ---", "--- プロジェクトは現在ここです ---", "--- 项目当前在此 ---", "--- o projeto está aqui ---"],
+    HistoryLater => ["({0} more changes to redo are not shown)", "({0} cambios más por rehacer no se muestran)", "({0} weitere Änderungen zum Wiederholen werden nicht angezeigt)", "({0} autres modifications à rétablir ne sont pas affichées)", "({0} altre modifiche da ripristinare non vengono mostrate)", "（やり直せる変更 {0} 件は表示されません）", "（另有 {0} 个可重做的更改未显示）", "(mais {0} alterações por refazer não são apresentadas)"],
+    HistoryGoto => ["Go to step", "Ir al paso", "Zu Schritt", "Aller à l'étape", "Vai al passo", "ステップへ移動", "转到步骤", "Ir para o passo"],
+    HistoryGo => ["Go", "Ir", "Los", "Aller", "Vai", "移動", "转到", "Ir"],
 }
 
 impl Msg {

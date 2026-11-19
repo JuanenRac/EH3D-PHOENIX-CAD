@@ -202,6 +202,8 @@ pub struct PanelSettings {
     pub section_position: Length,
     /// The most planes the section panel cuts at once (the one it is asked for and the others).
     pub section_max_planes: u32,
+    /// The most changes on each side of the present that the history panel lists.
+    pub history_shown: u32,
     /// The side, in pixels, of the small picture of each plane of the section panel.
     pub section_preview_size: u32,
     /// The margin, in pixels, between the outline and the edge of that picture.
@@ -495,6 +497,7 @@ impl PanelSettings {
             })?,
             section_position: c.length("panels.section_position")?,
             section_max_planes: count(c, "panels.section_max_planes", 1, 64)?,
+            history_shown: count(c, "panels.history_shown", 1, 10_000)?,
             section_preview_size: count(c, "panels.section_preview_size", 60, 1000)?,
             section_preview_margin: count(c, "panels.section_preview_margin", 0, 100)?,
             import_unit: crate::dxf_import::unit_nm(import_unit)
@@ -628,6 +631,7 @@ mod tests {
         assert_eq!(s.panels.revolve_angle, 360);
         assert_eq!(s.panels.section_axis, crate::assembly::Dim::Z);
         assert_eq!(s.panels.section_position, mm(0));
+        assert_eq!(s.panels.history_shown, 50);
         assert_eq!(
             (
                 s.panels.section_max_planes,

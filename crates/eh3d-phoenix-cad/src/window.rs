@@ -9,6 +9,7 @@
 
 mod mates;
 mod sections;
+mod steps;
 
 use crate::assembly::{Dim, Edge, Mate, MateKind, Report};
 use crate::body::{Built, Step, StepState};
@@ -2368,6 +2369,7 @@ impl Window {
             Panel::Bom => self.bom().map(|b| crate::bom::text_in(&b, lang)),
             Panel::Balance => self.balance().map(|b| panels::balance_text_in(&b, lang)),
             Panel::Section | Panel::ImportDxf | Panel::Mates => Ok(String::new()),
+            Panel::History => Ok(self.history_text()),
             Panel::SketchExport | Panel::Revolve => Ok(if self.mech.sketches.is_empty() {
                 Msg::PanelNoSketch.tr(lang).to_string()
             } else {
@@ -8751,6 +8753,67 @@ mass: "
             0
         );
         assert!(w.status.is_problem());
+    }
+
+    #[test]
+    fn the_history_panel_lists_the_changes_marks_the_present_and_goes_to_any_of_them() {
+        use crate::panels::{Panel, PanelOptions};
+        let mut w = fresh();
+        assert_eq!(w.history_text(), "No change has been made yet.");
+        assert_eq!(w.history_counts(), (0, 0));
+        for _ in 0..3 {
+            w.add_step(NewStep::Hole);
+            assert!(!w.status.is_problem(), "{:?}", w.status);
+        }
+        assert_eq!(w.history_counts(), (3, 3));
+        let t = w.history_text();
+        let lines: Vec<&str> = t.lines().collect();
+        assert!(lines[0].starts_with("Changes kept: 3 of at most "), "{t}");
+        assert!(
+            lines[1].starts_with("1. ") && lines[3].starts_with("3. "),
+            "{t}"
+        );
+        assert_eq!(lines[4], "--- the project is here ---");
+        assert_eq!(lines.len(), 5);
+        assert_eq!(w.panel_text(Panel::History, &PanelOptions::default()), t);
+        // undone changes come after the line of the present, the next one first
+        w.undo();
+        w.undo();
+        assert_eq!(w.history_counts(), (1, 3));
+        let t = w.history_text();
+        let lines: Vec<&str> = t.lines().collect();
+        assert_eq!(lines[2], "--- the project is here ---");
+        assert!(
+            lines[3].starts_with("2. ") && lines[4].starts_with("3. "),
+            "{t}"
+        );
+        // going to a state undoes or redoes as many changes as it takes, in one move
+        assert!(w.history_goto(0));
+        assert_eq!(w.history_counts(), (0, 3));
+        assert!(w.mech.steps.is_empty());
+        assert!(w.history_goto_text(" 3 "));
+        assert_eq!(w.history_counts(), (3, 3));
+        assert_eq!(w.mech.steps.len(), 3);
+        assert!(w.history_goto(2));
+        assert_eq!(w.mech.steps.len(), 2);
+        // a number that is not in the list, and a word, change nothing
+        assert!(!w.history_goto(4));
+        assert!(w.status.is_problem());
+        assert!(!w.history_goto_text("two"));
+        assert_eq!(w.history_counts(), (2, 3));
+        assert_eq!(w.mech.steps.len(), 2);
+        // the list shows the newest changes before the present and the next ones after it
+        w.ui.panels.history_shown = 1;
+        let t = w.history_text();
+        assert!(t.contains("(1 older changes are not shown)"), "{t}");
+        assert!(t.contains("\n2. ") && !t.contains("\n1. "), "{t}");
+        w.history_goto(0);
+        let t = w.history_text();
+        assert!(t.contains("(2 more changes to redo are not shown)"), "{t}");
+        // and in the language of the window
+        w.lang = Lang::Es;
+        assert!(w.history_text().contains("--- el proyecto está aquí ---"));
+        w.lang = Lang::En;
     }
 
     #[test]

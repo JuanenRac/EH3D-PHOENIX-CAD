@@ -884,6 +884,9 @@ impl App {
         let mut import = false;
         let mut add_mate = false;
         let mut write_all = false;
+        let mut undo_now = false;
+        let mut redo_now = false;
+        let mut goto_now = false;
         let choices: Vec<String> = self
             .win
             .mate_choices()
@@ -911,6 +914,26 @@ impl App {
                                 );
                             });
                         }
+                    }
+                    Panel::History => {
+                        ui.horizontal(|ui| {
+                            let undo = egui::Button::new(Msg::Undo.tr(lang));
+                            if ui.add_enabled(self.win.can_undo(), undo).clicked() {
+                                undo_now = true;
+                            }
+                            let redo = egui::Button::new(Msg::Redo.tr(lang));
+                            if ui.add_enabled(self.win.can_redo(), redo).clicked() {
+                                redo_now = true;
+                            }
+                            ui.label(Msg::HistoryGoto.tr(lang));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.panels.history_goto)
+                                    .desired_width(50.0),
+                            );
+                            if ui.button(Msg::HistoryGo.tr(lang)).clicked() {
+                                goto_now = true;
+                            }
+                        });
                     }
                     Panel::Mates if choices.len() >= 2 => {
                         let draft = &mut self.panels.mate;
@@ -1285,6 +1308,14 @@ impl App {
                     });
                 }
             });
+        if undo_now {
+            self.win.undo();
+        } else if redo_now {
+            self.win.redo();
+        } else if goto_now {
+            let target = self.panels.history_goto.clone();
+            self.win.history_goto_text(&target);
+        }
         if add_mate {
             let draft = self.panels.mate.clone();
             self.win.add_mate_from_draft(&draft);

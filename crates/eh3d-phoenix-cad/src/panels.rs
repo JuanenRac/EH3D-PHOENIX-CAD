@@ -54,11 +54,13 @@ pub enum Panel {
     Bom,
     /// The mates of the model, the conflicts they leave and the editor of a new mate.
     Mates,
+    /// The changes that can be undone and redone, and going to any of them.
+    History,
 }
 
 impl Panel {
     /// Every panel, in the order of the menu.
-    pub const ALL: [Panel; 12] = [
+    pub const ALL: [Panel; 13] = [
         Panel::CutPlan,
         Panel::Holes,
         Panel::Clearance,
@@ -71,6 +73,7 @@ impl Panel {
         Panel::ImportDxf,
         Panel::Bom,
         Panel::Mates,
+        Panel::History,
     ];
 
     /// The title of the panel, which is also the text of its menu entry.
@@ -88,6 +91,7 @@ impl Panel {
             Panel::ImportDxf => Msg::PanelImportDxf,
             Panel::Bom => Msg::PanelBom,
             Panel::Mates => Msg::PanelMates,
+            Panel::History => Msg::PanelHistory,
         }
     }
 }
@@ -219,6 +223,8 @@ pub struct PanelState {
     pub import_report: String,
     /// The mate being written in the mates panel.
     pub mate: MateDraft,
+    /// The number of the step being typed in the history panel to go to.
+    pub history_goto: String,
 }
 
 impl PanelState {
@@ -245,6 +251,7 @@ impl PanelState {
             import_unit: settings.import_unit.clone(),
             import_report: String::new(),
             mate: MateDraft::default(),
+            history_goto: String::new(),
         }
     }
 
