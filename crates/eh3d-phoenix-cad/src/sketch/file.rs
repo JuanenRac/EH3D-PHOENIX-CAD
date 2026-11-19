@@ -857,6 +857,109 @@ mod tests {
         }
     }
 
+    /// The next number of a fixed sequence (xorshift), so that a failure can be repeated.
+    fn next(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    /// A damaged copy of a sketch file: a line dropped, repeated, swapped with another or joined to
+    /// the next one, a line from a pool of valid and invalid ones put in, one character changed,
+    /// or the text cut short.
+    fn damaged(text: &str, state: &mut u64) -> String {
+        let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+        let n = lines.len();
+        let at = (next(state) % n as u64) as usize;
+        match next(state) % 7 {
+            0 => {
+                lines.remove(at);
+            }
+            1 => {
+                let copy = lines[at].clone();
+                lines.insert(at, copy);
+            }
+            2 => {
+                let other = (next(state) % n as u64) as usize;
+                lines.swap(at, other);
+            }
+            3 => {
+                let joined = format!("{} {}", lines[at], lines[(at + 1) % n]);
+                lines[at] = joined;
+            }
+            4 => {
+                let pool = [
+                    "e99 point 1 2",
+                    "e1 point 0 0",
+                    "c9 on equal e1 e2",
+                    "c9 on parallel e1 e1",
+                    "c9 off midpoint e1 e999",
+                    "",
+                    "sketch",
+                    "e5 line e1",
+                    "e6 circle e1 -5",
+                    "c7 on distance e1 e2 999999999999999999",
+                ];
+                let line = pool[(next(state) % pool.len() as u64) as usize];
+                lines.insert(at, line.to_owned());
+            }
+            5 => {
+                let chars: Vec<char> = lines[at].chars().collect();
+                if !chars.is_empty() {
+                    let i = (next(state) % chars.len() as u64) as usize;
+                    let with = ['0', '9', '-', 'x', 'e', '.', ' ', '\u{e9}'];
+                    let mut out = chars;
+                    out[i] = with[(next(state) % with.len() as u64) as usize];
+                    lines[at] = out.into_iter().collect();
+                }
+            }
+            _ => {
+                lines.truncate(at);
+                let text = lines.join("\n");
+                let chars: Vec<char> = text.chars().collect();
+                let keep = if chars.is_empty() {
+                    0
+                } else {
+                    (next(state) % chars.len() as u64) as usize
+                };
+                return chars[..keep].iter().collect();
+            }
+        }
+        lines.join("\n") + "\n"
+    }
+
+    #[test]
+    fn a_damaged_sketch_file_is_refused_or_read_and_what_is_read_is_written_back_the_same() {
+        let text = to_text(&rich());
+        assert_eq!(from_text(&text).unwrap(), rich());
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let (mut read, mut refused) = (0, 0);
+        for round in 0..3000 {
+            // the damage is done once or twice to the same text
+            let mut bad = damaged(&text, &mut state);
+            if round % 2 == 1 && !bad.is_empty() {
+                bad = damaged(&bad, &mut state);
+            }
+            match from_text(&bad) {
+                Ok(sketch) => {
+                    read += 1;
+                    let again = to_text(&sketch);
+                    let back = from_text(&again)
+                        .unwrap_or_else(|e| panic!("{e}\n--- read\n{bad}\n--- written\n{again}"));
+                    assert_eq!(back, sketch, "{bad}");
+                    assert_eq!(to_text(&back), again, "{bad}");
+                }
+                Err(e) => {
+                    refused += 1;
+                    assert!(e.code().starts_with("PHOENIX-CAD-"), "{e} for {bad}");
+                }
+            }
+        }
+        // most of the damage is refused and some of it is harmless: both happen
+        assert!(read > 0 && refused > 1000, "{read} read, {refused} refused");
+    }
+
     #[test]
     fn equidistant_and_equal_angle_are_written_and_read_back() {
         let mut k = sketch();
