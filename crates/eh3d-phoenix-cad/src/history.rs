@@ -137,4 +137,107 @@ mod tests {
         h.clear();
         assert!(!h.can_undo() && !h.can_redo());
     }
+
+    /// A small generator with a fixed seed (xorshift), so the run is the same every time.
+    struct Seeded(u64);
+
+    impl Seeded {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x
+        }
+    }
+
+    #[test]
+    fn a_long_random_run_of_changes_undos_and_redos_follows_a_plain_model() {
+        for depth in [1usize, 3, 8, 50] {
+            let mut seed = Seeded(0x9E37_79B9_7F4A_7C15 ^ depth as u64);
+            let mut h: History<u64> = History::new(depth);
+            // the model: two lists, the same rules written out again
+            let mut undo: Vec<(String, u64)> = Vec::new();
+            let mut redo: Vec<(String, u64)> = Vec::new();
+            let mut current: u64 = 0;
+            let (mut undone, mut redone) = (0, 0);
+            for step in 0..4000u32 {
+                match seed.next() % 5 {
+                    0..=2 => {
+                        let name = format!("change {step}");
+                        h.record(&name, current);
+                        undo.push((name, current));
+                        redo.clear();
+                        if undo.len() > depth {
+                            undo.remove(0);
+                        }
+                        current = seed.next() % 1000;
+                    }
+                    3 => {
+                        let got = h.undo(current);
+                        match undo.pop() {
+                            Some((name, before)) => {
+                                redo.push((name.clone(), current));
+                                assert_eq!(got, Some((name, before)));
+                                current = before;
+                                undone += 1;
+                            }
+                            None => assert_eq!(got, None),
+                        }
+                    }
+                    _ => {
+                        let got = h.redo(current);
+                        match redo.pop() {
+                            Some((name, after)) => {
+                                undo.push((name.clone(), current));
+                                assert_eq!(got, Some((name, after)));
+                                current = after;
+                                redone += 1;
+                            }
+                            None => assert_eq!(got, None),
+                        }
+                    }
+                }
+                assert_eq!(h.can_undo(), !undo.is_empty());
+                assert_eq!(h.can_redo(), !redo.is_empty());
+                assert!(h.undo_names().len() <= depth);
+                let wanted: Vec<&str> = undo.iter().map(|(n, _)| n.as_str()).collect();
+                assert_eq!(h.undo_names(), wanted);
+                let wanted: Vec<&str> = redo.iter().map(|(n, _)| n.as_str()).collect();
+                assert_eq!(h.redo_names(), wanted);
+            }
+            // the run did go back and forward many times
+            assert!(undone > 100 && redone > 50, "{depth}: {undone} {redone}");
+        }
+    }
+
+    #[test]
+    fn going_back_and_forward_again_always_returns_to_the_same_state() {
+        let mut seed = Seeded(0x2545_F491_4F6C_DD1D);
+        for _ in 0..300 {
+            let mut h: History<u64> = History::new(20);
+            let mut current = 0u64;
+            let changes = 1 + seed.next() % 15;
+            for n in 0..changes {
+                h.record(&format!("c{n}"), current);
+                current = seed.next() % 1000;
+            }
+            let end = current;
+            let back = 1 + seed.next() % changes;
+            let mut states = Vec::new();
+            for _ in 0..back {
+                let (_, previous) = h.undo(current).unwrap();
+                states.push(current);
+                current = previous;
+            }
+            for _ in 0..back {
+                let (_, next) = h.redo(current).unwrap();
+                assert_eq!(Some(next), states.pop());
+                current = next;
+            }
+            assert_eq!(current, end);
+            assert!(!h.can_redo());
+        }
+    }
 }

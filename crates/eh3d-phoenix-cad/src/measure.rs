@@ -6,8 +6,9 @@
 //! the person: nothing here decides anything about the model. A measurement keeps the lines that
 //! show what was measured, so that the views can draw them.
 
+use crate::enclosure::{EnclosureParams, Face};
 use crate::projection::Point3;
-use crate::CadError;
+use crate::{CadError, Length};
 
 /// Anything shorter than this, in millimetres, counts as no length at all.
 pub const EPSILON: f64 = 1e-9;
@@ -270,6 +271,110 @@ pub fn angle_needs(first: &Reference) -> usize {
     }
 }
 
+/// Which side of a wall of the box a face is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    /// The outer face of the wall.
+    Outer,
+    /// The face of the wall that looks at the inner space.
+    Inner,
+}
+
+/// What lies between two faces of the box.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FaceMeasurement {
+    /// The distance between the two planes in millimetres: how far apart parallel faces are, and
+    /// zero for faces that are not parallel (their planes meet).
+    pub distance: f64,
+    /// The angle between the two faces in degrees: 0 for parallel faces and 90 for faces that
+    /// meet at a right angle.
+    pub angle: f64,
+    /// For parallel faces, the line that shows the distance: from the middle of the first face to
+    /// the foot of the perpendicular on the plane of the second one.
+    pub line: Option<(Point3, Point3)>,
+}
+
+/// The axis across a face (0 for X, 1 for Y, 2 for Z) and whether it is the face at the high end.
+fn face_axis(face: Face) -> (usize, bool) {
+    match face {
+        Face::Left => (0, false),
+        Face::Right => (0, true),
+        Face::Front => (1, false),
+        Face::Back => (1, true),
+        Face::Bottom => (2, false),
+        Face::Top => (2, true),
+    }
+}
+
+/// The corners of the box a face belongs to, low and high, in millimetres in the frame of the model
+/// (the outer box starts at the origin).
+fn box_of(params: &EnclosureParams, side: Side) -> (Point3, Point3) {
+    let mm = |l: Length| l.get() as f64 / 1_000_000.0;
+    let (wall, floor) = (mm(params.wall), mm(params.floor));
+    match side {
+        Side::Outer => {
+            let (x, y, z) = params.outer();
+            ([0.0; 3], [mm(x), mm(y), mm(z)])
+        }
+        Side::Inner => (
+            [wall, wall, floor],
+            [
+                wall + mm(params.inner_length),
+                wall + mm(params.inner_width),
+                floor + mm(params.inner_height),
+            ],
+        ),
+    }
+}
+
+/// The middle of a face of a box.
+fn face_middle(low: Point3, high: Point3, face: Face) -> Point3 {
+    let (axis, at_high) = face_axis(face);
+    let mut p = [
+        (low[0] + high[0]) / 2.0,
+        (low[1] + high[1]) / 2.0,
+        (low[2] + high[2]) / 2.0,
+    ];
+    p[axis] = if at_high { high[axis] } else { low[axis] };
+    p
+}
+
+/// Measures between two faces of the box, each the outer face or the inner one of its wall:
+/// parallel faces (the same axis) are some distance apart, as the two sides of a wall, the inner
+/// height or the outer width are; faces that meet (different axes) are at 90 degrees and no
+/// distance apart. The same face on the same side is refused, as there is nothing between a face
+/// and itself.
+pub fn between_faces(
+    params: &EnclosureParams,
+    first: (Face, Side),
+    second: (Face, Side),
+) -> Result<FaceMeasurement, CadError> {
+    if first == second {
+        return Err(CadError::Measure(
+            "two different faces are needed: a face is not measured against itself".into(),
+        ));
+    }
+    let ((la, ha), (lb, hb)) = (box_of(params, first.1), box_of(params, second.1));
+    let (axis_a, _) = face_axis(first.0);
+    let (axis_b, _) = face_axis(second.0);
+    if axis_a != axis_b {
+        return Ok(FaceMeasurement {
+            distance: 0.0,
+            angle: 90.0,
+            line: None,
+        });
+    }
+    let from = face_middle(la, ha, first.0);
+    let to_plane = face_middle(lb, hb, second.0)[axis_a];
+    let mut foot = from;
+    foot[axis_a] = to_plane;
+    Ok(FaceMeasurement {
+        distance: (to_plane - from[axis_a]).abs(),
+        angle: 0.0,
+        line: Some((from, foot)),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -514,5 +619,133 @@ mod tests {
         );
         assert_eq!(angle_needs(&a), 3);
         assert_eq!(angle_needs(&x), 2);
+    }
+
+    fn box_params(l: i64, w: i64, h: i64, wall: i64, floor: i64, lid: i64) -> EnclosureParams {
+        let mm = |v: i64| Length::from_mm(v).unwrap();
+        EnclosureParams {
+            inner_length: mm(l),
+            inner_width: mm(w),
+            inner_height: mm(h),
+            wall: mm(wall),
+            floor: mm(floor),
+            lid: mm(lid),
+            edge_margin: mm(3),
+            min_web: mm(2),
+        }
+    }
+
+    #[test]
+    fn parallel_faces_are_some_distance_apart_and_faces_that_meet_are_at_a_right_angle() {
+        let p = box_params(100, 60, 30, 2, 2, 3);
+        let both = |a, b| between_faces(&p, a, b).unwrap();
+        let (o, i) = (Side::Outer, Side::Inner);
+        // the outer box is 104 x 64 x 35 and the inner space 100 x 60 x 30
+        assert!(close(
+            both((Face::Left, o), (Face::Right, o)).distance,
+            104.0
+        ));
+        assert!(close(
+            both((Face::Front, o), (Face::Back, o)).distance,
+            64.0
+        ));
+        assert!(close(
+            both((Face::Bottom, o), (Face::Top, o)).distance,
+            35.0
+        ));
+        assert!(close(
+            both((Face::Left, i), (Face::Right, i)).distance,
+            100.0
+        ));
+        assert!(close(
+            both((Face::Front, i), (Face::Back, i)).distance,
+            60.0
+        ));
+        assert!(close(
+            both((Face::Bottom, i), (Face::Top, i)).distance,
+            30.0
+        ));
+        // the thickness of each wall: the wall, the floor and the lid
+        assert!(close(both((Face::Left, o), (Face::Left, i)).distance, 2.0));
+        assert!(close(
+            both((Face::Bottom, o), (Face::Bottom, i)).distance,
+            2.0
+        ));
+        assert!(close(both((Face::Top, i), (Face::Top, o)).distance, 3.0));
+        // an outer face against the inner face across the box
+        assert!(close(
+            both((Face::Left, o), (Face::Right, i)).distance,
+            102.0
+        ));
+        // faces that meet
+        let corner = both((Face::Front, o), (Face::Left, i));
+        assert_eq!(
+            (corner.distance, corner.angle, corner.line),
+            (0.0, 90.0, None)
+        );
+        // parallel faces have an angle of zero and a line that shows the distance
+        let wall = both((Face::Left, o), (Face::Right, o));
+        assert_eq!(wall.angle, 0.0);
+        let (from, to) = wall.line.unwrap();
+        assert_eq!((from, to), ([0.0, 32.0, 17.5], [104.0, 32.0, 17.5]));
+    }
+
+    #[test]
+    fn a_face_is_not_measured_against_itself_and_the_order_does_not_matter() {
+        let p = box_params(100, 60, 30, 2, 2, 3);
+        for face in Face::ALL {
+            for side in [Side::Outer, Side::Inner] {
+                assert!(between_faces(&p, (face, side), (face, side)).is_err());
+            }
+        }
+        // a deterministic spread of boxes (a small linear congruential sequence)
+        let mut seed: u64 = 4242;
+        let mut next = |m: u64| {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            1 + (seed >> 33) % m
+        };
+        for _ in 0..200 {
+            let p = box_params(
+                10 + next(200) as i64,
+                10 + next(200) as i64,
+                5 + next(100) as i64,
+                1 + next(5) as i64,
+                1 + next(5) as i64,
+                1 + next(5) as i64,
+            );
+            for a in Face::ALL {
+                for b in Face::ALL {
+                    for (sa, sb) in [
+                        (Side::Outer, Side::Outer),
+                        (Side::Outer, Side::Inner),
+                        (Side::Inner, Side::Inner),
+                    ] {
+                        if (a, sa) == (b, sb) {
+                            continue;
+                        }
+                        let ab = between_faces(&p, (a, sa), (b, sb)).unwrap();
+                        let ba = between_faces(&p, (b, sb), (a, sa)).unwrap();
+                        assert!(close(ab.distance, ba.distance));
+                        assert_eq!(ab.angle, ba.angle);
+                        // the line is as long as the distance and across the faces
+                        if let Some((from, to)) = ab.line {
+                            assert!(close(distance_points(from, to), ab.distance));
+                        }
+                        // opposite faces of the outer box are as far apart as the outer size
+                        if sa == Side::Outer && sb == Side::Outer && b == a.opposite() {
+                            let (x, y, z) = p.outer();
+                            let size = match a {
+                                Face::Left | Face::Right => x,
+                                Face::Front | Face::Back => y,
+                                Face::Top | Face::Bottom => z,
+                            };
+                            assert!(close(ab.distance, size.get() as f64 / 1_000_000.0));
+                        }
+                    }
+                }
+            }
+        }
     }
 }

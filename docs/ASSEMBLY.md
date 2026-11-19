@@ -68,6 +68,8 @@ What the check does not know:
 
 `eh3d-phoenix-cad interference PROJECT.phoenixproj [--lang CODE] [--config FILE]` prints the same lines as the fit report about the assembly and exits with 0 when every step of the project was applied and no two parts share volume, and with 1 otherwise. `check` prints them at the end of its report.
 
+`eh3d-phoenix-cad faces PROJECT.phoenixproj --from FACE[:inner|:outer] --to FACE[:inner|:outer]` measures between two faces of the box (`measure::between_faces`): `front`, `back`, `left`, `right`, `top` or `bottom`, the outer face of the wall unless `:inner` names the face that looks at the inner space. Parallel faces give their distance in millimetres (the two sides of a wall, the inner height, the outer width, an outer face against the inner face across the box) and an angle of 0; faces that meet give a distance of 0 and an angle of 90. The same face on the same side is refused with `PHOENIX-CAD-038`. The command exits with 0 when every step of the project was applied.
+
 ## In the project file
 
 A project with a mate writes the mechanical domain as version 5, with the steps `add-mate` and `remove-mate` (version 6 when a mate is an offset, a symmetry or a turn); a project without one keeps the version and the bytes it had (see [PROJECT_DOMAIN.md](PROJECT_DOMAIN.md)):

@@ -1442,4 +1442,46 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn a_sketch_that_was_edited_many_times_is_written_and_read_back_the_same() {
+        use crate::sketch::file::{from_text, to_text};
+        let mut seed = Seeded(0x1234_5678_9ABC_DEF1);
+        let mut kept = 0;
+        for _ in 0..200 {
+            let mut s = sketch();
+            let r = s
+                .add_rectangle(
+                    (mm(0), mm(0)),
+                    (mm(seed.between(20, 90)), mm(seed.between(20, 90))),
+                )
+                .unwrap();
+            let line = segment(&mut s, -5, seed.between(1, 15), 60, seed.between(1, 15));
+            for _ in 0..4 {
+                let side = r.lines[seed.between(0, 3) as usize];
+                let other = r.lines[seed.between(0, 3) as usize];
+                // an edit that is refused changes nothing, so a run is a mix of both
+                let _ = match seed.between(0, 4) {
+                    0 => s
+                        .chamfer_corner(side, other, mm(seed.between(1, 9)))
+                        .map(|_| ()),
+                    1 => s.trim_line(line, side, None).map(|_| ()),
+                    2 => s.extend_line(line, side).map(|_| ()),
+                    3 => s
+                        .linear_pattern(&[line], mm(0), mm(seed.between(2, 9)), 3)
+                        .map(|_| ()),
+                    _ => s
+                        .offset_outline(&r.lines, mm(seed.between(-4, 6)))
+                        .map(|_| ()),
+                };
+            }
+            let text = to_text(&s);
+            let back = from_text(&text).unwrap();
+            assert_eq!(back, s);
+            assert_eq!(to_text(&back), text);
+            kept += s.elements().len();
+        }
+        // the sketches really grew
+        assert!(kept > 200 * 9, "{kept}");
+    }
 }

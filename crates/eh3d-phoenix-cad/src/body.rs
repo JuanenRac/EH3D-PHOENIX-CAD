@@ -472,4 +472,88 @@ mod tests {
         assert_eq!(s.undo(), None);
         assert_eq!(s.body().steps().len(), 1);
     }
+
+    #[test]
+    fn a_random_run_of_transactions_undos_and_redos_follows_a_list_of_states() {
+        let mut seed: u64 = 0xA076_1D64_78BD_642F;
+        let mut next = move |m: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % m
+        };
+        let mut s = Session::new(Body::new(params()).unwrap(), 10_000);
+        // the model: every state the body has had along the line of the history, and where it is
+        let mut states = vec![s.body().clone()];
+        let mut names: Vec<String> = Vec::new();
+        let mut at = 0usize;
+        let (mut refused, mut undone, mut redone) = (0, 0, 0);
+        for n in 0..1500u64 {
+            match next(6) {
+                0 | 1 => {
+                    let name = format!("hole {n}");
+                    s.transaction(&name, |b| {
+                        b.insert(&name, add(n + 1, 10 + (n % 80) as i64));
+                        Ok(())
+                    })
+                    .unwrap();
+                    states.truncate(at + 1);
+                    names.truncate(at);
+                    states.push(s.body().clone());
+                    names.push(name);
+                    at += 1;
+                }
+                2 => {
+                    let mut base = params();
+                    base.inner_length = mm(20 + next(150) as i64);
+                    let name = format!("size {n}");
+                    s.transaction(&name, |b| b.set_base(base)).unwrap();
+                    states.truncate(at + 1);
+                    names.truncate(at);
+                    states.push(s.body().clone());
+                    names.push(name);
+                    at += 1;
+                }
+                3 => {
+                    // a transaction that is refused changes nothing and records nothing
+                    let mut base = params();
+                    base.inner_length = Length::ZERO;
+                    let before = s.clone();
+                    let name = format!("refused {n}");
+                    assert!(s.transaction(&name, |b| b.set_base(base)).is_err());
+                    assert_eq!(s, before);
+                    refused += 1;
+                }
+                4 => {
+                    let got = s.undo();
+                    if at > 0 {
+                        at -= 1;
+                        assert_eq!(got.as_deref(), Some(names[at].as_str()));
+                        undone += 1;
+                    } else {
+                        assert_eq!(got, None);
+                    }
+                }
+                _ => {
+                    let got = s.redo();
+                    if at + 1 < states.len() {
+                        assert_eq!(got.as_deref(), Some(names[at].as_str()));
+                        at += 1;
+                        redone += 1;
+                    } else {
+                        assert_eq!(got, None);
+                    }
+                }
+            }
+            assert_eq!(s.body(), &states[at]);
+            let wanted: Vec<&str> = names[..at].iter().map(String::as_str).collect();
+            assert_eq!(s.undo_names(), wanted);
+            let wanted: Vec<&str> = names[at..].iter().rev().map(String::as_str).collect();
+            assert_eq!(s.redo_names(), wanted);
+        }
+        assert!(
+            refused > 100 && undone > 100 && redone > 30,
+            "{refused} {undone} {redone}"
+        );
+    }
 }

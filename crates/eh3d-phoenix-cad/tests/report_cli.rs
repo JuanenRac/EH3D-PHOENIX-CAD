@@ -795,3 +795,378 @@ fn the_bill_can_be_added_up_by_part_name() {
     assert_eq!(code, 1);
     assert!(err.contains("not material, kind or name"), "{err}");
 }
+
+/// The distance that `faces` printed, in millimetres.
+fn faces_distance(from: &str, to: &str) -> f64 {
+    let (code, out, err) = run(&["faces", BOX, "--from", from, "--to", to]);
+    assert_eq!(code, 0, "{from} {to}: {err}");
+    let line = out.lines().next().unwrap();
+    line.strip_prefix("distance: ")
+        .and_then(|rest| rest.strip_suffix(" mm"))
+        .unwrap_or_else(|| panic!("{out}"))
+        .parse()
+        .unwrap()
+}
+
+#[test]
+fn the_faces_of_the_box_are_measured_from_the_command_line() {
+    // parallel faces: the sides of a wall add up to the outer size
+    let outer = faces_distance("bottom", "top");
+    let inner = faces_distance("bottom:inner", "top:inner");
+    let floor = faces_distance("bottom", "bottom:inner");
+    let lid = faces_distance("top", "top:inner");
+    assert!(
+        (outer - (inner + floor + lid)).abs() < 1e-9,
+        "{outer} {inner} {floor} {lid}"
+    );
+    let width = faces_distance("left", "right");
+    let inside = faces_distance("left:inner", "right:inner");
+    let wall = faces_distance("left", "left:inner");
+    assert!((width - (inside + 2.0 * wall)).abs() < 1e-9);
+    // the order does not matter
+    assert_eq!(faces_distance("top", "bottom"), outer);
+    // faces that meet are at a right angle and no distance apart
+    let (code, out, err) = run(&["faces", BOX, "--from", "front", "--to", "left:inner"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "distance: 0 mm\nangle: 90 degrees\n");
+    let (code, out, _) = run(&["faces", BOX, "--from", "left", "--to", "right"]);
+    assert_eq!(code, 0);
+    assert!(out.ends_with("angle: 0 degrees\n"), "{out}");
+}
+
+#[test]
+fn the_faces_command_refuses_what_it_cannot_measure() {
+    for (args, why) in [
+        (
+            vec!["faces", BOX, "--from", "top", "--to", "top"],
+            "PHOENIX-CAD-038",
+        ),
+        (
+            vec!["faces", BOX, "--from", "top", "--to", "middle"],
+            "not a face",
+        ),
+        (
+            vec!["faces", BOX, "--from", "top:side", "--to", "left"],
+            "inner or outer",
+        ),
+        (vec!["faces", BOX, "--from", "top"], "needs --to"),
+        (vec!["faces", BOX, "--to", "top"], "needs --from"),
+        (
+            vec!["faces", "--from", "top", "--to", "left"],
+            "needs a project file",
+        ),
+        (vec!["faces", BOX, "--from"], "--from needs a face"),
+    ] {
+        let (code, _, err) = run(&args);
+        assert_ne!(code, 0, "{args:?}");
+        assert!(err.contains(why), "{args:?}: {err}");
+    }
+}
+
+/// A sketch file with a rectangle (e1 to e8, 40 x 25 mm), a line across it (e11, from -10 to 20
+/// mm at 10 mm up) and a point (e12).
+const EDIT_SKETCH: &str = "phoenix-sketch 1\nname plate\nplane top 0 0 0\nnext 13 1\n\
+e1 point 0 0\ne2 point 40000000 0\ne3 point 40000000 25000000\ne4 point 0 25000000\n\
+e5 line e1 e2\ne6 line e2 e3\ne7 line e3 e4\ne8 line e4 e1\n\
+e9 point -10000000 10000000\ne10 point 20000000 10000000\ne11 line e9 e10\n\
+e12 point 5000000 5000000\n";
+
+/// Runs `sketch-edit` on a copy of the plate and returns the text of the edited sketch.
+fn edited(dir: &Scratch, extra: &[&str]) -> String {
+    let plate = dir.file("plate.phoenixsketch");
+    fs::write(&plate, EDIT_SKETCH).unwrap();
+    let out = dir.file("edited.phoenixsketch");
+    let _ = fs::remove_file(&out);
+    let mut args = vec!["sketch-edit", plate.as_str(), "--out", out.as_str()];
+    args.extend_from_slice(extra);
+    let (code, text, err) = run(&args);
+    assert_eq!(code, 0, "{extra:?}: {err}");
+    assert!(text.contains("edited.phoenixsketch"), "{text}");
+    fs::read_to_string(&out).unwrap()
+}
+
+#[test]
+fn a_sketch_file_is_edited_from_the_command_line_like_in_the_window() {
+    let dir = Scratch::new("sketch-edit");
+    // chamfer: both sides are shortened by 3 mm and a line joins the new ends
+    let text = edited(
+        &dir,
+        &["--op", "chamfer", "--lines", "e5,e6", "--distance", "3"],
+    );
+    assert!(text.contains("e13 point 37000000 0\n"), "{text}");
+    assert!(text.contains("e14 point 40000000 3000000\n"), "{text}");
+    assert!(
+        text.contains("e5 line e1 e13\n") && text.contains("e15 line e13 e14\n"),
+        "{text}"
+    );
+    // a unit after the number
+    let text = edited(
+        &dir,
+        &["--op", "chamfer", "--lines", "e5,e6", "--distance", "0.1in"],
+    );
+    assert!(text.contains("e13 point 37460000 0\n"), "{text}");
+    // trim: the cutter is the left side, which cuts off the shorter side of e11
+    let text = edited(&dir, &["--op", "trim", "--line", "e11", "--cutter", "e8"]);
+    assert!(text.contains("e11 line e13 e10\n"), "{text}");
+    assert!(text.contains("on point_on_object e13 e8\n"), "{text}");
+    // the end to cut off can be named
+    let text = edited(
+        &dir,
+        &[
+            "--op", "trim", "--line", "e11", "--cutter", "e8", "--drop", "e10",
+        ],
+    );
+    assert!(text.contains("e11 line e9 e13\n"), "{text}");
+    // extend to the right side
+    let text = edited(&dir, &["--op", "extend", "--line", "e11", "--to", "e6"]);
+    assert!(text.contains("e13 point 40000000 10000000\n"), "{text}");
+    assert!(text.contains("e11 line e9 e13\n"), "{text}");
+    // linear pattern: two copies of the point
+    let text = edited(
+        &dir,
+        &[
+            "--op", "linear", "--items", "e12", "--step", "10,5", "--count", "3",
+        ],
+    );
+    assert!(text.contains("e13 point 15000000 10000000\n"), "{text}");
+    assert!(text.contains("e14 point 25000000 15000000\n"), "{text}");
+    // circular pattern: a full turn shared between four positions
+    let text = edited(
+        &dir,
+        &[
+            "--op", "circular", "--items", "e12", "--center", "e1", "--count", "4",
+        ],
+    );
+    for spot in ["-5000000 5000000", "-5000000 -5000000", "5000000 -5000000"] {
+        assert!(text.contains(&format!("point {spot}\n")), "{spot}: {text}");
+    }
+    // and with the step given
+    let text = edited(
+        &dir,
+        &[
+            "--op", "circular", "--items", "e12", "--center", "e1", "--count", "2", "--step", "90",
+        ],
+    );
+    assert!(text.contains("e13 point -5000000 5000000\n"), "{text}");
+    // offset: outwards, and inwards with a negative distance
+    let text = edited(
+        &dir,
+        &[
+            "--op",
+            "offset",
+            "--items",
+            "e5,e6,e7,e8",
+            "--distance",
+            "2",
+        ],
+    );
+    assert!(text.contains("e13 point -2000000 -2000000\n"), "{text}");
+    let text = edited(
+        &dir,
+        &[
+            "--op",
+            "offset",
+            "--items",
+            "e5,e6,e7,e8",
+            "--distance",
+            "-2",
+        ],
+    );
+    assert!(text.contains("e13 point 2000000 2000000\n"), "{text}");
+}
+
+#[test]
+fn a_refused_edit_writes_nothing_and_a_file_is_only_written_over_when_ordered() {
+    let dir = Scratch::new("sketch-edit-refused");
+    let plate = dir.file("plate.phoenixsketch");
+    fs::write(&plate, EDIT_SKETCH).unwrap();
+    let out = dir.file("edited.phoenixsketch");
+    for (args, why) in [
+        (
+            vec!["--op", "chamfer", "--lines", "e5,e6", "--distance", "40"],
+            "PHOENIX-CAD-031",
+        ),
+        (
+            vec!["--op", "chamfer", "--lines", "e5,e7", "--distance", "1"],
+            "PHOENIX-CAD-031",
+        ),
+        (
+            vec!["--op", "chamfer", "--lines", "e5", "--distance", "1"],
+            "names the two lines",
+        ),
+        (
+            vec!["--op", "chamfer", "--lines", "e5,e6"],
+            "needs --distance",
+        ),
+        (
+            vec!["--op", "chamfer", "--lines", "5,e6", "--distance", "1"],
+            "not an element",
+        ),
+        (
+            vec!["--op", "chamfer", "--lines", "e5,e6", "--distance", "far"],
+            "far",
+        ),
+        (
+            vec!["--op", "trim", "--line", "e11", "--cutter", "e6"],
+            "PHOENIX-CAD-031",
+        ),
+        (
+            vec!["--op", "extend", "--line", "e5", "--to", "e6"],
+            "PHOENIX-CAD-031",
+        ),
+        (
+            vec![
+                "--op", "linear", "--items", "e12", "--step", "10", "--count", "3",
+            ],
+            "DX,DY",
+        ),
+        (
+            vec![
+                "--op", "linear", "--items", "e12", "--step", "10,0", "--count", "1",
+            ],
+            "PHOENIX-CAD-031",
+        ),
+        (
+            vec![
+                "--op", "linear", "--items", "e12", "--step", "10,0", "--count", "x",
+            ],
+            "whole number",
+        ),
+        (
+            vec![
+                "--op", "circular", "--items", "e12", "--center", "e5", "--count", "3",
+            ],
+            "PHOENIX-CAD",
+        ),
+        (
+            vec![
+                "--op", "circular", "--items", "e12", "--center", "e1", "--count", "3", "--step",
+                "a",
+            ],
+            "angle",
+        ),
+        (
+            vec![
+                "--op",
+                "offset",
+                "--items",
+                "e5,e6,e7,e8",
+                "--distance",
+                "-20",
+            ],
+            "PHOENIX-CAD-031",
+        ),
+        (
+            vec!["--op", "offset", "--items", "e5,e6,e7", "--distance", "1"],
+            "PHOENIX-CAD-031",
+        ),
+        (vec!["--op", "spin"], "not an operation"),
+        (vec![], "needs --op"),
+        (vec!["--op", "offset", "--bogus", "1"], "unknown option"),
+    ] {
+        let mut all = vec!["sketch-edit", plate.as_str(), "--out", out.as_str()];
+        all.extend_from_slice(&args);
+        let (code, _, err) = run(&all);
+        assert_ne!(code, 0, "{args:?}");
+        assert!(err.contains(why), "{args:?}: {err}");
+        assert!(!std::path::Path::new(&out).exists(), "{args:?}");
+    }
+    let (code, _, err) = run(&["sketch-edit"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("needs a sketch file"), "{err}");
+    // the file the output names exists: it is not written over without --overwrite
+    fs::write(&out, "kept").unwrap();
+    let ask = [
+        "sketch-edit",
+        plate.as_str(),
+        "--op",
+        "offset",
+        "--items",
+        "e5,e6,e7,e8",
+        "--distance",
+        "1",
+        "--out",
+        out.as_str(),
+    ];
+    let (code, _, err) = run(&ask);
+    assert_ne!(code, 0);
+    assert!(err.contains("PHOENIX-CAD-040"), "{err}");
+    assert_eq!(fs::read_to_string(&out).unwrap(), "kept");
+    let mut over = ask.to_vec();
+    over.push("--overwrite");
+    let (code, _, err) = run(&over);
+    assert_eq!(code, 0, "{err}");
+    assert!(fs::read_to_string(&out)
+        .unwrap()
+        .starts_with("phoenix-sketch 1\n"));
+    // without --out the sketch is edited in place, and only with --overwrite
+    let (code, _, err) = run(&[
+        "sketch-edit",
+        &plate,
+        "--op",
+        "offset",
+        "--items",
+        "e5,e6,e7,e8",
+        "--distance",
+        "1",
+    ]);
+    assert_ne!(code, 0);
+    assert!(err.contains("PHOENIX-CAD-040"), "{err}");
+    assert_eq!(fs::read_to_string(&plate).unwrap(), EDIT_SKETCH);
+    let (code, _, err) = run(&[
+        "sketch-edit",
+        &plate,
+        "--op",
+        "offset",
+        "--items",
+        "e5,e6,e7,e8",
+        "--distance",
+        "1",
+        "--overwrite",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_ne!(fs::read_to_string(&plate).unwrap(), EDIT_SKETCH);
+}
+
+#[test]
+fn an_edited_sketch_is_a_sketch_that_can_be_drawn_again() {
+    let dir = Scratch::new("sketch-edit-export");
+    let edited_file = dir.file("edited.phoenixsketch");
+    let plate = dir.file("plate.phoenixsketch");
+    // the rectangle alone, so that its outline is closed
+    let rectangle: String = EDIT_SKETCH
+        .lines()
+        .take(12)
+        .map(|l| {
+            format!(
+                "{l}
+"
+            )
+        })
+        .collect();
+    fs::write(&plate, rectangle.replace("next 13 1", "next 9 1")).unwrap();
+    let (code, _, err) = run(&[
+        "sketch-edit",
+        &plate,
+        "--op",
+        "offset",
+        "--items",
+        "e5,e6,e7,e8",
+        "--distance",
+        "3",
+        "--out",
+        &edited_file,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let drawing = dir.file("edited.svg");
+    let (code, _, err) = run(&[
+        "sketch-export",
+        &edited_file,
+        "--format",
+        "svg",
+        "--out",
+        &drawing,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert!(fs::read_to_string(&drawing).unwrap().contains("<svg"));
+}

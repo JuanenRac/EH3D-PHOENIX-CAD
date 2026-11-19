@@ -40,6 +40,8 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad library FILE.phoenixlib [--config FILE]                        reads a library of parts, checks it and lists its parts
   eh3d-phoenix-cad mesh-info FILE.stl|.obj|.3mf                                   reads a file of triangles (the ones this program writes or another program's stored 3MF) and prints, for each solid in it, its vertices, triangles, whether its surface is closed, its volume, its surface and its size; it exits with 0 when every solid is closed and with 1 when one is not
   eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill|order [--view top|front|side|sheet] [--out FILE] [--overwrite] [--ascii|--binary] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), as a Wavefront file (obj) or as a 3MF package (3mf), the plan, front or side, or all three on one sheet, as a drawing (dxf, svg), the STEP file, the OpenSCAD-style script, the fit report, the bill of materials or the order sheet (an HTML page with the bars to buy, the holes to drill and the parts with their cost, in the language of --lang)
+  eh3d-phoenix-cad faces PROJECT.phoenixproj --from FACE[:inner|:outer] --to FACE[:inner|:outer] [--lang CODE] [--config FILE]   measures between two faces of the box (front, back, left, right, top or bottom, the outer face of the wall unless :inner is given): the distance in millimetres between parallel faces (a wall, the inner height, the outer width) and the angle, 0 for parallel faces and 90 for faces that meet; the same face on the same side is refused
+  eh3d-phoenix-cad sketch-edit SKETCH.phoenixsketch --op chamfer|trim|extend|linear|circular|offset [--out FILE] [--overwrite] [--config FILE] ...   edits a sketch file the way the buttons of the sketch window do (elements are named as in the file, like e5; lengths are in mm or with a unit): chamfer --lines e5,e6 --distance 3; trim --line e5 --cutter e6 [--drop e1]; extend --line e5 --to e6; linear --items e1,e2 --step DX,DY --count N; circular --items e1 --center e3 --count N [--step DEGREES]; offset --items e5,e6,e7,e8 --distance D (negative goes inwards); the edited sketch is written to --out, or over the file itself with --overwrite, and a refused edit writes nothing
   eh3d-phoenix-cad config                                                         every setting of the library, of the window and of the sketch with its default value, as a file for --config
 
 --open FILE is the same as giving the file by itself; a sketch file opens the window on the sketch. --lang takes en, es, de, fr, it, ja, zh or pt; without it the language of the system is used (the reports cutplan, clearance, placements, holes and balance and the answer of sketch-export are in English unless --lang is given; with --text the first four are lines for a person in that language instead of comma separated values).
@@ -1014,6 +1016,217 @@ fn run_mesh_info(args: &[String]) -> Result<bool, String> {
     Ok(all_closed)
 }
 
+/// A face of the options of `faces`: its name and, after a colon, `inner` or `outer` (the outer
+/// face of the wall without it).
+fn face_side(
+    word: &str,
+) -> Result<
+    (
+        eh3d_phoenix_cad::enclosure::Face,
+        eh3d_phoenix_cad::measure::Side,
+    ),
+    String,
+> {
+    use eh3d_phoenix_cad::measure::Side;
+    let (name, side) = match word.split_once(':') {
+        Some((name, "inner")) => (name, Side::Inner),
+        Some((name, "outer")) => (name, Side::Outer),
+        Some(_) => return Err(format!("{word}: the side is inner or outer")),
+        None => (word, Side::Outer),
+    };
+    let face = eh3d_phoenix_cad::enclosure::Face::from_name(name)
+        .ok_or_else(|| format!("{name}: not a face (front, back, left, right, top or bottom)"))?;
+    Ok((face, side))
+}
+
+/// `faces`: the distance and the angle between two faces of the box of a project. The answer is
+/// whether every step of the project was applied.
+fn run_faces(args: &[String]) -> Result<bool, String> {
+    let mut from: Option<String> = None;
+    let mut to: Option<String> = None;
+    let mut rest: Vec<String> = Vec::new();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--from" => from = Some(iter.next().ok_or("--from needs a face")?.clone()),
+            "--to" => to = Some(iter.next().ok_or("--to needs a face")?.clone()),
+            other => rest.push(other.to_owned()),
+        }
+    }
+    let from = face_side(&from.ok_or("faces needs --from")?)?;
+    let to = face_side(&to.ok_or("faces needs --to")?)?;
+    let (win, lang) = open_project(&rest, "faces")?;
+    let measured = eh3d_phoenix_cad::measure::between_faces(&win.params(), from, to)
+        .map_err(|e| error_text(&e, lang))?;
+    println!(
+        "distance: {} mm",
+        eh3d_phoenix_cad::scad::mm_text((measured.distance * 1.0e6).round() as i64)
+    );
+    println!("angle: {:.0} degrees", measured.angle);
+    Ok(win.info.failed == 0)
+}
+
+/// An element of a sketch file as the file names it (`e5`).
+fn element_word(word: &str) -> Result<eh3d_phoenix_cad::sketch::ElementId, String> {
+    word.trim()
+        .strip_prefix('e')
+        .and_then(|n| n.parse::<u32>().ok())
+        .map(eh3d_phoenix_cad::sketch::ElementId)
+        .ok_or_else(|| format!("{word}: not an element (they are named like e5)"))
+}
+
+fn element_words(text: &str) -> Result<Vec<eh3d_phoenix_cad::sketch::ElementId>, String> {
+    text.split(',').map(element_word).collect()
+}
+
+/// A length that is a bare number (millimetres) or has a unit.
+fn length_word(word: &str) -> Result<eh3d_phoenix_cad::Length, String> {
+    let text = if word.trim().parse::<f64>().is_ok() {
+        format!("{} mm", word.trim())
+    } else {
+        word.to_owned()
+    };
+    eh3d_phoenix_cad::units::parse_length(&text).map_err(|e| format!("{word}: {e}"))
+}
+
+/// `sketch-edit`: edits a sketch file with one of the operations of the sketch window and writes
+/// it. A refused edit writes nothing; a file that exists is only written over with
+/// `--overwrite`.
+fn run_sketch_edit(args: &[String]) -> Result<bool, String> {
+    use std::collections::BTreeMap;
+    let mut options: BTreeMap<String, String> = BTreeMap::new();
+    let mut file: Option<PathBuf> = None;
+    let mut overwrite = false;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--overwrite" => overwrite = true,
+            "--op" | "--lines" | "--distance" | "--line" | "--cutter" | "--drop" | "--to"
+            | "--items" | "--step" | "--count" | "--center" | "--out" | "--config" => {
+                let value = iter.next().ok_or_else(|| format!("{arg} needs a value"))?;
+                options.insert(arg.clone(), value.clone());
+            }
+            other if other.starts_with("--") => return Err(format!("unknown option {other}")),
+            other => {
+                if file.is_some() {
+                    return Err("only one sketch can be edited".to_owned());
+                }
+                file = Some(PathBuf::from(other));
+            }
+        }
+    }
+    let file = file.ok_or("sketch-edit needs a sketch file")?;
+    let need = |key: &str| -> Result<&String, String> {
+        options
+            .get(key)
+            .ok_or_else(|| format!("this operation needs {key}"))
+    };
+    let op = need("--op")?.clone();
+    let config = options.get("--config").map(PathBuf::from);
+    let (settings, _) = load_settings(config.as_deref())?;
+    let solver = load_solver_settings(config.as_deref())?;
+    let mut sketch = eh3d_phoenix_cad::sketch::file::read_file(&file, &solver)
+        .map_err(|e| format!("{}: {}", file.display(), error_text(&e, Lang::En)))?;
+    let before = sketch.next_ids().0;
+    let count = |options: &BTreeMap<String, String>| -> Result<u32, String> {
+        options
+            .get("--count")
+            .ok_or_else(|| "this operation needs --count".to_owned())?
+            .parse::<u32>()
+            .map_err(|_| "--count is a whole number".to_owned())
+    };
+    let done: Result<(), eh3d_phoenix_cad::CadError> = match op.as_str() {
+        "chamfer" => {
+            let lines = element_words(need("--lines")?)?;
+            let [a, b] = lines[..] else {
+                return Err("--lines names the two lines of the corner".to_owned());
+            };
+            let distance = length_word(need("--distance")?)?;
+            sketch.chamfer_corner(a, b, distance).map(|_| ())
+        }
+        "trim" => {
+            let drop = options.get("--drop").map(|d| element_word(d)).transpose()?;
+            sketch
+                .trim_line(
+                    element_word(need("--line")?)?,
+                    element_word(need("--cutter")?)?,
+                    drop,
+                )
+                .map(|_| ())
+        }
+        "extend" => sketch
+            .extend_line(element_word(need("--line")?)?, element_word(need("--to")?)?)
+            .map(|_| ()),
+        "linear" => {
+            let step = need("--step")?;
+            let (dx, dy) = step
+                .split_once(',')
+                .ok_or("--step is DX,DY (millimetres or with a unit)")?;
+            sketch
+                .linear_pattern(
+                    &element_words(need("--items")?)?,
+                    length_word(dx)?,
+                    length_word(dy)?,
+                    count(&options)?,
+                )
+                .map(|_| ())
+        }
+        "circular" => {
+            let n = count(&options)?;
+            let step = match options.get("--step") {
+                Some(text) => {
+                    let degrees: f64 = text
+                        .parse()
+                        .map_err(|_| "--step is an angle in degrees".to_owned())?;
+                    eh3d_phoenix_cad::units::Angle::new((degrees * 1.0e9).round() as i64)
+                        .map_err(|e| error_text(&e, Lang::En))?
+                }
+                None => eh3d_phoenix_cad::units::Angle::new(360_000_000_000 / i64::from(n.max(1)))
+                    .map_err(|e| error_text(&e, Lang::En))?,
+            };
+            sketch
+                .circular_pattern(
+                    &element_words(need("--items")?)?,
+                    element_word(need("--center")?)?,
+                    n,
+                    step,
+                )
+                .map(|_| ())
+        }
+        "offset" => sketch
+            .offset_outline(
+                &element_words(need("--items")?)?,
+                length_word(need("--distance")?)?,
+            )
+            .map(|_| ()),
+        other => {
+            return Err(format!(
+                "{other}: not an operation (chamfer, trim, extend, linear, circular or offset)"
+            ))
+        }
+    };
+    done.map_err(|e| error_text(&e, Lang::En))?;
+    sketch
+        .solve(&solver)
+        .map_err(|e| error_text(&e, Lang::En))?;
+    let target = options.get("--out").map(PathBuf::from).unwrap_or(file);
+    if target.exists() && !overwrite {
+        return Err(error_text(
+            &eh3d_phoenix_cad::CadError::ExportExists(target.display().to_string()),
+            Lang::En,
+        ));
+    }
+    eh3d_phoenix_cad::sketch::file::write_file(&target, &sketch, settings.backups)
+        .map_err(|e| error_text(&e, Lang::En))?;
+    println!(
+        "{op}: {} elements made, {} in all; written to {}",
+        sketch.next_ids().0 - before,
+        sketch.elements().len(),
+        target.display()
+    );
+    Ok(true)
+}
+
 /// The format of the `export` command: a word, and for the drawings the view.
 fn export_format(word: &str, view: Option<View>, sheet: bool) -> Result<Format, String> {
     match word {
@@ -1141,6 +1354,8 @@ fn run(args: &[String]) -> Result<bool, String> {
         "sketch-import" => run_sketch_import(rest),
         "library" => run_library(rest),
         "mesh-info" => run_mesh_info(rest),
+        "faces" => run_faces(rest),
+        "sketch-edit" => run_sketch_edit(rest),
         "export" => run_export(rest),
         "gui" => Err("this build has no window: build it with --features gui".to_owned()),
         other => Err(format!("{other}: unknown command (see help)")),
@@ -1157,7 +1372,7 @@ fn window_request(args: &[String]) -> Option<Result<shot::WindowArgs, String>> {
             "help" | "--help" | "-h" | "config" | "check" | "interference" | "bill" | "cutplan"
             | "clearance" | "placements" | "holes" | "partlist" | "bom" | "balance" | "revolve"
             | "sweep" | "sketch-export" | "section" | "sketch-import" | "library" | "mesh-info"
-            | "export",
+            | "faces" | "sketch-edit" | "export",
         ) => return None,
         Some(first) if first.starts_with("--") => {}
         Some(first) => {
