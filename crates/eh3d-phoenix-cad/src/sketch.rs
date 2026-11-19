@@ -268,6 +268,26 @@ pub enum Constraint {
         /// The line of symmetry.
         axis: ElementId,
     },
+    /// Two lines are mirror images across a line: the start of the first is the mirror image of
+    /// the start of the second, and the end of the first of the end of the second.
+    SymmetricLines {
+        /// The first line.
+        a: ElementId,
+        /// The second line.
+        b: ElementId,
+        /// The line of symmetry.
+        axis: ElementId,
+    },
+    /// Two circles or arcs are mirror images across a line: their centres are, and their radii
+    /// are equal.
+    SymmetricCircles {
+        /// The first circle or arc.
+        a: ElementId,
+        /// The second circle or arc.
+        b: ElementId,
+        /// The line of symmetry.
+        axis: ElementId,
+    },
     /// Two points are mirror images through a point.
     SymmetricPoint {
         /// The first point.
@@ -391,6 +411,8 @@ impl Constraint {
             Constraint::Collinear(..) => "collinear",
             Constraint::Concentric(..) => "concentric",
             Constraint::SymmetricLine { .. } => "symmetric_line",
+            Constraint::SymmetricLines { .. } => "symmetric_lines",
+            Constraint::SymmetricCircles { .. } => "symmetric_circles",
             Constraint::SymmetricPoint { .. } => "symmetric_point",
             Constraint::Midpoint { .. } => "midpoint",
             Constraint::Fixed { .. } => "fixed",
@@ -424,7 +446,9 @@ impl Constraint {
             | Constraint::AngleBetween { a, b, .. } => vec![*a, *b],
             Constraint::PointOnObject { point, object } => vec![*point, *object],
             Constraint::Horizontal(l) | Constraint::Vertical(l) => vec![*l],
-            Constraint::SymmetricLine { a, b, axis } => vec![*a, *b, *axis],
+            Constraint::SymmetricLine { a, b, axis }
+            | Constraint::SymmetricLines { a, b, axis }
+            | Constraint::SymmetricCircles { a, b, axis } => vec![*a, *b, *axis],
             Constraint::SymmetricPoint { a, b, center } => vec![*a, *b, *center],
             Constraint::Midpoint { point, line } => vec![*point, *line],
             Constraint::Fixed { point, .. } => vec![*point],
@@ -890,6 +914,20 @@ impl Sketch {
                 Self::check_distinct(*a, *b)?;
                 self.need(*a, &[Point], "a point")?;
                 self.need(*b, &[Point], "a point")?;
+                self.need(*axis, &[Line], "a line")?;
+            }
+            Constraint::SymmetricLines { a, b, axis } => {
+                Self::check_distinct(*a, *b)?;
+                Self::check_distinct(*a, *axis)?;
+                Self::check_distinct(*b, *axis)?;
+                for id in [a, b, axis] {
+                    self.need(*id, &[Line], "a line")?;
+                }
+            }
+            Constraint::SymmetricCircles { a, b, axis } => {
+                Self::check_distinct(*a, *b)?;
+                self.need(*a, &[Circle, Arc], "a circle or an arc")?;
+                self.need(*b, &[Circle, Arc], "a circle or an arc")?;
                 self.need(*axis, &[Line], "a line")?;
             }
             Constraint::SymmetricPoint { a, b, center } => {

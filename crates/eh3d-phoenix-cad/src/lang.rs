@@ -328,6 +328,8 @@ messages! {
     CoTangent => ["Tangent", "Tangente", "Tangential", "Tangente", "Tangente", "接線", "相切", "Tangente"],
     CoEqual => ["Equal", "Igual", "Gleich", "Égal", "Uguale", "等しい", "相等", "Igual"],
     CoSymmetric => ["Symmetric", "Simétrica", "Symmetrisch", "Symétrique", "Simmetrica", "対称", "对称", "Simétrica"],
+    CoSymmetricLines => ["Symmetric lines", "Líneas simétricas", "Symmetrische Linien", "Lignes symétriques", "Linee simmetriche", "対称な線", "对称的线", "Linhas simétricas"],
+    CoSymmetricCircles => ["Symmetric circles", "Círculos simétricos", "Symmetrische Kreise", "Cercles symétriques", "Cerchi simmetrici", "対称な円", "对称的圆", "Círculos simétricos"],
     CoMidpoint => ["Midpoint", "Punto medio", "Mittelpunkt", "Milieu", "Punto medio", "中点", "中点", "Ponto médio"],
     CoFixed => ["Fixed", "Fija", "Fixiert", "Fixe", "Fissa", "固定", "固定", "Fixa"],
     DiDistance => ["Distance", "Distancia", "Abstand", "Distance", "Distanza", "距離", "距离", "Distância"],

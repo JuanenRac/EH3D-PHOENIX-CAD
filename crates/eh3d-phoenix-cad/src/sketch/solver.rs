@@ -130,6 +130,15 @@ struct Model<'a> {
 
 type Pt = (f64, f64);
 
+/// The two rows that make `q` the mirror image of `p` across the line through `s` and `t`: the
+/// middle of the two is on the line, and the way from one to the other is across it.
+fn mirror_rows(p: Pt, q: Pt, s: Pt, t: Pt, out: &mut Vec<f64>) {
+    let mid = ((p.0 + q.0) / 2.0, (p.1 + q.1) / 2.0);
+    out.push(side(mid, s, t));
+    let d = (t.0 - s.0, t.1 - s.1);
+    out.push(((q.0 - p.0) * d.0 + (q.1 - p.1) * d.1) / norm(d));
+}
+
 impl<'a> Model<'a> {
     fn new(sketch: &'a Sketch) -> (Model<'a>, Vec<f64>) {
         let mut pidx = BTreeMap::new();
@@ -332,10 +341,18 @@ impl<'a> Model<'a> {
             Constraint::SymmetricLine { a, b, axis } => {
                 let (p, q) = (self.pt(x, *a), self.pt(x, *b));
                 let (s, t) = self.line_ends(x, *axis);
-                let mid = ((p.0 + q.0) / 2.0, (p.1 + q.1) / 2.0);
-                out.push(side(mid, s, t));
-                let d = (t.0 - s.0, t.1 - s.1);
-                out.push(((q.0 - p.0) * d.0 + (q.1 - p.1) * d.1) / norm(d));
+                mirror_rows(p, q, s, t, out);
+            }
+            Constraint::SymmetricLines { a, b, axis } => {
+                let ((p1, q1), (p2, q2)) = (self.line_ends(x, *a), self.line_ends(x, *b));
+                let (s, t) = self.line_ends(x, *axis);
+                mirror_rows(p1, p2, s, t, out);
+                mirror_rows(q1, q2, s, t, out);
+            }
+            Constraint::SymmetricCircles { a, b, axis } => {
+                let (s, t) = self.line_ends(x, *axis);
+                mirror_rows(self.center(x, *a), self.center(x, *b), s, t, out);
+                out.push(self.radius(x, *a) - self.radius(x, *b));
             }
             Constraint::SymmetricPoint { a, b, center } => {
                 let (p, q, c) = (self.pt(x, *a), self.pt(x, *b), self.pt(x, *center));
@@ -1063,6 +1080,126 @@ mod tests {
         .unwrap();
         assert_eq!(solved(&mut n), 0);
         assert_eq!(n.point(q).unwrap(), (mm(9), mm(8)));
+    }
+
+    #[test]
+    fn two_lines_and_two_circles_are_mirror_images_across_a_line() {
+        // the axis is the vertical line at x = 10 mm
+        let mut k = sketch();
+        let o = k.add_point(mm(10), mm(0)).unwrap();
+        let top = k.add_point(mm(10), mm(20)).unwrap();
+        let axis = k.add_line(o, top).unwrap();
+        k.fix_point(o).unwrap();
+        k.fix_point(top).unwrap();
+        let p1 = k.add_point(mm(4), mm(3)).unwrap();
+        let p2 = k.add_point(mm(6), mm(8)).unwrap();
+        let q1 = k.add_point(mm(15), mm(2)).unwrap();
+        let q2 = k.add_point(mm(13), mm(9)).unwrap();
+        let first = k.add_line(p1, p2).unwrap();
+        let second = k.add_line(q1, q2).unwrap();
+        k.fix_point(p1).unwrap();
+        k.fix_point(p2).unwrap();
+        k.add_constraint(Constraint::SymmetricLines {
+            a: first,
+            b: second,
+            axis,
+        })
+        .unwrap();
+        // the start goes to the start and the end to the end: 4 -> 16, 6 -> 14
+        assert_eq!(solved(&mut k), 0);
+        assert_eq!(k.point(q1).unwrap(), (mm(16), mm(3)));
+        assert_eq!(k.point(q2).unwrap(), (mm(14), mm(8)));
+
+        // two circles: the centre is the mirror image and the radius is the same
+        let mut m = sketch();
+        let o = m.add_point(mm(10), mm(0)).unwrap();
+        let top = m.add_point(mm(10), mm(20)).unwrap();
+        let axis = m.add_line(o, top).unwrap();
+        m.fix_point(o).unwrap();
+        m.fix_point(top).unwrap();
+        let c1 = m.add_point(mm(4), mm(3)).unwrap();
+        let c2 = m.add_point(mm(15), mm(2)).unwrap();
+        let r1 = m.add_circle(c1, mm(2)).unwrap();
+        let r2 = m.add_circle(c2, mm(7)).unwrap();
+        m.fix_point(c1).unwrap();
+        m.add_constraint(Constraint::Radius {
+            round: r1,
+            dim: Dim::fixed(mm(2)),
+        })
+        .unwrap();
+        m.add_constraint(Constraint::SymmetricCircles { a: r1, b: r2, axis })
+            .unwrap();
+        assert_eq!(solved(&mut m), 0);
+        assert_eq!(m.point(c2).unwrap(), (mm(16), mm(3)));
+        let near = |a: Length, b: Length| (a.get() - b.get()).abs() < 1_000;
+        match m.element(r2) {
+            Some(Element::Circle { radius, .. }) => assert!(near(*radius, mm(2))),
+            other => panic!("{other:?}"),
+        }
+
+        // an arc is a circle for the symmetry, and a tilted axis works too: across y = x the
+        // centre (2, 5) goes to (5, 2)
+        let mut n = sketch();
+        let a0 = n.add_point(mm(0), mm(0)).unwrap();
+        let a1 = n.add_point(mm(10), mm(10)).unwrap();
+        let diagonal = n.add_line(a0, a1).unwrap();
+        n.fix_point(a0).unwrap();
+        n.fix_point(a1).unwrap();
+        let c = n.add_point(mm(2), mm(5)).unwrap();
+        let circle = n.add_circle(c, mm(1)).unwrap();
+        n.fix_point(c).unwrap();
+        let e = n.add_point(mm(9), mm(1)).unwrap();
+        let s = n.add_point(mm(6), mm(2)).unwrap();
+        let f = n.add_point(mm(5), mm(3)).unwrap();
+        let arc = n.add_arc(e, s, f).unwrap();
+        n.add_constraint(Constraint::SymmetricCircles {
+            a: circle,
+            b: arc,
+            axis: diagonal,
+        })
+        .unwrap();
+        solved(&mut n);
+        let (x, y) = n.point(e).unwrap();
+        assert!((x.get() - 5_000_000).abs() < 1_000 && (y.get() - 2_000_000).abs() < 1_000);
+
+        // the same pair twice is redundant, and the wrong kinds are refused
+        let mut r = sketch();
+        let o = r.add_point(mm(0), mm(0)).unwrap();
+        let t = r.add_point(mm(0), mm(5)).unwrap();
+        let axis = r.add_line(o, t).unwrap();
+        let c = r.add_point(mm(5), mm(5)).unwrap();
+        let circle = r.add_circle(c, mm(1)).unwrap();
+        let l = r.add_line(o, c).unwrap();
+        for bad in [
+            Constraint::SymmetricLines { a: l, b: l, axis },
+            Constraint::SymmetricLines {
+                a: l,
+                b: axis,
+                axis,
+            },
+            Constraint::SymmetricLines {
+                a: l,
+                b: circle,
+                axis,
+            },
+            Constraint::SymmetricCircles {
+                a: circle,
+                b: l,
+                axis,
+            },
+            Constraint::SymmetricCircles {
+                a: circle,
+                b: circle,
+                axis,
+            },
+            Constraint::SymmetricCircles {
+                a: circle,
+                b: circle,
+                axis: c,
+            },
+        ] {
+            assert_eq!(r.add_constraint(bad).unwrap_err().code(), "PHOENIX-CAD-032");
+        }
     }
 
     #[test]

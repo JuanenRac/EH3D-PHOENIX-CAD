@@ -2,8 +2,8 @@
 //! sketches of a project, which are kept in the project file itself (`super::domain`).
 //!
 //! The file has its own version in its first line (1, or 2 when the sketch has a kind of constraint
-//! that came with the second version: `collinear`, `point_line_distance`, `line_angle` and
-//! `concentric`; a program that reads only version 1 refuses such a file with its version, and a
+//! that came with the second version: `collinear`, `point_line_distance`, `line_angle`,
+//! `concentric`, `symmetric_lines` and `symmetric_circles`; a program that reads only version 1 refuses such a file with its version, and a
 //! file of version 1 that has one of those kinds is refused), and the same text is what the domain `sketch`
 //! of the project file holds for each sketch. One line for the header, one for the name, one for the plane, one for the counters of
 //! the identifiers and then one line for each element and each constraint, in the order they
@@ -48,11 +48,13 @@ pub const FILE_VERSION: u32 = 2;
 pub const BASE_VERSION: u32 = 1;
 
 /// The kinds of constraint that came with the second version of the format.
-const VERSION_2_KINDS: [&str; 4] = [
+const VERSION_2_KINDS: [&str; 6] = [
     "collinear",
     "point_line_distance",
     "line_angle",
     "concentric",
+    "symmetric_lines",
+    "symmetric_circles",
 ];
 
 /// The version a sketch is written with: 2 when it has a constraint that came with that version
@@ -107,7 +109,9 @@ fn constraint_text(c: &Constraint) -> String {
         | Constraint::Equal(a, b) => format!("{name} {a} {b}"),
         Constraint::PointOnObject { point, object } => format!("{name} {point} {object}"),
         Constraint::Horizontal(l) | Constraint::Vertical(l) => format!("{name} {l}"),
-        Constraint::SymmetricLine { a, b, axis } => format!("{name} {a} {b} {axis}"),
+        Constraint::SymmetricLine { a, b, axis }
+        | Constraint::SymmetricLines { a, b, axis }
+        | Constraint::SymmetricCircles { a, b, axis } => format!("{name} {a} {b} {axis}"),
         Constraint::SymmetricPoint { a, b, center } => format!("{name} {a} {b} {center}"),
         Constraint::Midpoint { point, line } => format!("{name} {point} {line}"),
         Constraint::Fixed { point, x, y } => format!("{name} {point} {} {}", x.get(), y.get()),
@@ -270,6 +274,22 @@ fn parse_constraint(
         "symmetric_line" => {
             exactly(line, kind, words, 3)?;
             Constraint::SymmetricLine {
+                a: id(0)?,
+                b: id(1)?,
+                axis: id(2)?,
+            }
+        }
+        "symmetric_lines" => {
+            exactly(line, kind, words, 3)?;
+            Constraint::SymmetricLines {
+                a: id(0)?,
+                b: id(1)?,
+                axis: id(2)?,
+            }
+        }
+        "symmetric_circles" => {
+            exactly(line, kind, words, 3)?;
+            Constraint::SymmetricCircles {
                 a: id(0)?,
                 b: id(1)?,
                 axis: id(2)?,
@@ -818,6 +838,71 @@ mod tests {
         // collinear has no expression
         let with_expr = text.replace("c1 on collinear e5 e6", "c1 on collinear e5 e6 = 3");
         assert!(from_text(&with_expr).is_err());
+    }
+
+    #[test]
+    fn the_symmetry_of_lines_and_of_circles_is_written_as_version_two_and_read_back() {
+        let mut k = sketch();
+        let o = k.add_point(mm(10), mm(0)).unwrap();
+        let t = k.add_point(mm(10), mm(20)).unwrap();
+        let axis = k.add_line(o, t).unwrap();
+        let (a, b) = (
+            k.add_point(mm(0), mm(0)).unwrap(),
+            k.add_point(mm(0), mm(5)).unwrap(),
+        );
+        let (c, d) = (
+            k.add_point(mm(20), mm(0)).unwrap(),
+            k.add_point(mm(20), mm(5)).unwrap(),
+        );
+        let first = k.add_line(a, b).unwrap();
+        let second = k.add_line(c, d).unwrap();
+        k.add_constraint(Constraint::SymmetricLines {
+            a: first,
+            b: second,
+            axis,
+        })
+        .unwrap();
+        let r1 = k.add_circle(a, mm(2)).unwrap();
+        let r2 = k.add_circle(c, mm(2)).unwrap();
+        k.add_constraint(Constraint::SymmetricCircles { a: r1, b: r2, axis })
+            .unwrap();
+        assert_eq!(version_of(&k), FILE_VERSION);
+        let text = to_text(&k);
+        assert!(
+            text.starts_with(
+                "phoenix-sketch 2
+"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "on symmetric_lines e8 e9 e3
+"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "on symmetric_circles e10 e11 e3
+"
+            ),
+            "{text}"
+        );
+        let back = from_text(&text).unwrap();
+        assert_eq!(back, k);
+        assert_eq!(to_text(&back), text);
+        // a file of version 1 with one of the kinds, or with a missing element, is refused
+        let old = text.replacen("phoenix-sketch 2", "phoenix-sketch 1", 1);
+        let e = from_text(&old).unwrap_err().to_string();
+        assert!(e.contains("needs a file of version 2"), "{e}");
+        let wrong = text.replace("on symmetric_lines e8 e9 e3", "on symmetric_lines e10 e11");
+        assert!(from_text(&wrong).is_err());
+        let kind = text.replace(
+            "on symmetric_circles e10 e11 e3",
+            "on symmetric_circles e8 e11 e3",
+        );
+        assert!(from_text(&kind).is_err());
     }
 
     #[test]

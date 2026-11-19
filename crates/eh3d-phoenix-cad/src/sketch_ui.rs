@@ -357,7 +357,8 @@ pub enum ConstraintTool {
     Collinear,
     /// Two circles or arcs have the same centre.
     Concentric,
-    /// Two points are mirror images across a line or through a point.
+    /// Two points are mirror images across a line or through a point, two lines or two circles
+    /// across a line (the line is the last one picked).
     Symmetric,
     /// A point is the midpoint of a line.
     Midpoint,
@@ -793,6 +794,8 @@ fn constraint_msg(c: &Constraint) -> Msg {
         Constraint::Collinear(..) => Msg::CoCollinear,
         Constraint::Concentric(..) => Msg::CoConcentric,
         Constraint::SymmetricLine { .. } | Constraint::SymmetricPoint { .. } => Msg::CoSymmetric,
+        Constraint::SymmetricLines { .. } => Msg::CoSymmetricLines,
+        Constraint::SymmetricCircles { .. } => Msg::CoSymmetricCircles,
         Constraint::Midpoint { .. } => Msg::CoMidpoint,
         Constraint::Fixed { .. } => Msg::CoFixed,
         Constraint::Distance { .. } => Msg::DiDistance,
@@ -829,7 +832,10 @@ fn marker_of(c: &Constraint) -> Option<&'static str> {
         Constraint::Concentric(..) => Some("CN"),
         Constraint::Coincident(..) => Some("C"),
         Constraint::PointOnObject { .. } => Some("O"),
-        Constraint::SymmetricLine { .. } | Constraint::SymmetricPoint { .. } => Some("S"),
+        Constraint::SymmetricLine { .. }
+        | Constraint::SymmetricPoint { .. }
+        | Constraint::SymmetricLines { .. }
+        | Constraint::SymmetricCircles { .. } => Some("S"),
         Constraint::Midpoint { .. } => Some("M"),
         Constraint::Fixed { .. } => Some("F"),
         _ => None,
@@ -1718,6 +1724,22 @@ impl SketchEditor {
                 vec![Constraint::SymmetricLine {
                     a: points[0],
                     b: points[1],
+                    axis: lines[0],
+                }]
+            }
+            ConstraintTool::Symmetric if all.len() == 3 && lines.len() == 3 => {
+                vec![Constraint::SymmetricLines {
+                    a: lines[0],
+                    b: lines[1],
+                    axis: lines[2],
+                }]
+            }
+            ConstraintTool::Symmetric
+                if all.len() == 3 && rounds.len() == 2 && lines.len() == 1 =>
+            {
+                vec![Constraint::SymmetricCircles {
+                    a: rounds[0],
+                    b: rounds[1],
                     axis: lines[0],
                 }]
             }
@@ -4171,6 +4193,55 @@ mod tests {
         );
         w.new_sketch();
         assert_eq!(w.name_input, "sketch");
+    }
+
+    #[test]
+    fn symmetric_takes_two_lines_or_two_circles_and_the_line_picked_last_as_the_axis() {
+        let mut e = editor();
+        let point =
+            |e: &mut SketchEditor, x: f64, y: f64| e.sketch.add_point(mm(x), mm(y)).unwrap();
+        let (a, b) = (point(&mut e, 0.0, 0.0), point(&mut e, 5.0, 0.0));
+        let (c, d) = (point(&mut e, 0.0, 10.0), point(&mut e, 5.0, 10.0));
+        let (s, t) = (point(&mut e, 20.0, 0.0), point(&mut e, 20.0, 10.0));
+        let first = e.sketch.add_line(a, b).unwrap();
+        let second = e.sketch.add_line(c, d).unwrap();
+        let axis = e.sketch.add_line(s, t).unwrap();
+        pick(&mut e, &[first.0, second.0, axis.0]);
+        assert!(e.available().contains(&ConstraintTool::Symmetric));
+        e.add_constraint(ConstraintTool::Symmetric);
+        assert!(e.sketch.constraints().iter().any(|k| k.constraint
+            == Constraint::SymmetricLines {
+                a: first,
+                b: second,
+                axis
+            }));
+        // two lines without an axis are not enough
+        pick(&mut e, &[first.0, second.0]);
+        assert!(!e.available().contains(&ConstraintTool::Symmetric));
+        // two circles and a line
+        let (m, n) = (point(&mut e, 0.0, 30.0), point(&mut e, 30.0, 30.0));
+        let r1 = e.sketch.add_circle(m, mm(3.0)).unwrap();
+        let r2 = e.sketch.add_circle(n, mm(3.0)).unwrap();
+        pick(&mut e, &[r1.0, r2.0, axis.0]);
+        assert!(e.available().contains(&ConstraintTool::Symmetric));
+        e.add_constraint(ConstraintTool::Symmetric);
+        let made = Constraint::SymmetricCircles { a: r1, b: r2, axis };
+        assert!(e.sketch.constraints().iter().any(|k| k.constraint == made));
+        assert_eq!(constraint_msg(&made), Msg::CoSymmetricCircles);
+        assert_eq!(marker_of(&made), Some("S"));
+        let lines = Constraint::SymmetricLines {
+            a: first,
+            b: second,
+            axis,
+        };
+        assert_eq!(constraint_msg(&lines), Msg::CoSymmetricLines);
+        for l in Lang::ALL {
+            assert!(!Msg::CoSymmetricLines.tr(l).is_empty());
+            assert!(!Msg::CoSymmetricCircles.tr(l).is_empty());
+        }
+        // a circle, a line and a point do not fit
+        pick(&mut e, &[r1.0, axis.0, a.0]);
+        assert!(!e.available().contains(&ConstraintTool::Symmetric));
     }
 
     #[test]

@@ -38,6 +38,8 @@ Geometric:
 | Concentric | two circles or arcs have the same centre | 2 |
 | Symmetric about a line | two points are mirror images across a line | 2 |
 | Symmetric about a point | two points are mirror images through a point | 2 |
+| Symmetric lines | two lines are mirror images across a line (start to start, end to end) | 4 |
+| Symmetric circles | two circles or arcs are mirror images across a line: their centres are, and their radii are equal | 3 |
 | Midpoint | a point is the midpoint of a line | 2 |
 | Fixed | a point is held where it was when the constraint was added | 2 |
 
@@ -127,7 +129,7 @@ phoenix-sketch 1
 name ...
 ```
 
-Each `[sketch]` is followed by the text of one sketch in the form below (its first line is `phoenix-sketch 1`, or `phoenix-sketch 2` when the sketch has one of the kinds of constraint that came with the second version: `collinear`, `point_line_distance`, `line_angle` and `concentric`; this program reads both, writes the lowest version that can hold the sketch, refuses a file of version 1 that has one of those kinds, and a program that reads only version 1 refuses a file of version 2 with the two versions in the message, so a sketch that does not use the newer kinds is still read by it), and the sketches come in the order of their names (a name is used once). Lengths are integer nanometres and angles integer nano-degrees. The line of an element may end with `construction`; a constraint is `on` or `off`; a dimension may end with ` = ` and its expression. The text written is always the same for the same sketches. A text that is not in that one form, a sketch that does not hold together, two sketches of one name or more sketches than `max_sketches` allows is refused with `PHOENIX-CAD-035`, and the message names the sketch.
+Each `[sketch]` is followed by the text of one sketch in the form below (its first line is `phoenix-sketch 1`, or `phoenix-sketch 2` when the sketch has one of the kinds of constraint that came with the second version: `collinear`, `point_line_distance`, `line_angle`, `concentric`, `symmetric_lines` and `symmetric_circles`; this program reads both, writes the lowest version that can hold the sketch, refuses a file of version 1 that has one of those kinds, and a program that reads only version 1 refuses a file of version 2 with the two versions in the message, so a sketch that does not use the newer kinds is still read by it), and the sketches come in the order of their names (a name is used once). Lengths are integer nanometres and angles integer nano-degrees. The line of an element may end with `construction`; a constraint is `on` or `off`; a dimension may end with ` = ` and its expression. The text written is always the same for the same sketches. A text that is not in that one form, a sketch that does not hold together, two sketches of one name or more sketches than `max_sketches` allows is refused with `PHOENIX-CAD-035`, and the message names the sketch.
 
 * **Old projects**: a project without the domain opens as it always did, with no sketch, and saving it writes no domain.
 * **A domain this program does not know to read**: of a newer version, or damaged, the project opens **read-only** with the error in the status bar, the steps that need the sketch are shown as failed, and nothing can be written over it; the bytes stay as they were.
@@ -151,6 +153,7 @@ The window has a **Sketch** part beside the **Box** part (the switch in the top 
 | a point and a line, circle or arc | point on object; with a line also midpoint |
 | a line and a circle or arc, or two of those | tangent; for two circles or arcs also concentric, and equal for two or more |
 | three points, or two points and a line | symmetric about a point, or about the line |
+| three lines, or two circles or arcs and a line | symmetric lines, or symmetric circles, across the line picked last |
 | points | fixed (each one where it is) |
 
 * **Dimensions** (the right panel): the distance, the horizontal and vertical distance of two points, the length of a line, the radius or diameter of a circle or arc, the angle of two lines, the angle of one line to the horizontal and the distance from a point to a line. A dimension starts with the value the drawing has, or with the text typed in the box above the buttons; the value of a dimension that exists is edited in its own line. The text is a number (millimetres, or degrees for an angle), a length with its unit, a variable of the project (`width`) or a formula (`width / 2 + 2 mm`); a number stays a plain value and anything else is kept as the expression of the dimension and follows the variables. A text the model refuses leaves the sketch as it was.
