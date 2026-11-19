@@ -156,8 +156,9 @@ The window has a **Sketch** part beside the **Box** part (the switch in the top 
 | lines | horizontal, vertical (each line), parallel and collinear (two or more: each one is made parallel to, or collinear with, the first), perpendicular (two lines) and equal (two or more: each one is made equal to the first) |
 | a point and a line, circle or arc | point on object; with a line also midpoint |
 | a line and a circle or arc, or two of those | tangent; for two circles or arcs also concentric, and for two or more concentric and equal (each one with the first) |
-| three points, or two points and a line | symmetric about a point, or about the line; for three points also collinear |
+| three points, or two points and a line | symmetric about a point, or about the line; for three points also collinear and equidistant (the first point picked is as far from the second as from the third) |
 | four points | equal distance (the first pair of points as far apart as the second) |
+| four lines | equal angle (the angle from the first line to the second is the one from the third to the fourth), as well as equal for their lengths |
 | three lines, or two circles or arcs and a line | symmetric lines, or symmetric circles, across the line picked last |
 | points | fixed (each one where it is) |
 

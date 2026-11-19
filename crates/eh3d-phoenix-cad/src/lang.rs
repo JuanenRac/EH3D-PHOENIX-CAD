@@ -331,6 +331,8 @@ messages! {
     CoSymmetricLines => ["Symmetric lines", "Líneas simétricas", "Symmetrische Linien", "Lignes symétriques", "Linee simmetriche", "対称な線", "对称的线", "Linhas simétricas"],
     CoSymmetricCircles => ["Symmetric circles", "Círculos simétricos", "Symmetrische Kreise", "Cercles symétriques", "Cerchi simmetrici", "対称な円", "对称的圆", "Círculos simétricos"],
     CoMidpoint => ["Midpoint", "Punto medio", "Mittelpunkt", "Milieu", "Punto medio", "中点", "中点", "Ponto médio"],
+    CoEquidistant => ["Equidistant", "Equidistante", "Gleich weit entfernt", "Équidistant", "Equidistante", "等距離", "等距", "Equidistante"],
+    CoEqualAngle => ["Equal angle", "Ángulo igual", "Gleicher Winkel", "Angle égal", "Angolo uguale", "等しい角度", "等角", "Ângulo igual"],
     CoFixed => ["Fixed", "Fija", "Fixiert", "Fixe", "Fissa", "固定", "固定", "Fixa"],
     DiDistance => ["Distance", "Distancia", "Abstand", "Distance", "Distanza", "距離", "距离", "Distância"],
     DiDistanceX => ["Horizontal distance", "Distancia horizontal", "Horizontaler Abstand", "Distance horizontale", "Distanza orizzontale", "水平距離", "水平距离", "Distância horizontal"],

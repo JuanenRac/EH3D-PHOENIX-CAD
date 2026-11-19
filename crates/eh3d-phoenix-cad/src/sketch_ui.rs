@@ -366,13 +366,17 @@ pub enum ConstraintTool {
     Symmetric,
     /// A point is the midpoint of a line.
     Midpoint,
+    /// A point (the first picked) is as far from the second point as from the third.
+    Equidistant,
+    /// The angle from the first line to the second is the angle from the third to the fourth.
+    EqualAngle,
     /// Points are held where they are.
     Fixed,
 }
 
 impl ConstraintTool {
     /// Every tool, in the order of the panel.
-    pub const ALL: [ConstraintTool; 13] = [
+    pub const ALL: [ConstraintTool; 15] = [
         ConstraintTool::Coincident,
         ConstraintTool::PointOnObject,
         ConstraintTool::Horizontal,
@@ -385,6 +389,8 @@ impl ConstraintTool {
         ConstraintTool::Concentric,
         ConstraintTool::Symmetric,
         ConstraintTool::Midpoint,
+        ConstraintTool::Equidistant,
+        ConstraintTool::EqualAngle,
         ConstraintTool::Fixed,
     ];
 
@@ -403,6 +409,8 @@ impl ConstraintTool {
             ConstraintTool::Concentric => Msg::CoConcentric,
             ConstraintTool::Symmetric => Msg::CoSymmetric,
             ConstraintTool::Midpoint => Msg::CoMidpoint,
+            ConstraintTool::Equidistant => Msg::CoEquidistant,
+            ConstraintTool::EqualAngle => Msg::CoEqualAngle,
             ConstraintTool::Fixed => Msg::CoFixed,
         }
     }
@@ -794,10 +802,9 @@ fn constraint_msg(c: &Constraint) -> Msg {
         Constraint::Parallel(..) => Msg::CoParallel,
         Constraint::Perpendicular(..) => Msg::CoPerpendicular,
         Constraint::Tangent(..) => Msg::CoTangent,
-        Constraint::Equal(..)
-        | Constraint::EqualDistance { .. }
-        | Constraint::EqualAngle { .. }
-        | Constraint::Equidistant { .. } => Msg::CoEqual,
+        Constraint::Equal(..) | Constraint::EqualDistance { .. } => Msg::CoEqual,
+        Constraint::EqualAngle { .. } => Msg::CoEqualAngle,
+        Constraint::Equidistant { .. } => Msg::CoEquidistant,
         Constraint::Collinear(..) | Constraint::CollinearPoints(..) => Msg::CoCollinear,
         Constraint::Concentric(..) => Msg::CoConcentric,
         Constraint::SymmetricLine { .. } | Constraint::SymmetricPoint { .. } => Msg::CoSymmetric,
@@ -1774,6 +1781,21 @@ impl SketchEditor {
                     a: rounds[0],
                     b: rounds[1],
                     axis: lines[0],
+                }]
+            }
+            ConstraintTool::Equidistant if all.len() == 3 && points.len() == 3 => {
+                vec![Constraint::Equidistant {
+                    point: points[0],
+                    a: points[1],
+                    b: points[2],
+                }]
+            }
+            ConstraintTool::EqualAngle if all.len() == 4 && lines.len() == 4 => {
+                vec![Constraint::EqualAngle {
+                    a: lines[0],
+                    b: lines[1],
+                    c: lines[2],
+                    d: lines[3],
                 }]
             }
             ConstraintTool::Midpoint if all.len() == 2 && points.len() == 1 && lines.len() == 1 => {
@@ -4477,6 +4499,62 @@ mod tests {
         assert_eq!(constraint_msg(&kinds[1]), Msg::CoEqual);
         assert_eq!(marker_of(&kinds[0]), Some("CL"));
         assert_eq!(marker_of(&kinds[1]), Some("="));
+    }
+
+    #[test]
+    fn three_points_can_be_made_equidistant_and_four_lines_equal_in_angle() {
+        let mut e = editor();
+        let mut ids = Vec::new();
+        for (x, y) in [(5.0, 9.0), (0.0, 0.0), (10.0, 0.0)] {
+            ids.push(e.sketch.add_point(mm(x), mm(y)).unwrap());
+        }
+        let n: Vec<u32> = ids.iter().map(|i| i.0).collect();
+        pick(&mut e, &n);
+        assert!(e.available().contains(&ConstraintTool::Equidistant));
+        // two points, or four, are not enough for it
+        pick(&mut e, &n[..2]);
+        assert!(!e.available().contains(&ConstraintTool::Equidistant));
+        pick(&mut e, &n);
+        e.add_constraint(ConstraintTool::Equidistant);
+        let made = e.sketch.constraints()[0].constraint.clone();
+        assert_eq!(
+            made,
+            Constraint::Equidistant {
+                point: ids[0],
+                a: ids[1],
+                b: ids[2],
+            }
+        );
+        assert_eq!(constraint_msg(&made), Msg::CoEquidistant);
+        assert_eq!(marker_of(&made), Some("="));
+        // the point is now as far from the other two as from each other
+        let d = |p: ElementId, q: ElementId| {
+            let (px, py) = e.sketch.point(p).unwrap();
+            let (qx, qy) = e.sketch.point(q).unwrap();
+            let (dx, dy) = (
+                (px.get() - qx.get()) as f64,
+                (py.get() - qy.get()) as f64,
+            );
+            (dx * dx + dy * dy).sqrt()
+        };
+        assert!((d(ids[0], ids[1]) - d(ids[0], ids[2])).abs() < 1000.0);
+
+        let mut e = editor();
+        rectangle(&mut e);
+        pick(&mut e, &[5, 6, 7, 8]);
+        assert!(e.available().contains(&ConstraintTool::EqualAngle));
+        assert!(e.available().contains(&ConstraintTool::Equal));
+        pick(&mut e, &[5, 6, 7]);
+        assert!(!e.available().contains(&ConstraintTool::EqualAngle));
+        pick(&mut e, &[5, 6, 7, 8]);
+        e.add_constraint(ConstraintTool::EqualAngle);
+        let made = e.sketch.constraints().last().unwrap().constraint.clone();
+        assert!(matches!(made, Constraint::EqualAngle { .. }), "{made:?}");
+        assert_eq!(constraint_msg(&made), Msg::CoEqualAngle);
+        for l in Lang::ALL {
+            assert!(!Msg::CoEquidistant.tr(l).is_empty());
+            assert_ne!(Msg::CoEqualAngle.tr(l), Msg::CoEqual.tr(l));
+        }
     }
 
     #[test]

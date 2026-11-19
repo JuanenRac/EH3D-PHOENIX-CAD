@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **Equidistant and equal-angle buttons in the sketch window, in the eight languages:** the two constraints that until now could only be typed into a sketch file have their buttons in the constraints panel and the menu of the canvas. Three points picked make *Equidistant* (the first one picked is as far from the second as from the third) and four lines picked make *Equal angle* (the angle from the first to the second is the one from the third to the fourth); each has its own name in the eight languages in the list of constraints (they were listed as *Equal*), and the buttons are offered only for those selections. 1 test.
+
 ## [0.0.8] - Sheets of views with paper sizes and scales, more sketch constraints, new mates and a bill of materials by name
 
 - **Every kind of mate against its own relation, with a fixed seed:** for 4000 random positions and sizes (odd ones included) the position that each kind of mate gives (gap, stack, align, inset, offset, symmetric and proportion) is checked against the relation it names, a gap by its distance from the face, an inset by its margin, the middles by twice their value (so that a half nanometre cannot hide), and the kinds that name the middles are refused together exactly when the two sizes differ by an odd number of nanometres. 1 test.
