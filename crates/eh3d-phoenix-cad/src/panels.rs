@@ -56,11 +56,13 @@ pub enum Panel {
     Mates,
     /// The changes that can be undone and redone, and going to any of them.
     History,
+    /// A placed part repeated along a line, over a grid or round an axis.
+    PartPattern,
 }
 
 impl Panel {
     /// Every panel, in the order of the menu.
-    pub const ALL: [Panel; 13] = [
+    pub const ALL: [Panel; 14] = [
         Panel::CutPlan,
         Panel::Holes,
         Panel::Clearance,
@@ -73,6 +75,7 @@ impl Panel {
         Panel::ImportDxf,
         Panel::Bom,
         Panel::Mates,
+        Panel::PartPattern,
         Panel::History,
     ];
 
@@ -92,6 +95,7 @@ impl Panel {
             Panel::Bom => Msg::PanelBom,
             Panel::Mates => Msg::PanelMates,
             Panel::History => Msg::PanelHistory,
+            Panel::PartPattern => Msg::PanelPartPattern,
         }
     }
 }
@@ -134,6 +138,42 @@ impl Default for MateDraft {
             distance: "0".to_string(),
             plane: "0".to_string(),
             turn: "90".to_string(),
+        }
+    }
+}
+
+/// A pattern of a part being written in the pattern panel: every value as the text the person
+/// types or picks, so that a half-typed value is kept until the copies are added. The part is a
+/// place in the list that [`crate::window::Window::part_pattern_choices`] gives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartPatternDraft {
+    /// The place of the part that is repeated, in the list of parts.
+    pub part: usize,
+    /// The layout: `linear`, `grid` or `circular`.
+    pub kind: String,
+    /// The positions of a line or of a circle, or the columns of a grid.
+    pub count: String,
+    /// The rows of a grid.
+    pub rows: String,
+    /// The step of a line along `x`, `y` and `z`, or the pitch of a grid along `x` and `y`.
+    pub step: [String; 3],
+    /// The axis of a circle as a point (`x`, `y`).
+    pub center: [String; 2],
+    /// The angle between two positions of a circle, in whole degrees.
+    pub angle: String,
+}
+
+impl Default for PartPatternDraft {
+    /// A line of four positions 10 mm apart along `x`, with the values of the shipped settings.
+    fn default() -> PartPatternDraft {
+        PartPatternDraft {
+            part: 0,
+            kind: "linear".to_string(),
+            count: "4".to_string(),
+            rows: "2".to_string(),
+            step: ["10".to_string(), "0".to_string(), "0".to_string()],
+            center: ["5".to_string(), "5".to_string()],
+            angle: "90".to_string(),
         }
     }
 }
@@ -233,6 +273,8 @@ pub struct PanelState {
     pub import_look: String,
     /// The mate being written in the mates panel.
     pub mate: MateDraft,
+    /// The pattern being written in the pattern panel.
+    pub part_pattern: PartPatternDraft,
     /// The number of the step being typed in the history panel to go to.
     pub history_goto: String,
 }
@@ -265,6 +307,7 @@ impl PanelState {
             import_lines: Vec::new(),
             import_look: String::new(),
             mate: MateDraft::default(),
+            part_pattern: PartPatternDraft::default(),
             history_goto: String::new(),
         }
     }

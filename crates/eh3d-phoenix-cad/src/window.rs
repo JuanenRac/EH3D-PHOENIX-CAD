@@ -8,6 +8,7 @@
 //! it, so a refused value leaves the project exactly as it was.
 
 mod mates;
+mod part_patterns;
 mod sections;
 mod steps;
 
@@ -2388,7 +2389,9 @@ impl Window {
                 text
             }),
             Panel::Balance => self.balance().map(|b| panels::balance_text_in(&b, lang)),
-            Panel::Section | Panel::ImportDxf | Panel::Mates => Ok(String::new()),
+            Panel::Section | Panel::ImportDxf | Panel::Mates | Panel::PartPattern => {
+                Ok(String::new())
+            }
             Panel::History => Ok(self.history_text()),
             Panel::SketchExport | Panel::Revolve => Ok(if self.mech.sketches.is_empty() {
                 Msg::PanelNoSketch.tr(lang).to_string()
@@ -6183,6 +6186,173 @@ mod tests {
         std::fs::write(dir.0.join("bad.dxf"), "this is not a drawing\n").unwrap();
         assert!(w.dxf_preview(&dir.0.join("bad.dxf"), "mm", "").is_none());
         assert!(w.dxf_preview(&file, "mm", "missing").is_none());
+    }
+
+    /// A window with one tube of the library placed at the origin (40 x 20 mm across, 300 mm long
+    /// along z) and a pattern draft for it.
+    fn pattern_window() -> (Window, crate::panels::PartPatternDraft) {
+        let mut w = with_library();
+        choose_part(&mut w, "tube-40x20");
+        w.add_step(NewStep::Part);
+        assert!(!w.status.is_problem(), "{:?}", w.status);
+        let draft = w.part_pattern_draft_new();
+        (w, draft)
+    }
+
+    #[test]
+    fn a_pattern_of_a_part_adds_a_step_for_each_copy_in_one_entry_of_the_history() {
+        let (mut w, mut draft) = pattern_window();
+        assert_eq!(draft.kind, "linear");
+        assert_eq!((draft.count.as_str(), draft.step[0].as_str()), ("4", "10"));
+        draft.step[0] = "100".into();
+        draft.count = "3".into();
+        let before = w.mech.steps.len();
+        assert!(w.add_part_pattern(&draft), "{:?}", w.status);
+        assert_eq!(w.mech.steps.len(), before + 2);
+        assert_eq!(w.enclosure().parts().len(), 3);
+        // the copies are named after the part and stand 100 mm apart along x
+        assert_eq!(w.mech.steps[1].name, "Part 1 2");
+        assert_eq!(part_of(&w, 1).at, [mm_len(100), mm_len(0), mm_len(0)]);
+        assert_eq!(part_of(&w, 2).at, [mm_len(200), mm_len(0), mm_len(0)]);
+        assert_eq!(part_of(&w, 2).part, part_of(&w, 0).part);
+        assert_eq!(w.selection, Selection::Part(1));
+        assert!(w.dirty);
+        assert_eq!(w.status.text(Lang::En), "Pattern of Part 1: 2 copies added");
+        // one undo takes both copies away, one redo brings them back
+        w.undo();
+        assert_eq!(w.mech.steps.len(), before);
+        assert_eq!(w.enclosure().parts().len(), 1);
+        w.redo();
+        assert_eq!(w.enclosure().parts().len(), 3);
+        // the ids of the copies are all different
+        let ids: std::collections::BTreeSet<_> = w.enclosure().parts().keys().collect();
+        assert_eq!(ids.len(), 3);
+    }
+
+    #[test]
+    fn a_pattern_that_the_model_refuses_adds_nothing() {
+        let (mut w, mut draft) = pattern_window();
+        // 20 mm apart while the tube is 40 mm wide: the copies would share volume
+        draft.step[0] = "20".into();
+        draft.count = "3".into();
+        let before = w.mech.clone();
+        assert!(!w.add_part_pattern(&draft));
+        assert!(w.status.is_problem(), "{:?}", w.status);
+        assert_eq!(w.mech, before);
+        assert!(!w.can_redo());
+        // so does a count above the limit of the settings, a step of nothing and a bad value
+        w.settings.design.part_pattern_max = 3;
+        draft.step[0] = "100".into();
+        draft.count = "4".into();
+        assert!(!w.add_part_pattern(&draft));
+        assert!(w.status.text(Lang::En).contains("more than the 3"));
+        draft.count = "3".into();
+        draft.step[0] = "0".into();
+        assert!(!w.add_part_pattern(&draft));
+        draft.step[0] = "far".into();
+        assert!(!w.add_part_pattern(&draft));
+        draft.step[0] = "100".into();
+        draft.count = "many".into();
+        assert!(!w.add_part_pattern(&draft));
+        draft.count = "3".into();
+        draft.kind = "spiral".into();
+        assert!(!w.add_part_pattern(&draft));
+        assert_eq!(w.mech, before);
+        // and a project that was opened read-only is not changed
+        draft.kind = "linear".into();
+        w.read_only = true;
+        assert!(!w.add_part_pattern(&draft));
+        assert_eq!(w.mech, before);
+    }
+
+    #[test]
+    fn a_grid_and_a_circle_of_parts_follow_their_layouts() {
+        let (mut w, mut draft) = pattern_window();
+        draft.kind = "grid".into();
+        draft.count = "2".into();
+        draft.rows = "2".into();
+        draft.step = ["100".into(), "60".into(), "0".into()];
+        let copies = w.part_pattern_copies(&draft).unwrap();
+        let at: Vec<[Length; 3]> = copies.iter().map(|c| c.at).collect();
+        assert_eq!(
+            at,
+            vec![
+                [mm_len(100), mm_len(0), mm_len(0)],
+                [mm_len(0), mm_len(60), mm_len(0)],
+                [mm_len(100), mm_len(60), mm_len(0)]
+            ]
+        );
+        assert!(w.add_part_pattern(&draft), "{:?}", w.status);
+        assert_eq!(w.enclosure().parts().len(), 4);
+        // a circle of four positions about a centre 150 mm from the origin along x
+        let (mut c, mut draft) = pattern_window();
+        draft.kind = "circular".into();
+        draft.count = "4".into();
+        draft.center = ["150".into(), "0".into()];
+        draft.angle = "90".into();
+        let at: Vec<[Length; 3]> = c
+            .part_pattern_copies(&draft)
+            .unwrap()
+            .iter()
+            .map(|p| p.at)
+            .collect();
+        assert_eq!(
+            at,
+            vec![
+                [mm_len(150), mm_len(-150), mm_len(0)],
+                [mm_len(300), mm_len(0), mm_len(0)],
+                [mm_len(150), mm_len(150), mm_len(0)]
+            ]
+        );
+        assert!(c.add_part_pattern(&draft), "{:?}", c.status);
+        assert_eq!(c.enclosure().parts().len(), 4);
+    }
+
+    #[test]
+    fn the_pattern_panel_lists_the_positions_draws_the_plan_and_tells_what_the_trial_found() {
+        let (mut w, mut draft) = pattern_window();
+        draft.step[0] = "100".into();
+        draft.count = "3".into();
+        let text = w.part_pattern_text(&draft);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], "Pattern of Part 1: 3 positions");
+        assert_eq!(lines[1], "1. Part 1 at 0.000 mm, 0.000 mm, 0.000 mm");
+        assert_eq!(lines[3], "3. Part 1 3 at 200.000 mm, 0.000 mm, 0.000 mm");
+        assert_eq!(
+            lines[4],
+            "The pattern is accepted and no pair of parts would share volume."
+        );
+        // the plan has the box of each position, the part itself marked
+        let side = 240.0;
+        let plan = w.part_pattern_lines(&draft, side);
+        assert_eq!(plan.len(), 12);
+        assert_eq!(plan.iter().filter(|l| l.hole).count(), 4);
+        // only the first lines are listed when there are many positions
+        w.ui.panels.part_pattern_shown = 2;
+        let text = w.part_pattern_text(&draft);
+        assert!(text.contains("... and 1 more"), "{text}");
+        assert!(!text.contains("3. Part 1 3"), "{text}");
+        // a refusal is told in the language of the window, and the project is as it was
+        w.lang = Lang::Es;
+        draft.step[0] = "20".into();
+        let before = w.mech.clone();
+        let text = w.part_pattern_text(&draft);
+        assert!(text.contains("El patrón se rechaza"), "{text}");
+        draft.count = "1".into();
+        assert!(w.part_pattern_text(&draft).contains("El patrón se rechaza"));
+        assert!(w.part_pattern_lines(&draft, side).is_empty());
+        assert_eq!(w.mech, before);
+        // no part, no pattern
+        let empty = fresh();
+        assert_eq!(
+            empty.part_pattern_text(&draft),
+            "Place a part in the model first."
+        );
+        assert!(empty.part_pattern_choices().is_empty());
+        assert!(empty.part_pattern_lines(&draft, side).is_empty());
+        for l in Lang::ALL {
+            assert!(!Msg::PartPatAdded.tr(l).is_empty());
+        }
     }
 
     #[test]

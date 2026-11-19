@@ -110,6 +110,7 @@ impl App {
     fn new(win: Window, sketch: SketchEditor, workspace: StartView) -> App {
         let mut panels = PanelState::new(&win.ui.panels, win.ui.export.overwrite);
         panels.mate = win.mate_draft_new();
+        panels.part_pattern = win.part_pattern_draft_new();
         App {
             win,
             panels,
@@ -884,6 +885,7 @@ impl App {
         let mut import = false;
         let mut look = false;
         let mut add_mate = false;
+        let mut add_pattern = false;
         let mut write_all = false;
         let mut undo_now = false;
         let mut redo_now = false;
@@ -891,6 +893,12 @@ impl App {
         let choices: Vec<String> = self
             .win
             .mate_choices()
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect();
+        let part_choices: Vec<String> = self
+            .win
+            .part_pattern_choices()
             .into_iter()
             .map(|(_, name)| name)
             .collect();
@@ -1071,6 +1079,90 @@ impl App {
                         }
                         if ui.button(Msg::MatesAddDo.tr(lang)).clicked() {
                             add_mate = true;
+                        }
+                    }
+                    Panel::PartPattern if !part_choices.is_empty() => {
+                        let draft = &mut self.panels.part_pattern;
+                        if draft.part >= part_choices.len() {
+                            draft.part = 0;
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label(Msg::PartPatPart.tr(lang));
+                            egui::ComboBox::from_id_salt("panel-pattern-part")
+                                .selected_text(part_choices[draft.part].clone())
+                                .show_ui(ui, |ui| {
+                                    for (i, n) in part_choices.iter().enumerate() {
+                                        ui.selectable_value(&mut draft.part, i, n.as_str());
+                                    }
+                                });
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(Msg::PartPatKind.tr(lang));
+                            for (word, msg) in [
+                                ("linear", Msg::PartPatLinear),
+                                ("grid", Msg::PartPatGrid),
+                                ("circular", Msg::PartPatCircular),
+                            ] {
+                                ui.selectable_value(
+                                    &mut draft.kind,
+                                    word.to_string(),
+                                    msg.tr(lang),
+                                );
+                            }
+                        });
+                        let kind = draft.kind.clone();
+                        ui.horizontal(|ui| {
+                            ui.label(Msg::PartPatCount.tr(lang));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut draft.count).desired_width(60.0),
+                            );
+                            if kind == "grid" {
+                                ui.label(Msg::PartPatRows.tr(lang));
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut draft.rows).desired_width(60.0),
+                                );
+                            }
+                        });
+                        if kind == "circular" {
+                            ui.horizontal(|ui| {
+                                ui.label(Msg::PartPatCenter.tr(lang));
+                                for value in draft.center.iter_mut() {
+                                    ui.add(egui::TextEdit::singleline(value).desired_width(60.0));
+                                }
+                                ui.label(Msg::PartPatAngle.tr(lang));
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut draft.angle)
+                                        .desired_width(60.0),
+                                );
+                            });
+                        } else {
+                            let used = if kind == "grid" { 2 } else { 3 };
+                            ui.horizontal(|ui| {
+                                ui.label(Msg::PartPatStep.tr(lang));
+                                for value in draft.step.iter_mut().take(used) {
+                                    ui.add(egui::TextEdit::singleline(value).desired_width(60.0));
+                                }
+                            });
+                        }
+                        let side = self.win.ui.panels.pattern_preview_size as f64;
+                        let lines = self.win.part_pattern_lines(&self.panels.part_pattern, side);
+                        if !lines.is_empty() {
+                            let (response, painter) = ui.allocate_painter(
+                                Vec2::new(side as f32, side as f32),
+                                egui::Sense::hover(),
+                            );
+                            let rect = response.rect;
+                            painter.rect_filled(rect, 0.0, BACKGROUND);
+                            for l in &lines {
+                                let at = |p: (f64, f64)| {
+                                    Pos2::new(rect.min.x + p.0 as f32, rect.min.y + p.1 as f32)
+                                };
+                                let colour = if l.hole { ACCENT } else { OK };
+                                painter.line_segment([at(l.a), at(l.b)], Stroke::new(1.5, colour));
+                            }
+                        }
+                        if ui.button(Msg::PartPatAddDo.tr(lang)).clicked() {
+                            add_pattern = true;
                         }
                     }
                     Panel::Revolve if !names.is_empty() => {
@@ -1329,6 +1421,8 @@ impl App {
                         self.panels.import_report.clone()
                     } else if panel == Panel::Mates {
                         self.win.mates_panel_text(&self.panels.mate)
+                    } else if panel == Panel::PartPattern {
+                        self.win.part_pattern_text(&self.panels.part_pattern)
                     } else if panel == Panel::Section {
                         self.win.sections_panel_text(
                             self.panels.section_axis,
@@ -1372,6 +1466,10 @@ impl App {
         if add_mate {
             let draft = self.panels.mate.clone();
             self.win.add_mate_from_draft(&draft);
+        }
+        if add_pattern {
+            let draft = self.panels.part_pattern.clone();
+            self.win.add_part_pattern(&draft);
         }
         if choose {
             self.open_dxf_dialog();

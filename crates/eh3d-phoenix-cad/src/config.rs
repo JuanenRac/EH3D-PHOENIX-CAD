@@ -92,6 +92,8 @@ impl MechanicalLimits {
 pub struct DesignLimits {
     /// The most positions of one pattern of holes or posts.
     pub pattern_max: u32,
+    /// The most positions of one pattern of parts of the catalog.
+    pub part_pattern_max: u32,
     /// The most fins of one set of cooling fins.
     pub fin_max_count: u32,
     /// The thinnest fin.
@@ -130,6 +132,13 @@ impl DesignLimits {
                 Self::PATTERN_CAP
             )));
         }
+        let part_pattern_max = c.number("pattern.max_parts")?;
+        if !(2..=Self::PATTERN_CAP).contains(&part_pattern_max) {
+            return Err(CadError::Config(format!(
+                "pattern.max_parts must be from 2 to {}",
+                Self::PATTERN_CAP
+            )));
+        }
         let fin_max_count = c.number("fins.max_count")?;
         if !(1..=Self::FIN_CAP).contains(&fin_max_count) {
             return Err(CadError::Config(format!(
@@ -156,6 +165,7 @@ impl DesignLimits {
         }
         Ok(DesignLimits {
             pattern_max,
+            part_pattern_max,
             fin_max_count,
             fin_min_thickness,
             fin_min_gap,
@@ -1446,11 +1456,17 @@ markup_percent = 1000
             "[pattern]\nmax_count = 1\n",
             "[pattern]\nmax_count = 10001\n",
             "[pattern]\nmax_count = lots\n",
+            "[pattern]\nmax_parts = 1\n",
+            "[pattern]\nmax_parts = 10001\n",
+            "[pattern]\nmax_parts = many\n",
         ] {
             let err = Settings::with_user_config(text).unwrap_err();
             assert_eq!(err.code(), "PHOENIX-CAD-011", "{text:?}: {err}");
         }
         assert_eq!(DesignLimits::shipped().pattern_max, 256);
+        assert_eq!(DesignLimits::shipped().part_pattern_max, 64);
+        let few = Settings::with_user_config("[pattern]\nmax_parts = 3\n").unwrap();
+        assert_eq!(few.design.part_pattern_max, 3);
         for text in [
             "[fins]\nmax_count = 0\n",
             "[fins]\nmax_count = 10001\n",

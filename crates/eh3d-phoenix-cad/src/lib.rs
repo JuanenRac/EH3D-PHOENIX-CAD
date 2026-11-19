@@ -115,6 +115,7 @@ pub mod nesting;
 pub mod panels;
 pub mod parametric;
 pub mod partlist;
+pub mod partpattern;
 pub mod pattern;
 pub mod placement;
 pub mod printer;
