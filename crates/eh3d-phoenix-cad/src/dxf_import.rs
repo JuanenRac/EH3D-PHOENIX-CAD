@@ -47,6 +47,39 @@ pub fn unit_nm(word: &str) -> Option<i64> {
     }
 }
 
+/// The unit that the header of a text DXF drawing declares in `$INSUNITS`, as the word of
+/// [`UNITS`] (`in` for 1, `mm` for 4, `cm` for 5 and `m` for 6); `None` when the header has no
+/// such variable or declares another unit or none (0). Refused with `PHOENIX-CAD-035` when the
+/// text is not a text DXF drawing.
+pub fn header_unit(text: &str) -> Result<Option<&'static str>, CadError> {
+    let pairs = parse_pairs(text)?;
+    let value = pairs
+        .windows(2)
+        .find(|w| w[0] == (9, "$INSUNITS") && w[1].0 == 70)
+        .and_then(|w| w[1].1.parse::<i32>().ok());
+    Ok(match value {
+        Some(1) => Some("in"),
+        Some(4) => Some("mm"),
+        Some(5) => Some("cm"),
+        Some(6) => Some("m"),
+        _ => None,
+    })
+}
+
+/// The nanometres of one unit of a drawing whose unit was asked for as `auto`, with a line in the
+/// language that says where the unit came from: the one the header declares, or millimetres when
+/// it declares none.
+pub fn auto_unit(text: &str, lang: Lang) -> Result<(i64, String), CadError> {
+    let (word, msg) = match header_unit(text)? {
+        Some(word) => (word, Msg::DxfUnitRead),
+        None => ("mm", Msg::DxfUnitDefault),
+    };
+    Ok((
+        unit_nm(word).unwrap_or(1_000_000),
+        fill(msg.tr(lang), &[word]),
+    ))
+}
+
 /// What was read as lines of text in the language: how many lines, circles and arcs, then one
 /// line for each kind of entity that was left out.
 pub fn report_text(import: &Import, lang: Lang) -> String {
@@ -681,6 +714,54 @@ mod tests {
 
     fn dxf(entities: &str) -> String {
         format!("0\nSECTION\n2\nENTITIES\n{entities}0\nENDSEC\n0\nEOF\n")
+    }
+
+    #[test]
+    fn the_header_says_the_unit_of_the_drawing() {
+        let with = |unit: &str| {
+            format!("0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1009\n9\n$INSUNITS\n70\n{unit}\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n")
+        };
+        for (code, word) in [("1", "in"), ("4", "mm"), ("5", "cm"), ("6", "m")] {
+            assert_eq!(header_unit(&with(code)).unwrap(), Some(word), "{code}");
+        }
+        // unitless, an unknown unit and a value that is not a number say nothing
+        for code in ["0", "2", "14", "x", ""] {
+            assert_eq!(header_unit(&with(code)).unwrap(), None, "{code:?}");
+        }
+        // no header, and a variable with the wrong group code
+        let none = "0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n";
+        assert_eq!(header_unit(none).unwrap(), None);
+        let odd = "0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n40\n4\n0\nENDSEC\n";
+        assert_eq!(header_unit(odd).unwrap(), None);
+        // a text that is not a text DXF file is refused
+        assert_eq!(
+            header_unit("hello\nworld\n").unwrap_err().code(),
+            "PHOENIX-CAD-035"
+        );
+    }
+
+    #[test]
+    fn an_automatic_unit_is_the_one_of_the_header_or_millimetres_and_says_which() {
+        let header =
+            |unit: &str| format!("0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n{unit}\n0\nENDSEC\n");
+        let (nm, note) = auto_unit(&header("1"), Lang::En).unwrap();
+        assert_eq!(nm, 25_400_000);
+        assert_eq!(note, "unit read from the drawing: in");
+        let (nm, note) = auto_unit(&header("6"), Lang::Es).unwrap();
+        assert_eq!(nm, 1_000_000_000);
+        assert_eq!(note, "unidad leída del dibujo: m");
+        let (nm, note) = auto_unit(&header("0"), Lang::Pt).unwrap();
+        assert_eq!(nm, 1_000_000);
+        assert_eq!(
+            note,
+            "o desenho não indica a sua unidade, por isso usa-se mm"
+        );
+        // every language has both lines with the unit in them
+        for lang in Lang::ALL {
+            for text in [header("4"), header("0")] {
+                assert!(auto_unit(&text, lang).unwrap().1.contains("mm"), "{lang:?}");
+            }
+        }
     }
 
     fn line(x1: f64, y1: f64, x2: f64, y2: f64) -> String {

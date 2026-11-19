@@ -3811,12 +3811,13 @@ impl Window {
         if self.read_only_refusal() {
             return None;
         }
-        let Some(unit_nm) = crate::dxf_import::unit_nm(unit) else {
+        let fixed = crate::dxf_import::unit_nm(unit);
+        if fixed.is_none() && !unit.trim().eq_ignore_ascii_case("auto") {
             self.status = Status::Error(CadError::SketchFile(format!(
-                "{unit} is not a unit of a drawing (mm, cm, m or in)"
+                "{unit} is not a unit of a drawing (mm, cm, m, in or auto)"
             )));
             return None;
-        };
+        }
         let name = match name.trim() {
             "" => path
                 .file_stem()
@@ -3825,7 +3826,16 @@ impl Window {
             typed => typed.to_string(),
         };
         let chosen = Self::layer_names(layers);
+        let mut unit_note = None;
         let read = self.dxf_text(path).and_then(|text| {
+            let unit_nm = match fixed {
+                Some(nm) => nm,
+                None => {
+                    let (nm, note) = crate::dxf_import::auto_unit(&text, self.lang)?;
+                    unit_note = Some(note);
+                    nm
+                }
+            };
             crate::dxf_import::from_dxf_layers(
                 &text,
                 &name,
@@ -3838,7 +3848,11 @@ impl Window {
         });
         match read {
             Ok(imported) => {
-                let report = crate::dxf_import::report_text(&imported, self.lang);
+                let mut report = crate::dxf_import::report_text(&imported, self.lang);
+                if let Some(note) = unit_note {
+                    report.push('\n');
+                    report.push_str(&note);
+                }
                 self.keep_sketch(imported.sketch);
                 (!self.status.is_problem()).then_some(report)
             }
@@ -3860,14 +3874,19 @@ impl Window {
         unit: &str,
         layers: &str,
     ) -> Option<(String, Vec<crate::section::PreviewLine>)> {
-        let Some(unit_nm) = crate::dxf_import::unit_nm(unit) else {
+        let fixed = crate::dxf_import::unit_nm(unit);
+        if fixed.is_none() && !unit.trim().eq_ignore_ascii_case("auto") {
             self.status = Status::Error(CadError::SketchFile(format!(
-                "{unit} is not a unit of a drawing (mm, cm, m or in)"
+                "{unit} is not a unit of a drawing (mm, cm, m, in or auto)"
             )));
             return None;
-        };
+        }
         let chosen = Self::layer_names(layers);
         let looked = self.dxf_text(path).and_then(|text| {
+            let unit_nm = match fixed {
+                Some(nm) => nm,
+                None => crate::dxf_import::auto_unit(&text, self.lang)?.0,
+            };
             let found = crate::dxf_import::layers(&text)?;
             let imported = crate::dxf_import::from_dxf_layers(
                 &text,
@@ -6067,6 +6086,52 @@ mod tests {
             line(side, side, 0.0, side),
             line(0.0, side, 0.0, 0.0)
         )
+    }
+
+    #[test]
+    fn the_unit_of_a_drawing_can_be_read_from_its_header_when_it_is_typed_as_auto() {
+        let dir = Scratch::new("dxfauto");
+        let body = square_dxf(2.0);
+        let header = |unit: &str| {
+            format!("0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n{unit}\n0\nENDSEC\n{body}")
+        };
+        let inches = dir.0.join("inches.dxf");
+        std::fs::write(&inches, header("1")).unwrap();
+        let plain = dir.0.join("plain.dxf");
+        std::fs::write(&plain, body).unwrap();
+        let mut w = fresh();
+        let limits = ProfileLimits::from_settings(&w.sketch_settings);
+        let area = |s: &Sketch| {
+            crate::profile::Profile::from_sketch(s, &limits)
+                .unwrap()
+                .area_nm2()
+        };
+        let report = w
+            .import_dxf(&inches, "in", Face::Front, "auto")
+            .expect("imported");
+        assert!(report.starts_with("read: 4 lines"), "{report}");
+        assert!(
+            report.ends_with("unit read from the drawing: in"),
+            "{report}"
+        );
+        // the square of two inches is 50.8 mm across
+        let found = w.find_sketch(Some("in")).unwrap();
+        assert!(
+            (area(&found) - 2.58064e15).abs() < 1.0e9,
+            "{}",
+            area(&found)
+        );
+        // a drawing that says nothing is read in millimetres and the report says so
+        let report = w
+            .import_dxf(&plain, "plain", Face::Front, "AUTO")
+            .expect("imported");
+        assert!(report.ends_with("so mm is used"), "{report}");
+        let found = w.find_sketch(Some("plain")).unwrap();
+        assert!((area(&found) - 4.0e12).abs() < 1.0e6, "{}", area(&found));
+        // the preview takes it too, and a word that is no unit is still refused
+        assert!(w.dxf_preview(&inches, "auto", "").is_some());
+        assert!(w.import_dxf(&plain, "x", Face::Front, "yd").is_none());
+        assert!(w.dxf_preview(&plain, "yd", "").is_none());
     }
 
     #[test]

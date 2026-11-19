@@ -1270,6 +1270,11 @@ impl App {
                                     unit,
                                 );
                             }
+                            ui.selectable_value(
+                                &mut self.panels.import_unit,
+                                "auto".to_string(),
+                                "auto",
+                            );
                         });
                         ui.horizontal(|ui| {
                             ui.label(Msg::PanelImportLayers.tr(lang));

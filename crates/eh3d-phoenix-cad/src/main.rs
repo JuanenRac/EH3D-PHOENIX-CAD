@@ -35,7 +35,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad balance PROJECT.phoenixproj [--lang CODE] [--config FILE]                     the mass of the placed parts and where their centre of mass is (exact for profiles, an estimate for screws and brackets, and the number of estimated parts is said)
   eh3d-phoenix-cad revolve PROJECT.phoenixproj|SKETCH.phoenixsketch --axis x|y [--angle DEGREES] [--sketch NAME] [--material NAME] [--out FILE.stl|.obj|.3mf [--overwrite]] [--lang CODE] [--config FILE]   turns a sketch (the only one of the project, or the one named) about its first or second axis, by a full turn unless --angle says less, and prints the volume, the surface and the distances from the axis of the solid made and, with a material of the settings, its mass; the profile must not cross the axis; with --out the triangles of the solid are written to a file of the format its extension says (never over a file that exists unless --overwrite is given)
   eh3d-phoenix-cad sweep PROFILE --path PATH [--profile-sketch NAME] [--path-sketch NAME] [--material NAME] [--out FILE.stl|.obj|.3mf [--overwrite]] [--lang CODE] [--config FILE]   sweeps the profile (a project or a sketch file, and the sketch of it) along the path (the lines and arcs of another sketch, or one circle) and prints the length of the path, the volume and the surface of the solid made and, with a material of the settings, its mass; the profile starts on the path, its first axis to the left of the way the path is walked from the free end of its first element; with --out the triangles of the solid are written as for revolve
-  eh3d-phoenix-cad sketch-import DRAWING.dxf [--out FILE.phoenixsketch] [--name NAME] [--face NAME] [--unit mm|cm|m|in] [--layers NAME,NAME] [--list-layers] [--overwrite] [--lang CODE] [--config FILE]   reads the lines, circles, arcs and polylines of a text DXF drawing into a new sketch (the ends that meet become one point, so closed outlines can be raised from a face or cut into it) and writes it as a sketch file; what is not read (text, dimensions, splines, ...) is counted and told; --layers reads only the entities of the layers named and counts the others, --list-layers prints the layers of the drawing with their entities and writes nothing; the unit is that of the drawing (mm without --unit), the sketch lies on the face given (front without --face), and its name is the one of the file without --name
+  eh3d-phoenix-cad sketch-import DRAWING.dxf [--out FILE.phoenixsketch] [--name NAME] [--face NAME] [--unit mm|cm|m|in|auto] [--layers NAME,NAME] [--list-layers] [--overwrite] [--lang CODE] [--config FILE]   reads the lines, circles, arcs and polylines of a text DXF drawing into a new sketch (the ends that meet become one point, so closed outlines can be raised from a face or cut into it) and writes it as a sketch file; what is not read (text, dimensions, splines, ...) is counted and told; --layers reads only the entities of the layers named and counts the others, --list-layers prints the layers of the drawing with their entities and writes nothing; the unit is that of the drawing (mm without --unit; auto reads it from the header of the drawing and tells where it came from), the sketch lies on the face given (front without --face), and its name is the one of the file without --name
   eh3d-phoenix-cad section PROJECT.phoenixproj --axis x|y|z --at LENGTH [--format dxf|svg] [--out FILE] [--overwrite] [--lang CODE] [--config FILE]   cuts the solids of a project (the box, the parts and the turned and swept bodies) with the plane across an axis at a position (a length: 15, 15 mm, 0.5 in) and prints the outlines and the area of the material; with --out the section is written as a DXF or SVG drawing (the format is --format or the extension of the file; never over a file that exists unless --overwrite is given)
   eh3d-phoenix-cad library FILE.phoenixlib [--config FILE]                        reads a library of parts, checks it and lists its parts
   eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill|order [--view top|front|side|sheet] [--out FILE] [--overwrite] [--ascii|--binary] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), as a Wavefront file (obj) or as a 3MF package (3mf), the plan, front or side, or all three on one sheet, as a drawing (dxf, svg), the STEP file, the OpenSCAD-style script, the fit report, the bill of materials or the order sheet (an HTML page with the bars to buy, the holes to drill and the parts with their cost, in the language of --lang)
@@ -704,7 +704,7 @@ fn run_sketch_import(args: &[String]) -> Result<bool, String> {
     let mut out: Option<PathBuf> = None;
     let mut name: Option<String> = None;
     let mut face = eh3d_phoenix_cad::enclosure::Face::Front;
-    let mut unit_nm: i64 = 1_000_000;
+    let mut unit_nm: Option<i64> = Some(1_000_000);
     let mut overwrite = false;
     let mut chosen: Vec<String> = Vec::new();
     let mut list_layers = false;
@@ -736,13 +736,14 @@ fn run_sketch_import(args: &[String]) -> Result<bool, String> {
                 })?;
             }
             "--unit" => {
-                let word = iter.next().ok_or("--unit needs mm, cm, m or in")?;
+                let word = iter.next().ok_or("--unit needs mm, cm, m, in or auto")?;
                 unit_nm = match word.as_str() {
-                    "mm" => 1_000_000,
-                    "cm" => 10_000_000,
-                    "m" => 1_000_000_000,
-                    "in" => 25_400_000,
-                    other => return Err(format!("{other}: unknown unit (mm, cm, m or in)")),
+                    "auto" => None,
+                    other => {
+                        Some(eh3d_phoenix_cad::dxf_import::unit_nm(other).ok_or_else(|| {
+                            format!("{other}: unknown unit (mm, cm, m, in or auto)")
+                        })?)
+                    }
                 };
             }
             "--overwrite" => overwrite = true,
@@ -782,6 +783,16 @@ fn run_sketch_import(args: &[String]) -> Result<bool, String> {
             .unwrap_or_default()
     });
     let join = eh3d_phoenix_cad::profile::ProfileLimits::from_settings(&solver).join_nm;
+    let mut unit_note = None;
+    let unit_nm = match unit_nm {
+        Some(nm) => nm,
+        None => {
+            let (nm, note) = eh3d_phoenix_cad::dxf_import::auto_unit(&text, lang)
+                .map_err(|e| format!("{}: {}", file.display(), error_text(&e, lang)))?;
+            unit_note = Some(note);
+            nm
+        }
+    };
     let imported = eh3d_phoenix_cad::dxf_import::from_dxf_layers(
         &text,
         &name,
@@ -817,6 +828,9 @@ fn run_sketch_import(args: &[String]) -> Result<bool, String> {
             ]
         )
     );
+    if let Some(note) = unit_note {
+        println!("{note}");
+    }
     for (what, count) in &imported.skipped {
         println!(
             "{}",
