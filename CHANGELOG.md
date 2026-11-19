@@ -4,6 +4,7 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **The CI and the release build take the shared libraries at their newest releases:** the pins of the sibling repositories in the workflows are raised to the releases the program now needs, so that the build and the binaries of a release use them.
 ## [0.0.7] - Reports for cutting plans, holes, clearance and mass, turned and swept bodies in the model, more mates, sections with hatching, a DXF import window, a bill of materials with cost and automatic dimensions
 
 - **Hatching in the section drawings:** the DXF and SVG drawings of a section now hatch the material with lines at 45 degrees on a new layer `RAYADO` (a group of the same name in the SVG file), `drawing.hatch_spacing` apart measured across the lines (2 mm by default, 0 leaves the hatching out, otherwise from 0.2 mm to 100 mm). The lines are clipped to the material with the even-odd rule over all the outlines, so a hole or the cavity of a box is not hatched (`eh3d_phoenix_cad::section::hatch`); the hatching counts against `drawing.max_entities` with the outlines and a section that needs more lines is refused with `PHOENIX-CAD-050`; the DXF layer table lists the layer only when there is hatching. 2 new tests.
