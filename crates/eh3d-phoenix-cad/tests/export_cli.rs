@@ -327,3 +327,49 @@ fn the_order_sheet_is_written_as_one_html_page_in_the_language_asked() {
     assert!(page.contains("<h2>Cortes de perfil</h2>"), "{page}");
     assert!(page.contains("<html lang=\"es\">"), "{page}");
 }
+
+#[test]
+fn the_files_the_export_writes_are_read_back_by_mesh_info_in_every_format() {
+    let dir = Scratch::new("meshinfo");
+    let mut lines = Vec::new();
+    for format in ["stl", "obj", "3mf"] {
+        let file = dir.file(&format!("box.{format}"));
+        let (code, text, err) = run(&["export", EXAMPLE, "--format", format, "--out", &file]);
+        assert_eq!(code, 0, "{text} {err}");
+        let (code, text, err) = run(&["mesh-info", &file]);
+        assert_eq!(code, 0, "{text} {err}");
+        assert!(text.contains(" 1 solids"), "{text}");
+        assert!(text.contains(", closed, volume "), "{text}");
+        // the line of the solid, without its name (a file of the STL format has none)
+        let line = text.lines().nth(1).unwrap().trim().to_owned();
+        lines.push(line.split_once(": ").unwrap().1.to_owned());
+    }
+    // the three formats hold the same surface (the STL file keeps single precision, so only the
+    // counts and the size to the micron are compared)
+    let counts = |s: &str| s.split(", closed").next().unwrap().to_owned();
+    assert_eq!(counts(&lines[0]), counts(&lines[1]));
+    assert_eq!(counts(&lines[1]), counts(&lines[2]));
+}
+
+#[test]
+fn mesh_info_refuses_what_it_cannot_read_and_exits_with_one_for_an_open_surface() {
+    let dir = Scratch::new("meshbad");
+    let (code, _, err) = run(&["mesh-info", &dir.file("missing.obj")]);
+    assert_eq!(code, 1);
+    assert!(err.contains("missing.obj"), "{err}");
+    let step = dir.file("a.step");
+    fs::write(&step, "x").unwrap();
+    let (code, _, err) = run(&["mesh-info", &step]);
+    assert_eq!(code, 1);
+    assert!(err.contains(".stl, .obj or .3mf"), "{err}");
+    let (code, _, err) = run(&["mesh-info"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("mesh file"), "{err}");
+    // one triangle is an open surface: the file is read, the answer is 1
+    let one = dir.file("one.obj");
+    fs::write(&one, "o t\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n").unwrap();
+    let (code, text, _) = run(&["mesh-info", &one]);
+    assert_eq!(code, 1);
+    assert!(text.contains("not closed"), "{text}");
+    assert!(text.contains("t: 3 vertices, 1 triangles"), "{text}");
+}

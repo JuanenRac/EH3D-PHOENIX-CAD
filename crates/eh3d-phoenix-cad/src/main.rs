@@ -38,6 +38,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad sketch-import DRAWING.dxf [--out FILE.phoenixsketch] [--name NAME] [--face NAME] [--unit mm|cm|m|in|auto] [--layers NAME,NAME] [--list-layers] [--overwrite] [--lang CODE] [--config FILE]   reads the lines, circles, arcs and polylines of a text DXF drawing into a new sketch (the ends that meet become one point, so closed outlines can be raised from a face or cut into it) and writes it as a sketch file; what is not read (text, dimensions, splines, ...) is counted and told; --layers reads only the entities of the layers named and counts the others, --list-layers prints the layers of the drawing with their entities and writes nothing; the unit is that of the drawing (mm without --unit; auto reads it from the header of the drawing and tells where it came from), the sketch lies on the face given (front without --face), and its name is the one of the file without --name
   eh3d-phoenix-cad section PROJECT.phoenixproj --axis x|y|z --at LENGTH [--format dxf|svg] [--out FILE] [--overwrite] [--lang CODE] [--config FILE]   cuts the solids of a project (the box, the parts and the turned and swept bodies) with the plane across an axis at a position (a length: 15, 15 mm, 0.5 in) and prints the outlines and the area of the material; with --out the section is written as a DXF or SVG drawing (the format is --format or the extension of the file; never over a file that exists unless --overwrite is given)
   eh3d-phoenix-cad library FILE.phoenixlib [--config FILE]                        reads a library of parts, checks it and lists its parts
+  eh3d-phoenix-cad mesh-info FILE.stl|.obj|.3mf                                   reads a file of triangles (the ones this program writes or another program's stored 3MF) and prints, for each solid in it, its vertices, triangles, whether its surface is closed, its volume, its surface and its size; it exits with 0 when every solid is closed and with 1 when one is not
   eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill|order [--view top|front|side|sheet] [--out FILE] [--overwrite] [--ascii|--binary] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), as a Wavefront file (obj) or as a 3MF package (3mf), the plan, front or side, or all three on one sheet, as a drawing (dxf, svg), the STEP file, the OpenSCAD-style script, the fit report, the bill of materials or the order sheet (an HTML page with the bars to buy, the holes to drill and the parts with their cost, in the language of --lang)
   eh3d-phoenix-cad config                                                         every setting of the library, of the window and of the sketch with its default value, as a file for --config
 
@@ -972,6 +973,47 @@ fn run_library(args: &[String]) -> Result<bool, String> {
     Ok(true)
 }
 
+/// `mesh-info`: reads an STL, OBJ or 3MF file and, for each solid in it, prints the number of
+/// vertices and triangles, whether the surface is closed, the volume, the surface and the size.
+/// The answer is whether every solid is closed.
+fn run_mesh_info(args: &[String]) -> Result<bool, String> {
+    let (file, _) = file_and_config(args, "mesh file")?;
+    let bytes = std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let name = file.to_string_lossy();
+    let bodies = eh3d_phoenix_cad::interchange::read_file_bytes(&name, &bytes)
+        .map_err(|e| format!("{}: {e}", file.display()))?;
+    println!("{}: {} solids", file.display(), bodies.len());
+    let mut all_closed = true;
+    for (solid, mesh) in &bodies {
+        let closed = mesh.check_closed();
+        all_closed &= closed.is_ok();
+        let area: f64 = mesh.triangles.iter().map(|t| mesh.area_nm2(t)).sum();
+        let size = mesh
+            .bounds()
+            .map(|(lo, hi)| {
+                format!(
+                    "{:.3} x {:.3} x {:.3} mm",
+                    (hi[0] - lo[0]) / 1.0e6,
+                    (hi[1] - lo[1]) / 1.0e6,
+                    (hi[2] - lo[2]) / 1.0e6
+                )
+            })
+            .unwrap_or_else(|| "no size".to_owned());
+        let state = match closed {
+            Ok(()) => "closed".to_owned(),
+            Err(why) => format!("not closed ({why})"),
+        };
+        println!(
+            "  {solid}: {} vertices, {} triangles, {state}, volume {:.3} mm3, surface {:.3} mm2, size {size}",
+            mesh.vertices.len(),
+            mesh.triangles.len(),
+            mesh.volume_nm3() / 1.0e18,
+            area / 1.0e12
+        );
+    }
+    Ok(all_closed)
+}
+
 /// The format of the `export` command: a word, and for the drawings the view.
 fn export_format(word: &str, view: Option<View>, sheet: bool) -> Result<Format, String> {
     match word {
@@ -1098,6 +1140,7 @@ fn run(args: &[String]) -> Result<bool, String> {
         "section" => run_section(rest),
         "sketch-import" => run_sketch_import(rest),
         "library" => run_library(rest),
+        "mesh-info" => run_mesh_info(rest),
         "export" => run_export(rest),
         "gui" => Err("this build has no window: build it with --features gui".to_owned()),
         other => Err(format!("{other}: unknown command (see help)")),
@@ -1113,7 +1156,8 @@ fn window_request(args: &[String]) -> Option<Result<shot::WindowArgs, String>> {
         Some(
             "help" | "--help" | "-h" | "config" | "check" | "interference" | "bill" | "cutplan"
             | "clearance" | "placements" | "holes" | "partlist" | "bom" | "balance" | "revolve"
-            | "sweep" | "sketch-export" | "section" | "sketch-import" | "library" | "export",
+            | "sweep" | "sketch-export" | "section" | "sketch-import" | "library" | "mesh-info"
+            | "export",
         ) => return None,
         Some(first) if first.starts_with("--") => {}
         Some(first) => {

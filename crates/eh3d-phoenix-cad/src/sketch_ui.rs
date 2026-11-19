@@ -4531,10 +4531,7 @@ mod tests {
         let d = |p: ElementId, q: ElementId| {
             let (px, py) = e.sketch.point(p).unwrap();
             let (qx, qy) = e.sketch.point(q).unwrap();
-            let (dx, dy) = (
-                (px.get() - qx.get()) as f64,
-                (py.get() - qy.get()) as f64,
-            );
+            let (dx, dy) = ((px.get() - qx.get()) as f64, (py.get() - qy.get()) as f64);
             (dx * dx + dy * dy).sqrt()
         };
         assert!((d(ids[0], ids[1]) - d(ids[0], ids[2])).abs() < 1000.0);

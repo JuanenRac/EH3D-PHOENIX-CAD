@@ -219,6 +219,219 @@ pub fn read_stored_zip(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
     Ok(entries)
 }
 
+/// One solid read back from a file: its name and its surface in nanometres.
+pub type Body = (String, Mesh);
+
+/// The nanometres of a number of millimetres (or of another unit, scaled by `per_unit`).
+fn nanometres(text: &str, per_unit: f64, what: &str) -> Result<f64, String> {
+    let v: f64 = text
+        .parse()
+        .map_err(|_| format!("{what}: {text} is not a number"))?;
+    if !v.is_finite() {
+        return Err(format!("{what}: {text} is not a finite number"));
+    }
+    Ok((v * per_unit).round())
+}
+
+/// The solids of a Wavefront OBJ file, read back (millimetres, as [`obj`] writes them).
+///
+/// A group `o` starts a solid; the vertices and faces before the first group make a solid named
+/// `solid`. The indices of the faces count over the whole file (a negative one counts back from
+/// the last vertex read) and a face with more than three corners is cut into a fan of triangles.
+/// A face may carry texture and normal numbers (`3/1/2`); they are ignored, like every other line
+/// that is not a group, a vertex or a face. A face that uses a vertex of another solid, an index
+/// that does not exist or a face with fewer than three corners is an error that says its line.
+pub fn read_obj(text: &str) -> Result<Vec<Body>, String> {
+    let mut bodies: Vec<Body> = Vec::new();
+    let mut total = 0usize;
+    // the first vertex (counted from 0 over the file) of the solid that is being read
+    let mut first = 0usize;
+    for (n, raw) in text.lines().enumerate() {
+        let line = raw.trim();
+        let at = n + 1;
+        let mut words = line.split_whitespace();
+        match words.next() {
+            Some("o") => {
+                let name = words.collect::<Vec<_>>().join(" ");
+                first = total;
+                bodies.push((name, Mesh::default()));
+            }
+            Some("v") => {
+                let w: Vec<&str> = words.collect();
+                if w.len() < 3 {
+                    return Err(format!("line {at}: a vertex needs three numbers"));
+                }
+                if bodies.is_empty() {
+                    first = total;
+                    bodies.push(("solid".to_owned(), Mesh::default()));
+                }
+                let what = format!("line {at}");
+                let v = [
+                    nanometres(w[0], NM_PER_MM, &what)?,
+                    nanometres(w[1], NM_PER_MM, &what)?,
+                    nanometres(w[2], NM_PER_MM, &what)?,
+                ];
+                if let Some(body) = bodies.last_mut() {
+                    body.1.vertices.push(v);
+                }
+                total += 1;
+            }
+            Some("f") => {
+                let mut corners = Vec::new();
+                for w in words {
+                    let head = w.split('/').next().unwrap_or("");
+                    let k: i64 = head
+                        .parse()
+                        .map_err(|_| format!("line {at}: {w} is not a vertex number"))?;
+                    let global = if k < 0 {
+                        i64::try_from(total).unwrap_or(i64::MAX) + k
+                    } else {
+                        k - 1
+                    };
+                    let global = usize::try_from(global)
+                        .ok()
+                        .filter(|g| *g < total)
+                        .ok_or_else(|| format!("line {at}: there is no vertex {k}"))?;
+                    if global < first {
+                        return Err(format!("line {at}: a face uses a vertex of another solid"));
+                    }
+                    corners.push(u32::try_from(global - first).map_err(|_| {
+                        format!("line {at}: the solid has more vertices than a face can number")
+                    })?);
+                }
+                if corners.len() < 3 {
+                    return Err(format!("line {at}: a face needs three corners"));
+                }
+                let Some(body) = bodies.last_mut() else {
+                    return Err(format!("line {at}: a face before any vertex"));
+                };
+                for k in 1..corners.len() - 1 {
+                    body.1
+                        .triangles
+                        .push([corners[0], corners[k], corners[k + 1]]);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(bodies)
+}
+
+/// The text of the attribute `name` of an XML tag (`<vertex x="1"/>` gives `1` for `x`).
+fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let key = format!(" {name}=\"");
+    let from = tag.find(&key)? + key.len();
+    let len = tag[from..].find('"')?;
+    Some(&tag[from..from + len])
+}
+
+/// How many nanometres a unit of the 3MF model is.
+fn unit_nanometres(unit: &str) -> Option<f64> {
+    match unit {
+        "micron" => Some(1_000.0),
+        "millimeter" => Some(NM_PER_MM),
+        "centimeter" => Some(10.0 * NM_PER_MM),
+        "inch" => Some(25.4 * NM_PER_MM),
+        "foot" => Some(304.8 * NM_PER_MM),
+        "meter" => Some(1000.0 * NM_PER_MM),
+        _ => None,
+    }
+}
+
+/// The solids of the model of a 3MF package written like [`three_mf`], read back: the package must
+/// be stored without compression and its model must be in `3D/3dmodel.model`.
+pub fn read_three_mf(bytes: &[u8]) -> Result<Vec<Body>, String> {
+    let entries = read_stored_zip(bytes)?;
+    let model = entries
+        .iter()
+        .find(|(name, _)| name == "3D/3dmodel.model")
+        .ok_or_else(|| "the package has no 3D/3dmodel.model".to_owned())?;
+    let xml = std::str::from_utf8(&model.1).map_err(|_| "the model is not text".to_owned())?;
+    let head = xml
+        .find("<model")
+        .and_then(|i| xml[i..].find('>').map(|j| &xml[i..i + j]))
+        .ok_or_else(|| "the model has no <model> element".to_owned())?;
+    let unit = attribute(head, "unit").unwrap_or("millimeter");
+    let scale = unit_nanometres(unit).ok_or_else(|| format!("the unit {unit} is not known"))?;
+    let mut bodies = Vec::new();
+    let mut rest = xml;
+    while let Some(i) = rest.find("<object ") {
+        let after = &rest[i..];
+        let end = after
+            .find("</object>")
+            .ok_or_else(|| "an object is not closed".to_owned())?;
+        let object = &after[..end];
+        let open = object.find('>').unwrap_or(object.len());
+        let name = attribute(&object[..open], "name").unwrap_or("").to_owned();
+        let mut mesh = Mesh::default();
+        for tag in object.split('<').skip(1) {
+            if tag.starts_with("vertex ") {
+                let get = |k: &str| {
+                    attribute(tag, k)
+                        .ok_or_else(|| format!("a vertex of {name} has no {k}"))
+                        .and_then(|t| nanometres(t, scale, "a vertex"))
+                };
+                mesh.vertices.push([get("x")?, get("y")?, get("z")?]);
+            } else if tag.starts_with("triangle ") {
+                let get = |k: &str| {
+                    attribute(tag, k)
+                        .and_then(|t| t.parse::<u32>().ok())
+                        .filter(|v| (*v as usize) < mesh.vertices.len())
+                        .ok_or_else(|| format!("a triangle of {name} has no vertex {k}"))
+                };
+                let t = [get("v1")?, get("v2")?, get("v3")?];
+                mesh.triangles.push(t);
+            }
+        }
+        bodies.push((name, mesh));
+        rest = &after[end + "</object>".len()..];
+    }
+    Ok(bodies)
+}
+
+/// The surface of the triangles that [`crate::mesh::read_stl`] gives (nine millimetres each): a
+/// vertex that lies at the same nanometre as another is the same vertex, as in the file this
+/// program writes, so that the surface can be checked for being closed.
+pub fn mesh_from_triangles(triangles: &[[f64; 9]]) -> Mesh {
+    use std::collections::HashMap;
+    let mut index: HashMap<[i64; 3], u32> = HashMap::new();
+    let mut mesh = Mesh::default();
+    for t in triangles {
+        let mut corners = [0u32; 3];
+        for (k, corner) in corners.iter_mut().enumerate() {
+            let v = [
+                (t[3 * k] * NM_PER_MM).round(),
+                (t[3 * k + 1] * NM_PER_MM).round(),
+                (t[3 * k + 2] * NM_PER_MM).round(),
+            ];
+            let key = [v[0] as i64, v[1] as i64, v[2] as i64];
+            *corner = *index.entry(key).or_insert_with(|| {
+                mesh.vertices.push(v);
+                (mesh.vertices.len() - 1) as u32
+            });
+        }
+        mesh.triangles.push(corners);
+    }
+    mesh
+}
+
+/// The solids of a file of an interchange format, by its extension: `stl` (one solid, called
+/// `solid`), `obj` or `3mf`.
+pub fn read_file_bytes(name: &str, bytes: &[u8]) -> Result<Vec<Body>, String> {
+    let extension = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match extension.as_str() {
+        "stl" => {
+            let triangles = crate::mesh::read_stl(bytes)?;
+            Ok(vec![("solid".to_owned(), mesh_from_triangles(&triangles))])
+        }
+        "obj" => read_obj(
+            std::str::from_utf8(bytes).map_err(|_| "the file is not UTF-8 text".to_owned())?,
+        ),
+        "3mf" => read_three_mf(bytes),
+        _ => Err("the file must end in .stl, .obj or .3mf".to_owned()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,6 +533,125 @@ mod tests {
         let at = bytes.len() - 400;
         bytes[at] ^= 0xFF;
         assert!(read_stored_zip(&bytes).is_err());
+    }
+
+    #[test]
+    fn the_obj_file_reads_back_to_the_same_solids() {
+        let a = cube(0.0);
+        let b = cube(20.0);
+        let text = obj(&[("box", &a), ("part one", &b)]);
+        let read = read_obj(&text).unwrap();
+        assert_eq!(read.len(), 2);
+        assert_eq!(read[0].0, "box");
+        assert_eq!(read[1].0, "part_one");
+        assert_eq!(read[0].1, a);
+        assert_eq!(read[1].1, b);
+        assert!(read[1].1.check_closed().is_ok());
+        assert!((read[1].1.volume_nm3() - 1.0e21).abs() < 1.0e9);
+        // what was read is written again to the same bytes
+        let again: Vec<(&str, &Mesh)> = read.iter().map(|(n, m)| (n.as_str(), m)).collect();
+        assert_eq!(obj(&again), text);
+    }
+
+    #[test]
+    fn the_obj_reader_takes_quads_negative_indices_and_lines_it_does_not_use() {
+        let text = "# a square and a triangle\nmtllib x.mtl\nv 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nvt 0 0\nvn 0 0 1\ns off\nf 1/1/1 2/1/1 3/1/1 4/1/1\nf -4 -3 -2\n";
+        let read = read_obj(text).unwrap();
+        // no group: the vertices make a solid called solid
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].0, "solid");
+        assert_eq!(read[0].1.vertices[2], [1.0e6, 1.0e6, 0.0]);
+        // a quad is two triangles, plus the one with negative numbers
+        assert_eq!(read[0].1.triangles, vec![[0, 1, 2], [0, 2, 3], [0, 1, 2]]);
+        // a name with spaces is kept as it is
+        assert_eq!(read_obj("o two words\n").unwrap()[0].0, "two words");
+        assert!(read_obj("").unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_damaged_obj_file_is_refused_with_its_line() {
+        for (text, line) in [
+            ("v 1 2\n", "line 1"),
+            ("v 1 x 3\n", "line 1"),
+            ("v 1 NaN 3\n", "line 1"),
+            ("o a\nv 0 0 0\nf 1 2 3\n", "line 3"),
+            ("o a\nv 0 0 0\nv 1 0 0\nf 1 2\n", "line 4"),
+            ("o a\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 x\n", "line 5"),
+            ("o a\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 -9\n", "line 5"),
+            ("f 1 2 3\n", "line 1"),
+            // a face of the second solid that names a vertex of the first
+            (
+                "o a\nv 0 0 0\nv 1 0 0\nv 0 1 0\no b\nv 5 5 5\nf 1 2 4\n",
+                "line 7",
+            ),
+        ] {
+            let e = read_obj(text).unwrap_err();
+            assert!(e.starts_with(line), "{text:?}: {e}");
+        }
+    }
+
+    #[test]
+    fn the_3mf_package_reads_back_to_the_same_solids_and_in_the_unit_it_names() {
+        let a = cube(0.0);
+        let b = cube(20.0);
+        let bytes = three_mf(&[("box", &a), ("part", &b)]);
+        let read = read_three_mf(&bytes).unwrap();
+        assert_eq!(read.len(), 2);
+        assert_eq!((read[0].0.as_str(), &read[0].1), ("box", &a));
+        assert_eq!((read[1].0.as_str(), &read[1].1), ("part", &b));
+        // a model in centimetres is ten times as large as the same numbers in millimetres
+        let model =
+            three_mf_model(&[("box", &a)]).replace("unit=\"millimeter\"", "unit=\"centimeter\"");
+        let package = zip_stored(&[("3D/3dmodel.model", model.into_bytes())]);
+        let big = read_three_mf(&package).unwrap();
+        assert!((big[0].1.volume_nm3() - 1.0e24).abs() < 1.0e12);
+        // a unit that is not known, a package with no model, a triangle that names a vertex that
+        // does not exist and an object that is not closed are refused
+        let model = three_mf_model(&[("box", &a)]).replace("millimeter", "furlong");
+        let package = zip_stored(&[("3D/3dmodel.model", model.into_bytes())]);
+        assert!(read_three_mf(&package).unwrap_err().contains("furlong"));
+        let package = zip_stored(&[("other.xml", b"<a/>".to_vec())]);
+        assert!(read_three_mf(&package).is_err());
+        let model = three_mf_model(&[("box", &a)]).replace("v3=\"1\"", "v3=\"99\"");
+        let package = zip_stored(&[("3D/3dmodel.model", model.into_bytes())]);
+        assert!(read_three_mf(&package).unwrap_err().contains("v3"));
+        let model = three_mf_model(&[("box", &a)]).replace("</object>", "");
+        let package = zip_stored(&[("3D/3dmodel.model", model.into_bytes())]);
+        assert!(read_three_mf(&package).is_err());
+        assert!(read_three_mf(b"not a package").is_err());
+    }
+
+    #[test]
+    fn a_stl_file_is_welded_into_a_closed_surface_with_the_same_volume() {
+        let a = cube(0.0);
+        let stl = crate::mesh::stl_binary(&[("box", &a)]);
+        let read = read_file_bytes("box.STL", &stl).unwrap();
+        assert_eq!(read.len(), 1);
+        // the cube has 8 vertices and 12 triangles however many times the file repeats them
+        assert_eq!(read[0].1.vertices.len(), 8);
+        assert_eq!(read[0].1.triangles.len(), 12);
+        assert!(read[0].1.check_closed().is_ok());
+        assert!((read[0].1.volume_nm3() - 1.0e21).abs() < 1.0e12);
+        // the text form gives the same surface
+        let text = crate::mesh::stl_ascii(&[("box", &a)]).into_bytes();
+        assert_eq!(read_file_bytes("box.stl", &text).unwrap(), read);
+        // a file that is not closed says so
+        let mut open = read[0].1.clone();
+        open.triangles.pop();
+        assert!(open.check_closed().is_err());
+    }
+
+    #[test]
+    fn the_reader_picks_its_format_from_the_extension() {
+        let a = cube(0.0);
+        let obj_text = obj(&[("box", &a)]).into_bytes();
+        let three = three_mf(&[("box", &a)]);
+        assert_eq!(read_file_bytes("a.obj", &obj_text).unwrap()[0].1, a);
+        assert_eq!(read_file_bytes("dir.v2/A.3MF", &three).unwrap()[0].1, a);
+        assert!(read_file_bytes("a.step", &obj_text).is_err());
+        assert!(read_file_bytes("a", &obj_text).is_err());
+        assert!(read_file_bytes("a.obj", &[0xFF, 0xFE]).is_err());
+        assert!(read_file_bytes("a.stl", b"short").is_err());
     }
 
     #[test]
