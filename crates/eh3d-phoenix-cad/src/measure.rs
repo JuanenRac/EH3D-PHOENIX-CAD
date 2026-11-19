@@ -287,6 +287,80 @@ mod tests {
     }
 
     #[test]
+    fn the_nearest_point_of_an_edge_is_clamped_to_the_edge_and_a_point_edge_is_its_point() {
+        let (a, b) = ([0.0, 0.0, 0.0], [10.0, 0.0, 0.0]);
+        assert_eq!(distance_points(a, [1.0, 2.0, 2.0]), 3.0);
+        assert_eq!(distance_points(b, b), 0.0);
+        assert_eq!(nearest_on_edge([4.0, 3.0, 5.0], a, b), [4.0, 0.0, 0.0]);
+        assert_eq!(nearest_on_edge([-7.0, 3.0, 5.0], a, b), a);
+        assert_eq!(nearest_on_edge([77.0, 3.0, 5.0], a, b), b);
+        // an edge with no length is its own nearest point, whatever the point is
+        assert_eq!(nearest_on_edge([9.0, 9.0, 9.0], a, a), a);
+        // on a slanted edge the nearest point is the foot of the perpendicular
+        let foot = nearest_on_edge([0.0, 4.0, 0.0], [0.0, 0.0, 0.0], [4.0, 4.0, 0.0]);
+        assert!(
+            close(foot[0], 2.0) && close(foot[1], 2.0) && close(foot[2], 0.0),
+            "{foot:?}"
+        );
+    }
+
+    #[test]
+    fn the_nearest_points_of_two_edges_cover_skew_parallel_and_empty_edges() {
+        let (p1, q1) = ([0.0, 0.0, 0.0], [10.0, 0.0, 0.0]);
+        // skew: the second runs over the middle of the first, 5 up
+        let (u, v) = nearest_between_edges(p1, q1, [5.0, -5.0, 5.0], [5.0, 5.0, 5.0]);
+        assert_eq!((u, v), ([5.0, 0.0, 0.0], [5.0, 0.0, 5.0]));
+        // the first has no length: its point against the second
+        let (u, v) = nearest_between_edges(p1, p1, [3.0, 4.0, 0.0], [9.0, 4.0, 0.0]);
+        assert_eq!((u, v), (p1, [3.0, 4.0, 0.0]));
+        // the second has no length: its point against the first
+        let (u, v) = nearest_between_edges(p1, q1, [6.0, 3.0, 4.0], [6.0, 3.0, 4.0]);
+        assert_eq!((u, v), ([6.0, 0.0, 0.0], [6.0, 3.0, 4.0]));
+        // neither has: the two points
+        let (u, v) = nearest_between_edges(p1, p1, q1, q1);
+        assert_eq!((u, v), (p1, q1));
+        // parallel and overlapping: any pair of the overlap, 3 apart
+        let (u, v) = nearest_between_edges(p1, q1, [2.0, 3.0, 0.0], [8.0, 3.0, 0.0]);
+        assert!(close(distance_points(u, v), 3.0));
+    }
+
+    #[test]
+    fn the_nearest_points_of_edges_lie_on_them_are_symmetric_and_never_beat_an_end() {
+        // a deterministic spread of edges (a small linear congruential sequence)
+        let mut seed: u64 = 12345;
+        let mut next = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed >> 33) % 41) as f64 - 20.0
+        };
+        for _ in 0..200 {
+            let mut pts = [[0.0; 3]; 4];
+            for p in &mut pts {
+                *p = [next(), next(), next()];
+            }
+            let (u, v) = nearest_between_edges(pts[0], pts[1], pts[2], pts[3]);
+            let (v2, u2) = nearest_between_edges(pts[2], pts[3], pts[0], pts[1]);
+            let d = distance_points(u, v);
+            assert!((d - distance_points(u2, v2)).abs() < 1e-9, "{pts:?}");
+            // each nearest point is on its edge: nearer to the edge's own line than any tolerance
+            for (point, a, b) in [(u, pts[0], pts[1]), (v, pts[2], pts[3])] {
+                let on = nearest_on_edge(point, a, b);
+                assert!(distance_points(on, point) < 1e-9, "{pts:?}");
+            }
+            // no end of one edge is nearer to the other edge than the pair found
+            let best_end = [
+                distance_points(pts[0], nearest_on_edge(pts[0], pts[2], pts[3])),
+                distance_points(pts[1], nearest_on_edge(pts[1], pts[2], pts[3])),
+                distance_points(pts[2], nearest_on_edge(pts[2], pts[0], pts[1])),
+                distance_points(pts[3], nearest_on_edge(pts[3], pts[0], pts[1])),
+            ];
+            let least = best_end.iter().fold(f64::MAX, |m, e| m.min(*e));
+            assert!(d <= least + 1e-9, "{d} {least} {pts:?}");
+        }
+    }
+
+    #[test]
     fn the_distance_between_two_points_is_the_length_of_the_line_that_joins_them() {
         // 3, 4 and 12 make 13 (9 + 16 + 144 = 169)
         let m = distance(&pt(0.0, 0.0, 0.0), &pt(3.0, 4.0, 12.0));

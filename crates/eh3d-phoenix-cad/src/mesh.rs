@@ -744,6 +744,33 @@ pub fn read_stl(bytes: &[u8]) -> Result<Vec<[f64; 9]>, String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_builder_shares_the_vertex_of_a_place_counts_its_triangles_and_stops_at_its_limit() {
+        let mut b = Builder::new(2);
+        assert_eq!(b.triangle_count(), 0);
+        let a = b.vertex([0.0, 0.0, 0.0]);
+        // minus zero is the same place as zero, and the same place is the same vertex
+        assert_eq!(b.vertex([-0.0, -0.0, -0.0]), a);
+        assert_eq!(b.vertex([0.0, 0.0, 0.0]), a);
+        let x = b.vertex([1.0, 0.0, 0.0]);
+        let y = b.vertex([0.0, 1.0, 0.0]);
+        assert_eq!([a, x, y], [0, 1, 2]);
+        assert_eq!(b.at(x), [1.0, 0.0, 0.0]);
+        assert_eq!(b.ring(&[[1.0, 0.0, 0.0], [5.0, 5.0, 5.0]]), vec![x, 3]);
+        b.triangle(a, x, y).unwrap();
+        assert_eq!(b.triangle_count(), 1);
+        b.triangle(a, y, x).unwrap();
+        assert_eq!(b.triangle_count(), 2);
+        // the third is refused with the code of the limits of an export, and nothing is added
+        let err = b.triangle(a, x, y).unwrap_err();
+        assert_eq!(err.code(), "PHOENIX-CAD-050");
+        assert_eq!(b.triangle_count(), 2);
+        // a builder with no room takes none
+        let mut none = Builder::new(0);
+        assert!(none.triangle(0, 0, 0).is_err());
+        assert_eq!(none.triangle_count(), 0);
+    }
+
     /// A box of the given size at the origin as a mesh made of two triangles for each face.
     fn cuboid(x: f64, y: f64, z: f64) -> Mesh {
         let mut b = Builder::new(1000);

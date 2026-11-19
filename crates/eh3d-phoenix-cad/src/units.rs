@@ -417,6 +417,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_unit_is_named_by_its_suffix_and_the_name_gives_the_unit_back() {
+        let all = [
+            (Unit::Nanometre, "nm", 1),
+            (Unit::Micrometre, "um", 1_000),
+            (Unit::Millimetre, "mm", 1_000_000),
+            (Unit::Centimetre, "cm", 10_000_000),
+            (Unit::Metre, "m", 1_000_000_000),
+            (Unit::Inch, "in", 25_400_000),
+            (Unit::Mil, "mil", 25_400),
+        ];
+        for (unit, word, nm) in all {
+            assert_eq!(unit.suffix(), word);
+            assert_eq!(Unit::from_suffix(word), Some(unit));
+            assert_eq!(unit.nanometres(), nm);
+        }
+        // the micro sign is another way to write micrometres; nothing else is accepted, and the
+        // case matters
+        assert_eq!(Unit::from_suffix("\u{b5}m"), Some(Unit::Micrometre));
+        for bad in ["", "MM", "Mm", "mm ", "ft", "mi", "\u{3bc}m"] {
+            assert_eq!(Unit::from_suffix(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
     fn angles_are_read_and_written_in_degrees_and_read_back_to_the_same_angle() {
         for (text, ndeg) in [
             ("90", 90_000_000_000i64),

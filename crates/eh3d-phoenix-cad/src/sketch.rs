@@ -2212,6 +2212,54 @@ mod tests {
     }
 
     #[test]
+    fn a_sketch_is_renamed_and_a_circle_gets_another_radius_only_when_it_is_valid() {
+        let mut s = sketch();
+        s.set_name("lid_2-b").unwrap();
+        assert_eq!(s.name(), "lid_2-b");
+        for bad in [
+            "",
+            "has space",
+            "a/b",
+            "\u{e9}",
+            &"x".repeat(MAX_NAME_BYTES + 1),
+        ] {
+            let err = s.set_name(bad).unwrap_err();
+            assert_eq!(
+                err.code(),
+                CadError::InvalidName(String::new()).code(),
+                "{bad:?}"
+            );
+            assert_eq!(
+                s.name(),
+                "lid_2-b",
+                "a refused name leaves the sketch as it was"
+            );
+        }
+        s.set_name(&"x".repeat(MAX_NAME_BYTES)).unwrap();
+        let c = s.add_point(mm(0), mm(0)).unwrap();
+        let circle = s.add_circle(c, mm(2)).unwrap();
+        s.set_circle_radius(circle, mm(7)).unwrap();
+        match s.element(circle) {
+            Some(Element::Circle { radius, .. }) => assert_eq!(*radius, mm(7)),
+            other => panic!("{other:?}"),
+        }
+        // zero and negative radii, a point and an unknown identifier are refused unchanged
+        assert!(s.set_circle_radius(circle, Length::ZERO).is_err());
+        assert!(s.set_circle_radius(circle, mm(-1)).is_err());
+        assert!(s.set_circle_radius(c, mm(1)).is_err());
+        assert_eq!(
+            s.set_circle_radius(ElementId(99), mm(1))
+                .unwrap_err()
+                .code(),
+            CadError::UnknownName(String::new()).code()
+        );
+        match s.element(circle) {
+            Some(Element::Circle { radius, .. }) => assert_eq!(*radius, mm(7)),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
     fn collinear_points_and_equal_distances_are_checked_when_they_are_added() {
         let mut s = sketch();
         let a = s.add_point(mm(0), mm(0)).unwrap();
