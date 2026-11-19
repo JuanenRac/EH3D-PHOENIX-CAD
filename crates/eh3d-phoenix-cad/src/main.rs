@@ -963,7 +963,9 @@ fn export_format(word: &str, view: Option<View>, sheet: bool) -> Result<Format, 
     match word {
         "dxf" | "svg" if sheet && view.is_none() => Ok(Format::sheet(word == "dxf")),
         "dxf" | "svg" => Ok(Format::drawing(word == "dxf", view.unwrap_or(View::Top))),
-        _ if view.is_some() || sheet => Err("--view is only for the formats dxf and svg".to_owned()),
+        _ if view.is_some() || sheet => {
+            Err("--view is only for the formats dxf and svg".to_owned())
+        }
         "stl" | "step" | "script" | "report" | "bill" | "obj" | "3mf" | "order" => {
             Format::from_name(word).ok_or_else(|| format!("{word}: unknown format"))
         }
@@ -998,13 +1000,14 @@ fn run_export(args: &[String]) -> Result<bool, String> {
             }
             "--format" => word = Some(iter.next().ok_or("--format needs a format")?.clone()),
             "--view" => {
-                let name = iter.next().ok_or("--view needs top, front, side or sheet")?;
+                let name = iter
+                    .next()
+                    .ok_or("--view needs top, front, side or sheet")?;
                 if name == "sheet" {
                     sheet = true;
                 } else {
-                    view = Some(
-                        View::from_name(name).ok_or("--view is top, front, side or sheet")?,
-                    );
+                    view =
+                        Some(View::from_name(name).ok_or("--view is top, front, side or sheet")?);
                 }
             }
             "--out" => out = Some(PathBuf::from(iter.next().ok_or("--out needs a file")?)),

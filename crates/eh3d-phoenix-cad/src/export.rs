@@ -672,15 +672,20 @@ number = P-7
     #[test]
     fn a_drawing_has_a_frame_only_when_the_settings_ask_for_it() {
         let e = enclosure();
-        let off = Settings::with_user_config("[drawing]
+        let off = Settings::with_user_config(
+            "[drawing]
 legend = 0
-").unwrap();
-        let on = Settings::with_user_config("[drawing]
+",
+        )
+        .unwrap();
+        let on = Settings::with_user_config(
+            "[drawing]
 legend = 0
 frame = 1
 frame_margin = 8 mm
-")
-            .unwrap();
+",
+        )
+        .unwrap();
         for format in [Format::DxfTop, Format::SvgFront] {
             let plain = String::from_utf8(render(format, &e, "", &off).unwrap()).unwrap();
             let framed = String::from_utf8(render(format, &e, "", &on).unwrap()).unwrap();

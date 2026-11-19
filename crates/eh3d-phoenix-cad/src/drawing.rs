@@ -1899,7 +1899,8 @@ mod tests {
         d.add_frame(5.0);
         let dxf = d.to_dxf();
         // the layer is counted in its table, with its own line each side
-        assert!(dxf.contains("2
+        assert!(dxf.contains(
+            "2
 MARCO
 70
 0
@@ -1907,20 +1908,35 @@ MARCO
 7
 6
 CONTINUOUS
-"));
-        assert_eq!(dxf.matches("0
+"
+        ));
+        assert_eq!(
+            dxf.matches(
+                "0
 LINE
 8
 MARCO
-").count(), 4);
-        let layers = |t: &str| t.matches("0
+"
+            )
+            .count(),
+            4
+        );
+        let layers = |t: &str| {
+            t.matches(
+                "0
 LAYER
 2
-").count();
+",
+            )
+            .count()
+        };
         assert_eq!(layers(&dxf), layers(&plain.to_dxf()) + 1);
         let svg = d.to_svg(&settings());
         assert!(svg.contains("<g id=\"MARCO\""));
-        assert_eq!(svg.matches("<line").count(), plain.to_svg(&settings()).matches("<line").count() + 4);
+        assert_eq!(
+            svg.matches("<line").count(),
+            plain.to_svg(&settings()).matches("<line").count() + 4
+        );
     }
 
     #[test]
@@ -1947,7 +1963,10 @@ frame_margin = -1 mm
 frame_margin = 1001 mm
 ",
         ] {
-            assert!(crate::config::Settings::with_user_config(bad).is_err(), "{bad}");
+            assert!(
+                crate::config::Settings::with_user_config(bad).is_err(),
+                "{bad}"
+            );
         }
     }
 
@@ -2031,7 +2050,11 @@ frame_margin = 1001 mm
                     }
                     let ((u0, v0), (u1, v1)) = b.bounds();
                     let apart = u1 < x0 || u0 > x1 || v1 < y0 || v0 > y1;
-                    assert!(apart, "view {i} and view {j} touch with angle {}", settings.sheet_angle);
+                    assert!(
+                        apart,
+                        "view {i} and view {j} touch with angle {}",
+                        settings.sheet_angle
+                    );
                 }
             }
             let s = Drawing::sheet(&e, &settings).unwrap();
@@ -2048,17 +2071,16 @@ frame_margin = 1001 mm
             let (_, hi) = s.bounds();
             assert_eq!(s.extent, hi);
             s.add_legend(&e, &settings, Lang::En);
-            let legend: Vec<_> = s
-                .notes
-                .iter()
-                .filter(|n| n.level == LEGEND_LEVEL)
-                .collect();
+            let legend: Vec<_> = s.notes.iter().filter(|n| n.level == LEGEND_LEVEL).collect();
             assert!(legend.len() >= 4);
             for n in &legend {
                 assert_eq!(n.at.0, hi.0 + 10.0);
             }
             // the holes it lists are the ones of the front
-            assert!(legend.iter().any(|n| n.text.starts_with("H1")), "{legend:?}");
+            assert!(
+                legend.iter().any(|n| n.text.starts_with("H1")),
+                "{legend:?}"
+            );
         }
     }
 
@@ -2116,7 +2138,10 @@ frame_margin = 1001 mm
             "[drawing]\nsheet_gap = -1 mm\n",
             "[drawing]\nsheet_gap = 1001 mm\n",
         ] {
-            assert!(crate::config::Settings::with_user_config(bad).is_err(), "{bad}");
+            assert!(
+                crate::config::Settings::with_user_config(bad).is_err(),
+                "{bad}"
+            );
         }
     }
 }

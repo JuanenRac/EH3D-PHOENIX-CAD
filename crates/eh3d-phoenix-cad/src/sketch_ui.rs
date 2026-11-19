@@ -4409,7 +4409,11 @@ mod tests {
         assert_eq!(e.picked.elements, vec![arcs[0].id]);
         let lines_before = e.sketch.elements().len();
         e.undo();
-        assert!(e.sketch.elements().iter().all(|x| x.element.kind() != Kind::Arc));
+        assert!(e
+            .sketch
+            .elements()
+            .iter()
+            .all(|x| x.element.kind() != Kind::Arc));
         assert!(e.sketch.elements().len() < lines_before);
         e.redo();
         assert_eq!(e.sketch.elements().len(), lines_before);
@@ -4443,7 +4447,11 @@ mod tests {
         for text in ["abc", "0", "-2", "width / 2"] {
             e.dim_input = text.to_owned();
             e.round_corner();
-            assert!(matches!(e.status, Status::Error(_)), "{text}: {:?}", e.status);
+            assert!(
+                matches!(e.status, Status::Error(_)),
+                "{text}: {:?}",
+                e.status
+            );
             assert_eq!(e.sketch, before, "{text}");
         }
         // two sides of the rectangle that do not meet
@@ -4461,8 +4469,10 @@ mod tests {
         assert_eq!(own.fillet_radius, 0.5);
         for bad in ["0", "-1", "1001", "x"] {
             assert!(
-                SketchUiSettings::with_user_config(&format!("[sketch_ui]\nfillet_radius = {bad}\n"))
-                    .is_err(),
+                SketchUiSettings::with_user_config(&format!(
+                    "[sketch_ui]\nfillet_radius = {bad}\n"
+                ))
+                .is_err(),
                 "{bad}"
             );
         }

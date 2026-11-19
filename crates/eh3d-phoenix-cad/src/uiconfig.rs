@@ -326,7 +326,17 @@ impl NewStepDefaults {
         let part_axis = word(c, "new_step.part_axis")?;
         let part_roll = count(c, "new_step.part_roll", 0, 270)?;
         let mate_kind = word(c, "new_step.mate_kind")?;
-        if !["gap", "align", "stack", "offset", "symmetric", "turn", "inset"].contains(&mate_kind) {
+        if ![
+            "gap",
+            "align",
+            "stack",
+            "offset",
+            "symmetric",
+            "turn",
+            "inset",
+        ]
+        .contains(&mate_kind)
+        {
             return Err(CadError::Config(format!(
                 "new_step.mate_kind: {mate_kind} is not gap, align, stack, offset, symmetric, turn or inset"
             )));

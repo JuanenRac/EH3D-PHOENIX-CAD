@@ -462,7 +462,11 @@ impl DrawingSettings {
         let sheet_angle = match c.number("drawing.sheet_angle")? {
             1 => 1,
             3 => 3,
-            _ => return Err(CadError::Config("drawing.sheet_angle must be 1 or 3".into())),
+            _ => {
+                return Err(CadError::Config(
+                    "drawing.sheet_angle must be 1 or 3".into(),
+                ))
+            }
         };
         let sheet_gap = c.length("drawing.sheet_gap")?;
         if sheet_gap.get() < 0 || sheet_gap.get() > 1_000_000_000 {

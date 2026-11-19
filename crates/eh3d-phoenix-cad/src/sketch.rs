@@ -941,7 +941,10 @@ impl Sketch {
         for id in needed {
             let here = self.point(id)?;
             let (x, y) = reflect(at(self, id)?);
-            let there = (Length::new(x.round() as i64)?, Length::new(y.round() as i64)?);
+            let there = (
+                Length::new(x.round() as i64)?,
+                Length::new(y.round() as i64)?,
+            );
             if there == here {
                 image.insert(id, id);
             } else {
@@ -1042,7 +1045,9 @@ impl Sketch {
             .filter(|p| *p == b0 || *p == b1)
             .collect();
         let [corner] = shared[..] else {
-            return Err(bad_element("the two lines must share one point, the corner"));
+            return Err(bad_element(
+                "the two lines must share one point, the corner",
+            ));
         };
         let far_a = if a0 == corner { a1 } else { a0 };
         let far_b = if b0 == corner { b1 } else { b0 };
@@ -1081,7 +1086,9 @@ impl Sketch {
         let (u, v) = ((da.0 / la, da.1 / la), (db.0 / lb, db.1 / lb));
         let cross = u.0 * v.1 - u.1 * v.0;
         if cross.abs() < 1e-9 {
-            return Err(bad_element("the two lines are on one line: there is no corner"));
+            return Err(bad_element(
+                "the two lines are on one line: there is no corner",
+            ));
         }
         let half = (u.0 * v.0 + u.1 * v.1).clamp(-1.0, 1.0).acos() / 2.0;
         let r = radius.get() as f64;
@@ -1097,14 +1104,14 @@ impl Sketch {
         let bis = (u.0 + v.0, u.1 + v.1);
         let bl = bis.0.hypot(bis.1);
         let place = |x: f64, y: f64| -> Result<(Length, Length), CadError> {
-            Ok((Length::new(x.round() as i64)?, Length::new(y.round() as i64)?))
+            Ok((
+                Length::new(x.round() as i64)?,
+                Length::new(y.round() as i64)?,
+            ))
         };
         let t1 = place(p.0 + u.0 * touch, p.1 + u.1 * touch)?;
         let t2 = place(p.0 + v.0 * touch, p.1 + v.1 * touch)?;
-        let centre = (
-            p.0 + bis.0 / bl * to_centre,
-            p.1 + bis.1 / bl * to_centre,
-        );
+        let centre = (p.0 + bis.0 / bl * to_centre, p.1 + bis.1 / bl * to_centre);
         let c = place(centre.0, centre.1)?;
         let (t1_id, t2_id, c_id) = (
             self.add_point(t1.0, t1.1)?,
@@ -1998,7 +2005,14 @@ mod tests {
 
     #[test]
     fn an_acute_and_an_obtuse_corner_are_rounded_with_the_arc_inside_them() {
-        for (x, y) in [(10, 10), (-10, 10), (10, -10), (-10, -10), (40, 6), (-6, 40)] {
+        for (x, y) in [
+            (10, 10),
+            (-10, 10),
+            (10, -10),
+            (-10, -10),
+            (40, 6),
+            (-6, 40),
+        ] {
             let mut s = sketch();
             let p = s.add_point(mm(0), mm(0)).unwrap();
             let pa = s.add_point(mm(40), mm(0)).unwrap();
@@ -2011,7 +2025,10 @@ mod tests {
             };
             let dist = |p: ElementId, q: ElementId| {
                 let (a, b) = (s.point(p).unwrap(), s.point(q).unwrap());
-                let (dx, dy) = ((a.0.get() - b.0.get()) as f64, (a.1.get() - b.1.get()) as f64);
+                let (dx, dy) = (
+                    (a.0.get() - b.0.get()) as f64,
+                    (a.1.get() - b.1.get()) as f64,
+                );
                 dx.hypot(dy)
             };
             // the radius is the 1 mm that was asked for, to the rounding of a nanometre
@@ -2062,7 +2079,12 @@ mod tests {
         let mut s = sketch();
         let lines = s
             .add_polyline(
-                &[(mm(0), mm(0)), (mm(20), mm(0)), (mm(20), mm(20)), (mm(0), mm(20))],
+                &[
+                    (mm(0), mm(0)),
+                    (mm(20), mm(0)),
+                    (mm(20), mm(20)),
+                    (mm(0), mm(20)),
+                ],
                 true,
             )
             .unwrap();
@@ -2168,8 +2190,16 @@ mod tests {
         let circle = s.add_circle(c, mm(1)).unwrap();
         let made = s.mirror(&[line, circle], axis, true).unwrap();
         // one symmetric constraint for each of the three points that moved, one equal radius
-        let kinds: Vec<_> = s.constraints().iter().map(|k| k.constraint.kind_name()).collect();
-        assert_eq!(kinds.iter().filter(|k| **k == "symmetric_line").count(), 3, "{kinds:?}");
+        let kinds: Vec<_> = s
+            .constraints()
+            .iter()
+            .map(|k| k.constraint.kind_name())
+            .collect();
+        assert_eq!(
+            kinds.iter().filter(|k| **k == "symmetric_line").count(),
+            3,
+            "{kinds:?}"
+        );
         assert_eq!(kinds.iter().filter(|k| **k == "equal").count(), 1);
         let Some(Element::Line { a, b }) = s.element(made[0]).copied() else {
             panic!("not a line");
@@ -2187,7 +2217,10 @@ mod tests {
         assert!(solved(&mut s));
         let (x, y) = s.point(a).unwrap();
         let moved = (x.get(), y.get());
-        assert!(moved.0.abs() < 1000 && (moved.1 - 8_000_000).abs() < 1000, "{moved:?}");
+        assert!(
+            moved.0.abs() < 1000 && (moved.1 - 8_000_000).abs() < 1000,
+            "{moved:?}"
+        );
     }
 
     #[test]
@@ -2203,7 +2236,12 @@ mod tests {
         let end = s.add_point(mm(0), mm(5)).unwrap();
         let arc = s.add_arc(c, start, end).unwrap();
         let made = s.mirror(&[arc], axis, false).unwrap();
-        let Some(Element::Arc { center, start: s1, end: e1 }) = s.element(made[0]).copied() else {
+        let Some(Element::Arc {
+            center,
+            start: s1,
+            end: e1,
+        }) = s.element(made[0]).copied()
+        else {
             panic!("not an arc");
         };
         assert_eq!((center, s1), (o, end));
@@ -2218,7 +2256,12 @@ mod tests {
         let end = s.add_point(mm(4), mm(6)).unwrap();
         let arc = s.add_arc(c, start, end).unwrap();
         let made = s.mirror(&[arc], axis, false).unwrap();
-        let Some(Element::Arc { center, start: s2, end: e2 }) = s.element(made[0]).copied() else {
+        let Some(Element::Arc {
+            center,
+            start: s2,
+            end: e2,
+        }) = s.element(made[0]).copied()
+        else {
             panic!("not an arc");
         };
         assert_eq!(s.point(center).unwrap(), (mm(-4), mm(4)));

@@ -9435,7 +9435,10 @@ mass: "
         let mate = w.mate_from_draft(&draft).unwrap();
         assert_eq!(w.mate_words(&mate), "inset x lower 5 mm");
         let t = w.mates_panel_text(&draft);
-        assert!(t.contains("New mate: Part 2 on Part 1: inset x lower 5 mm"), "{t}");
+        assert!(
+            t.contains("New mate: Part 2 on Part 1: inset x lower 5 mm"),
+            "{t}"
+        );
         assert!(t.contains("Part 2 would be at"), "{t}");
         // the middles have no inside: the trial says it is refused and nothing is changed
         draft.edge = "center".into();

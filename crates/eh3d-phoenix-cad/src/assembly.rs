@@ -2126,22 +2126,34 @@ interference_tolerance = thick
             edge,
             distance: mm(distance),
         };
-        let lower = mated_position(inset(Edge::Min, 5), mm(10).get(), mm(100).get(), mm(30).get());
+        let lower = mated_position(
+            inset(Edge::Min, 5),
+            mm(10).get(),
+            mm(100).get(),
+            mm(30).get(),
+        );
         assert_eq!(lower.unwrap(), mm(15).get());
         // the upper face of b is 5 inside the upper face of a: b ends at 105 and starts at 75
-        let upper = mated_position(inset(Edge::Max, 5), mm(10).get(), mm(100).get(), mm(30).get());
+        let upper = mated_position(
+            inset(Edge::Max, 5),
+            mm(10).get(),
+            mm(100).get(),
+            mm(30).get(),
+        );
         assert_eq!(upper.unwrap(), mm(75).get());
         // a minus sign sticks out
-        let out = mated_position(inset(Edge::Min, -5), mm(10).get(), mm(100).get(), mm(30).get());
+        let out = mated_position(
+            inset(Edge::Min, -5),
+            mm(10).get(),
+            mm(100).get(),
+            mm(30).get(),
+        );
         assert_eq!(out.unwrap(), mm(5).get());
         // a margin of nothing is an alignment
         for edge in [Edge::Min, Edge::Max] {
             let flush = mated_position(inset(edge, 0), mm(10).get(), mm(100).get(), mm(30).get());
             let align = mated_position(
-                MateKind::Align {
-                    axis: Dim::X,
-                    edge,
-                },
+                MateKind::Align { axis: Dim::X, edge },
                 mm(10).get(),
                 mm(100).get(),
                 mm(30).get(),
@@ -2149,10 +2161,13 @@ interference_tolerance = thick
             assert_eq!(flush.unwrap(), align.unwrap());
         }
         // the middles have no inside
-        assert!(
-            mated_position(inset(Edge::Center, 1), mm(10).get(), mm(100).get(), mm(30).get())
-                .is_err()
-        );
+        assert!(mated_position(
+            inset(Edge::Center, 1),
+            mm(10).get(),
+            mm(100).get(),
+            mm(30).get()
+        )
+        .is_err());
     }
 
     #[test]

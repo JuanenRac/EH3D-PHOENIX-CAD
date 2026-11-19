@@ -127,22 +127,40 @@ fn the_sheet_has_the_three_views_on_one_drawing() {
         assert_eq!(code, 0, "{err}");
         let text = fs::read_to_string(&out).unwrap();
         if format == "dxf" {
-            assert!(text.ends_with("0
+            assert!(text.ends_with(
+                "0
 EOF
-"));
+"
+            ));
             // the plan has the four arcs of its rounded corners: the sheet has them too
-            assert_eq!(text.matches("
+            assert_eq!(
+                text.matches(
+                    "
 0
 ARC
-").count(), 4);
+"
+                )
+                .count(),
+                4
+            );
             let front = fs::read_to_string(&single).unwrap();
-            assert!(text.matches("
+            assert!(
+                text.matches(
+                    "
 0
 LINE
-").count() > 2 * front.matches("
+"
+                )
+                .count()
+                    > 2 * front
+                        .matches(
+                            "
 0
 LINE
-").count());
+"
+                        )
+                        .count()
+            );
         } else {
             assert!(text.contains("id=\"CONTORNO\"") && text.trim_end().ends_with("</svg>"));
         }
@@ -150,7 +168,10 @@ LINE
     // a sheet takes no other view, and the other formats take no sheet
     let (code, _, err) = run(&["export", EXAMPLE, "--format", "stl", "--view", "sheet"]);
     assert_eq!(code, 1);
-    assert!(err.contains("--view is only for the formats dxf and svg"), "{err}");
+    assert!(
+        err.contains("--view is only for the formats dxf and svg"),
+        "{err}"
+    );
 }
 
 #[test]
