@@ -917,10 +917,9 @@ impl Drawing {
             Layer::Hatch,
             Layer::Hidden,
         ] {
-            if layer != Layer::Outline && layer != Layer::Holes && layer != Layer::Axes {
-                if self.count(layer) == 0 {
-                    continue;
-                }
+            let always = matches!(layer, Layer::Outline | Layer::Holes | Layer::Axes);
+            if !always && self.count(layer) == 0 {
+                continue;
             }
             let dash = if layer == Layer::Axes {
                 format!(
