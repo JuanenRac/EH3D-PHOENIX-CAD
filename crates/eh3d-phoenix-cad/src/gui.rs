@@ -344,6 +344,7 @@ impl App {
                 let has_step = self.win.selection.step().is_some();
                 let mut add = None;
                 let mut remove = false;
+                let mut break_now = false;
                 ui.horizontal_wrapped(|ui| {
                     for (kind, msg) in [
                         (NewStep::Hole, Msg::AddHole),
@@ -375,9 +376,19 @@ impl App {
                     {
                         remove = true;
                     }
+                    if matches!(self.win.selection, Selection::Pattern(_))
+                        && ui
+                            .add_enabled(editable, egui::Button::new(Msg::PatternBreak.tr(lang)))
+                            .clicked()
+                    {
+                        break_now = true;
+                    }
                 });
                 if let Some(kind) = add {
                     self.win.add_step(kind);
+                }
+                if break_now {
+                    self.win.break_pattern();
                 }
                 if remove {
                     self.win.remove_step();

@@ -622,6 +622,8 @@ messages! {
     PartPatAddDo => ["Add the copies", "Añadir las copias", "Kopien hinzufügen", "Ajouter les copies", "Aggiungi le copie", "コピーを追加", "添加副本", "Adicionar as cópias"],
     PartPatAdded => ["Pattern of {0}: {1} copies added", "Patrón de {0}: {1} copias añadidas", "Muster von {0}: {1} Kopien hinzugefügt", "Répétition de {0} : {1} copies ajoutées", "Serie di {0}: {1} copie aggiunte", "{0} のパターン: コピー {1} 個を追加", "{0} 的阵列：已添加 {1} 个副本", "Padrão de {0}: {1} cópias adicionadas"],
     PartPatPart => ["Part", "Pieza", "Teil", "Pièce", "Parte", "部品", "零件", "Peça"],
+    PatternBreak => ["Break the pattern into single items", "Descomponer el patrón en elementos sueltos", "Muster in Einzelelemente auflösen", "Décomposer la répétition en éléments seuls", "Scomponi la serie in elementi singoli", "パターンを個別の要素に分解", "将阵列拆分为单个元素", "Decompor o padrão em elementos soltos"],
+    PatternBroken => ["Pattern {0} broken into {1} single items", "Patrón {0} descompuesto en {1} elementos sueltos", "Muster {0} in {1} Einzelelemente aufgelöst", "Répétition {0} décomposée en {1} éléments seuls", "Serie {0} scomposta in {1} elementi singoli", "パターン {0} を {1} 個の要素に分解しました", "阵列 {0} 已拆分为 {1} 个元素", "Padrão {0} decomposto em {1} elementos soltos"],
     PartPatKind => ["Layout", "Disposición", "Anordnung", "Disposition", "Disposizione", "配置", "布局", "Disposição"],
     PartPatLinear => ["Line", "Línea", "Linie", "Ligne", "Linea", "直線", "直线", "Linha"],
     PartPatGrid => ["Grid", "Cuadrícula", "Raster", "Grille", "Griglia", "格子", "网格", "Grelha"],

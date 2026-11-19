@@ -192,6 +192,65 @@ impl Window {
         !self.status.is_problem()
     }
 
+    /// Breaks the selected pattern of holes or posts into the single holes or posts it makes,
+    /// each a step of its own under the id it had as a position, in the place of the pattern and
+    /// in one entry of the history. The model does not change: the same holes and posts are there,
+    /// and each can now be edited, moved or taken away on its own. A pattern that is selected
+    /// and cannot be broken (the model refuses a position) is left as it was.
+    pub fn break_pattern(&mut self) {
+        if self.read_only_refusal() {
+            return;
+        }
+        let result = self.pattern_breaking();
+        self.finish(result);
+    }
+
+    fn pattern_breaking(&mut self) -> Result<(), CadError> {
+        let Selection::Pattern(index) = self.selection else {
+            return Err(refusal());
+        };
+        let step = self.mech.steps.get(index).ok_or_else(refusal)?;
+        let Operation::AddPattern { id, pattern } = &step.op else {
+            return Err(refusal());
+        };
+        let (label, suppressed) = (step_label(step), step.suppressed);
+        let ops = pattern.operations(*id, self.settings.design.pattern_max)?;
+        let total = ops.len();
+        let singles: Vec<Step> = ops
+            .into_iter()
+            .map(|op| Step {
+                name: match &op {
+                    Operation::AddHole { hole, .. } => hole.name.clone(),
+                    Operation::AddPost { post, .. } => post.name.clone(),
+                    _ => String::new(),
+                },
+                op,
+                suppressed,
+            })
+            .collect();
+        let mut next = self.mech.clone();
+        next.steps.splice(index..=index, singles);
+        if index < next.tip {
+            next.tip += total - 1;
+        }
+        let built = self.rebuild(&next)?;
+        for k in 0..total {
+            if let Some(StepState::Failed(e)) = built.states.get(index + k) {
+                return Err(e.clone());
+            }
+        }
+        let title = fill(
+            Msg::PatternBroken.tr(self.lang),
+            &[&label, &total.to_string()],
+        );
+        let done = Status::Done(Msg::PatternBroken, vec![label, total.to_string()]);
+        self.change(&title, done, next, None)?;
+        if let Some(step) = self.mech.steps.get(index) {
+            self.selection = the_selection_of(index, step);
+        }
+        Ok(())
+    }
+
     /// The window as it would be with the copies of a draft added, or the refusal. The project of
     /// this window is not touched.
     pub fn part_pattern_trial(&self, draft: &PartPatternDraft) -> Result<Window, CadError> {

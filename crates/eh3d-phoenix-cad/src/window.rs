@@ -6379,6 +6379,67 @@ mod tests {
     }
 
     #[test]
+    fn a_pattern_is_broken_into_single_holes_in_one_entry_of_the_history() {
+        let mut w = fresh();
+        w.add_step(NewStep::HolePattern);
+        assert_eq!(w.selection, Selection::Pattern(0));
+        let before = hole_places(&w);
+        let solid = w.enclosure().clone();
+        w.break_pattern();
+        assert!(!problem(&w), "{:?}", w.status);
+        // four steps of single holes in the place of the pattern, the same holes in the model
+        assert_eq!(w.mech.steps.len(), 4);
+        assert!(w
+            .mech
+            .steps
+            .iter()
+            .all(|s| matches!(s.op, Operation::AddHole { .. })));
+        assert_eq!(w.mech.steps[1].name, "Hole pattern 1 2");
+        assert_eq!(hole_places(&w), before);
+        assert_eq!(w.mech.tip, 4);
+        assert_eq!(w.enclosure().holes(), solid.holes());
+        assert_eq!(w.selection, Selection::Hole(0));
+        assert_eq!(
+            w.status.text(Lang::En),
+            "Pattern Hole pattern 1 broken into 4 single items"
+        );
+        assert!(w.tree().iter().all(|g| g.title != Msg::GroupPatterns));
+        // a single hole can be taken away alone now
+        w.select(Selection::Hole(1));
+        w.remove_step();
+        assert_eq!(w.mech.steps.len(), 3);
+        w.undo();
+        // one undo brings the pattern back
+        w.undo();
+        assert_eq!(w.mech.steps.len(), 1);
+        assert!(matches!(w.mech.steps[0].op, Operation::AddPattern { .. }));
+        // a selection that is not a pattern, and a read-only project, change nothing
+        w.select(Selection::Body);
+        let same = w.mech.clone();
+        w.break_pattern();
+        assert!(problem(&w));
+        assert_eq!(w.mech, same);
+        w.select(Selection::Pattern(0));
+        w.read_only = true;
+        w.break_pattern();
+        assert_eq!(w.mech, same);
+        // a pattern of posts breaks into posts
+        let mut p = fresh();
+        p.add_step(NewStep::PostPattern);
+        if matches!(p.selection, Selection::Pattern(_)) {
+            let posts = p.enclosure().posts().len();
+            p.break_pattern();
+            assert!(!problem(&p), "{:?}", p.status);
+            assert_eq!(p.enclosure().posts().len(), posts);
+            assert!(p
+                .mech
+                .steps
+                .iter()
+                .all(|s| matches!(s.op, Operation::AddPost { .. })));
+        }
+    }
+
+    #[test]
     fn the_panel_of_the_import_has_no_report_of_its_own() {
         use crate::panels::{Panel, PanelOptions};
         assert_eq!(
