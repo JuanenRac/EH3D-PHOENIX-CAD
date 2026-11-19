@@ -383,6 +383,13 @@ pub struct DrawingSettings {
     pub frame: bool,
     /// The air between what is drawn and the border, from 0 to 1000 mm.
     pub frame_margin: Length,
+    /// Where the sheet of several views puts the plan and the side: 1 is first-angle projection
+    /// (the plan under the front and the side to the left of it), 3 third-angle projection (the
+    /// plan over the front and the side to the right of it).
+    pub sheet_angle: u8,
+    /// The air between two views on the sheet, from 0 to 1000 mm, besides the room their
+    /// dimension lines take.
+    pub sheet_gap: Length,
 }
 
 impl DrawingSettings {
@@ -452,6 +459,17 @@ impl DrawingSettings {
                 "drawing.frame_margin must be from 0 mm to 1000 mm".into(),
             ));
         }
+        let sheet_angle = match c.number("drawing.sheet_angle")? {
+            1 => 1,
+            3 => 3,
+            _ => return Err(CadError::Config("drawing.sheet_angle must be 1 or 3".into())),
+        };
+        let sheet_gap = c.length("drawing.sheet_gap")?;
+        if sheet_gap.get() < 0 || sheet_gap.get() > 1_000_000_000 {
+            return Err(CadError::Config(
+                "drawing.sheet_gap must be from 0 mm to 1000 mm".into(),
+            ));
+        }
         Ok(DrawingSettings {
             max_entities,
             svg_width,
@@ -466,6 +484,8 @@ impl DrawingSettings {
             hidden_lines: flag("drawing.hidden_lines")?,
             frame: flag("drawing.frame")?,
             frame_margin,
+            sheet_angle,
+            sheet_gap,
         })
     }
 }
@@ -1569,6 +1589,8 @@ markup_percent = 1000
                 hidden_lines: true,
                 frame: false,
                 frame_margin: Length::new(5_000_000).unwrap(),
+                sheet_angle: 1,
+                sheet_gap: Length::new(20_000_000).unwrap(),
             }
         );
         let own = Settings::with_user_config(

@@ -38,7 +38,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad sketch-import DRAWING.dxf [--out FILE.phoenixsketch] [--name NAME] [--face NAME] [--unit mm|cm|m|in] [--layers NAME,NAME] [--list-layers] [--overwrite] [--lang CODE] [--config FILE]   reads the lines, circles, arcs and polylines of a text DXF drawing into a new sketch (the ends that meet become one point, so closed outlines can be raised from a face or cut into it) and writes it as a sketch file; what is not read (text, dimensions, splines, ...) is counted and told; --layers reads only the entities of the layers named and counts the others, --list-layers prints the layers of the drawing with their entities and writes nothing; the unit is that of the drawing (mm without --unit), the sketch lies on the face given (front without --face), and its name is the one of the file without --name
   eh3d-phoenix-cad section PROJECT.phoenixproj --axis x|y|z --at LENGTH [--format dxf|svg] [--out FILE] [--overwrite] [--lang CODE] [--config FILE]   cuts the solids of a project (the box, the parts and the turned and swept bodies) with the plane across an axis at a position (a length: 15, 15 mm, 0.5 in) and prints the outlines and the area of the material; with --out the section is written as a DXF or SVG drawing (the format is --format or the extension of the file; never over a file that exists unless --overwrite is given)
   eh3d-phoenix-cad library FILE.phoenixlib [--config FILE]                        reads a library of parts, checks it and lists its parts
-  eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill|order [--view top|front|side] [--out FILE] [--overwrite] [--ascii|--binary] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), as a Wavefront file (obj) or as a 3MF package (3mf), the plan, front or side as a drawing (dxf, svg), the STEP file, the OpenSCAD-style script, the fit report, the bill of materials or the order sheet (an HTML page with the bars to buy, the holes to drill and the parts with their cost, in the language of --lang)
+  eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill|order [--view top|front|side|sheet] [--out FILE] [--overwrite] [--ascii|--binary] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), as a Wavefront file (obj) or as a 3MF package (3mf), the plan, front or side, or all three on one sheet, as a drawing (dxf, svg), the STEP file, the OpenSCAD-style script, the fit report, the bill of materials or the order sheet (an HTML page with the bars to buy, the holes to drill and the parts with their cost, in the language of --lang)
   eh3d-phoenix-cad config                                                         every setting of the library, of the window and of the sketch with its default value, as a file for --config
 
 --open FILE is the same as giving the file by itself; a sketch file opens the window on the sketch. --lang takes en, es, de, fr, it, ja, zh or pt; without it the language of the system is used (the reports cutplan, clearance, placements, holes and balance and the answer of sketch-export are in English unless --lang is given; with --text the first four are lines for a person in that language instead of comma separated values).
@@ -959,10 +959,11 @@ fn run_library(args: &[String]) -> Result<bool, String> {
 }
 
 /// The format of the `export` command: a word, and for the drawings the view.
-fn export_format(word: &str, view: Option<View>) -> Result<Format, String> {
+fn export_format(word: &str, view: Option<View>, sheet: bool) -> Result<Format, String> {
     match word {
+        "dxf" | "svg" if sheet && view.is_none() => Ok(Format::sheet(word == "dxf")),
         "dxf" | "svg" => Ok(Format::drawing(word == "dxf", view.unwrap_or(View::Top))),
-        _ if view.is_some() => Err("--view is only for the formats dxf and svg".to_owned()),
+        _ if view.is_some() || sheet => Err("--view is only for the formats dxf and svg".to_owned()),
         "stl" | "step" | "script" | "report" | "bill" | "obj" | "3mf" | "order" => {
             Format::from_name(word).ok_or_else(|| format!("{word}: unknown format"))
         }
@@ -981,6 +982,7 @@ fn run_export(args: &[String]) -> Result<bool, String> {
     let mut out: Option<PathBuf> = None;
     let mut word: Option<String> = None;
     let mut view: Option<View> = None;
+    let mut sheet = false;
     let mut overwrite = false;
     let mut binary: Option<bool> = None;
     let mut iter = args.iter();
@@ -996,8 +998,14 @@ fn run_export(args: &[String]) -> Result<bool, String> {
             }
             "--format" => word = Some(iter.next().ok_or("--format needs a format")?.clone()),
             "--view" => {
-                let name = iter.next().ok_or("--view needs top, front or side")?;
-                view = Some(View::from_name(name).ok_or("--view is top, front or side")?);
+                let name = iter.next().ok_or("--view needs top, front, side or sheet")?;
+                if name == "sheet" {
+                    sheet = true;
+                } else {
+                    view = Some(
+                        View::from_name(name).ok_or("--view is top, front, side or sheet")?,
+                    );
+                }
             }
             "--out" => out = Some(PathBuf::from(iter.next().ok_or("--out needs a file")?)),
             "--overwrite" => overwrite = true,
@@ -1014,7 +1022,7 @@ fn run_export(args: &[String]) -> Result<bool, String> {
     }
     let file = file.ok_or("export needs a project file")?;
     let word = word.ok_or("export needs --format")?;
-    let format = export_format(&word, view)?;
+    let format = export_format(&word, view, sheet)?;
     if binary.is_some() && format != Format::Stl {
         return Err("--ascii and --binary are only for the format stl".to_owned());
     }

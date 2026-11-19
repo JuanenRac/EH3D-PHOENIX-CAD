@@ -112,6 +112,48 @@ fn the_drawings_are_written_for_each_view() {
 }
 
 #[test]
+fn the_sheet_has_the_three_views_on_one_drawing() {
+    let dir = Scratch::new("sheet");
+    let single = dir.file("front.dxf");
+    let (code, _, err) = run(&[
+        "export", EXAMPLE, "--format", "dxf", "--view", "front", "--out", &single,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    for (format, name) in [("dxf", "sheet.dxf"), ("svg", "sheet.svg")] {
+        let out = dir.file(name);
+        let (code, _, err) = run(&[
+            "export", EXAMPLE, "--format", format, "--view", "sheet", "--out", &out,
+        ]);
+        assert_eq!(code, 0, "{err}");
+        let text = fs::read_to_string(&out).unwrap();
+        if format == "dxf" {
+            assert!(text.ends_with("0
+EOF
+"));
+            // the plan has the four arcs of its rounded corners: the sheet has them too
+            assert_eq!(text.matches("
+0
+ARC
+").count(), 4);
+            let front = fs::read_to_string(&single).unwrap();
+            assert!(text.matches("
+0
+LINE
+").count() > 2 * front.matches("
+0
+LINE
+").count());
+        } else {
+            assert!(text.contains("id=\"CONTORNO\"") && text.trim_end().ends_with("</svg>"));
+        }
+    }
+    // a sheet takes no other view, and the other formats take no sheet
+    let (code, _, err) = run(&["export", EXAMPLE, "--format", "stl", "--view", "sheet"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("--view is only for the formats dxf and svg"), "{err}");
+}
+
+#[test]
 fn a_file_that_exists_is_kept_unless_the_order_to_write_over_it_is_given() {
     let dir = Scratch::new("overwrite");
     let out = dir.file("box.scad");
@@ -163,7 +205,7 @@ fn the_arguments_are_checked() {
     assert!(err.contains("only for the format stl"), "{err}");
     let (code, _, err) = run(&["export", EXAMPLE, "--format", "dxf", "--view", "back"]);
     assert_eq!(code, 1);
-    assert!(err.contains("top, front or side"), "{err}");
+    assert!(err.contains("top, front, side or sheet"), "{err}");
     let (code, _, err) = run(&["export", "--format", "stl"]);
     assert_eq!(code, 1);
     assert!(err.contains("needs a project file"), "{err}");

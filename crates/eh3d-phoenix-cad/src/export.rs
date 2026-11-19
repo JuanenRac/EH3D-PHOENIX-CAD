@@ -43,12 +43,16 @@ pub enum Format {
     DxfFront,
     /// The side as a DXF drawing.
     DxfSide,
+    /// The plan, the front and the side on one sheet, as a DXF drawing.
+    DxfSheet,
     /// The plan as an SVG drawing.
     SvgTop,
     /// The front as an SVG drawing.
     SvgFront,
     /// The side as an SVG drawing.
     SvgSide,
+    /// The plan, the front and the side on one sheet, as an SVG drawing.
+    SvgSheet,
     /// The text of the fit report: the measures, whether the board fits and the state of every
     /// step.
     Report,
@@ -65,16 +69,18 @@ pub enum Format {
 
 impl Format {
     /// Every format, in the order of the menu.
-    pub const ALL: [Format; 14] = [
+    pub const ALL: [Format; 16] = [
         Format::Script,
         Format::Step,
         Format::Stl,
         Format::DxfTop,
         Format::DxfFront,
         Format::DxfSide,
+        Format::DxfSheet,
         Format::SvgTop,
         Format::SvgFront,
         Format::SvgSide,
+        Format::SvgSheet,
         Format::Report,
         Format::Bill,
         Format::Obj,
@@ -88,8 +94,8 @@ impl Format {
             Format::Script => "scad",
             Format::Step => "step",
             Format::Stl => "stl",
-            Format::DxfTop | Format::DxfFront | Format::DxfSide => "dxf",
-            Format::SvgTop | Format::SvgFront | Format::SvgSide => "svg",
+            Format::DxfTop | Format::DxfFront | Format::DxfSide | Format::DxfSheet => "dxf",
+            Format::SvgTop | Format::SvgFront | Format::SvgSide | Format::SvgSheet => "svg",
             Format::Report => "txt",
             Format::Bill => "csv",
             Format::Obj => "obj",
@@ -107,9 +113,11 @@ impl Format {
             Format::DxfTop => "dxf-top",
             Format::DxfFront => "dxf-front",
             Format::DxfSide => "dxf-side",
+            Format::DxfSheet => "dxf-sheet",
             Format::SvgTop => "svg-top",
             Format::SvgFront => "svg-front",
             Format::SvgSide => "svg-side",
+            Format::SvgSheet => "svg-sheet",
             Format::Report => "report",
             Format::Bill => "bill",
             Format::Obj => "obj",
@@ -135,7 +143,21 @@ impl Format {
         }
     }
 
-    /// The view of a drawing format, or `None` for the others.
+    /// The format of the sheet of several views: DXF or SVG.
+    pub fn sheet(dxf: bool) -> Format {
+        if dxf {
+            Format::DxfSheet
+        } else {
+            Format::SvgSheet
+        }
+    }
+
+    /// Whether the format is a sheet of several views.
+    pub fn is_sheet(self) -> bool {
+        matches!(self, Format::DxfSheet | Format::SvgSheet)
+    }
+
+    /// The view of a drawing format, or `None` for the others and for the sheets.
     pub fn view(self) -> Option<View> {
         match self {
             Format::DxfTop | Format::SvgTop => Some(View::Top),
@@ -188,8 +210,12 @@ pub fn render_titled(
             }
         }
         _ => {
-            let view = format.view().unwrap_or(View::Top);
-            let mut drawing = Drawing::of(enclosure, view, &settings.drawing)?;
+            let mut drawing = if format.is_sheet() {
+                Drawing::sheet(enclosure, &settings.drawing)?
+            } else {
+                let view = format.view().unwrap_or(View::Top);
+                Drawing::of(enclosure, view, &settings.drawing)?
+            };
             if settings.drawing.legend {
                 drawing.add_legend(enclosure, &settings.drawing, lang);
             }
@@ -384,9 +410,11 @@ mod tests {
                 ("dxf", "dxf-top"),
                 ("dxf", "dxf-front"),
                 ("dxf", "dxf-side"),
+                ("dxf", "dxf-sheet"),
                 ("svg", "svg-top"),
                 ("svg", "svg-front"),
                 ("svg", "svg-side"),
+                ("svg", "svg-sheet"),
                 ("txt", "report"),
                 ("csv", "bill"),
                 ("obj", "obj"),
@@ -662,5 +690,30 @@ frame_margin = 8 mm
         // the other formats are not drawings
         let script = String::from_utf8(render(Format::Script, &e, "", &on).unwrap()).unwrap();
         assert!(!script.contains("MARCO"));
+    }
+
+    #[test]
+    fn the_sheet_formats_are_drawings_of_all_the_views_and_have_no_single_view() {
+        assert_eq!(Format::sheet(true), Format::DxfSheet);
+        assert_eq!(Format::sheet(false), Format::SvgSheet);
+        assert!(Format::DxfSheet.is_sheet() && Format::SvgSheet.is_sheet());
+        assert!(!Format::DxfTop.is_sheet() && !Format::Order.is_sheet());
+        assert_eq!(Format::DxfSheet.view(), None);
+        assert_eq!(Format::SvgSheet.view(), None);
+        assert_eq!(Format::from_name("dxf-sheet"), Some(Format::DxfSheet));
+        assert_eq!(Format::from_name("svg-sheet"), Some(Format::SvgSheet));
+        let e = enclosure();
+        let off = Settings::with_user_config("[drawing]\nlegend = 0\nhidden_lines = 0\n").unwrap();
+        let dxf = String::from_utf8(render(Format::DxfSheet, &e, "", &off).unwrap()).unwrap();
+        // three views: three outlines of four lines or more, and the sheet is wider than a view
+        let top = String::from_utf8(render(Format::DxfTop, &e, "", &off).unwrap()).unwrap();
+        assert!(dxf.matches("0\nLINE\n8\nCONTORNO\n").count() >= 3 * 4);
+        assert!(dxf.len() > top.len());
+        // a frame and a legend go round the whole sheet
+        let on = Settings::with_user_config("[drawing]\nframe = 1\n").unwrap();
+        let svg = String::from_utf8(render(Format::SvgSheet, &e, "", &on).unwrap()).unwrap();
+        assert!(svg.contains("<g id=\"MARCO\""));
+        assert!(svg.contains(">Dimensions (mm)</text>"));
+        assert_eq!(suggested_name(None, Format::SvgSheet), "box.svg");
     }
 }

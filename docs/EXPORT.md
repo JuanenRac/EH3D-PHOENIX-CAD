@@ -11,18 +11,19 @@ The model is written to a file from the **Export** menu of the window or with th
 | 3MF | `3mf` | `.3mf` | the same solids as a 3MF package (a zip file without compression with the model as XML), in millimetres |
 | DXF | `dxf` | `.dxf` | the plan, the front or the side as a drawing |
 | SVG | `svg` | `.svg` | the same views, scaled to a page, with dimensions |
+| Sheet of views | `dxf` or `svg` with `--view sheet` | `.dxf`, `.svg` | the plan, the front and the side on one drawing |
 | Report | `report` | `.txt` | the fit report |
 | Bill | `bill` | `.csv` | the bill of materials of the parts placed in the model |
 | Order sheet | `order` | `.html` | the bars to buy, the holes to drill and the parts with their cost, as one self-contained page |
 
 ```
 eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill|order
-                        [--view top|front|side] [--out FILE] [--overwrite] [--ascii|--binary]
+                        [--view top|front|side|sheet] [--out FILE] [--overwrite] [--ascii|--binary]
 ```
 
 * `--out` defaults to the name of the project with the extension of the format, in the current folder.
 * A file that exists is **never** written over unless `--overwrite` is given (in the window, unless the box of the dialog is ticked); the project that is open and a name that belongs to a project or a sketch are never written over. The check is the one of [`export::check_target`](../crates/eh3d-phoenix-cad/src/export.rs): `PHOENIX-CAD-040` when the file exists, `PHOENIX-CAD-041` for the other refusals.
-* `--view` is for `dxf` and `svg` only (`top` is the default); `--ascii` and `--binary` are for `stl` only and override `mesh.stl_binary`.
+* `--view` is for `dxf` and `svg` only (`top` is the default; `sheet` puts the plan, the front and the side on one drawing, see below); `--ascii` and `--binary` are for `stl` only and override `mesh.stl_binary`.
 * The exit code is 0 when the file was written and 1 when it was not; the code of the reason is printed.
 
 ## The order sheet
@@ -83,6 +84,10 @@ The three views look at the box from above (`top`: `x` to the right, `y` up), fr
 
 The DXF file is R12 text with the entities `LINE`, `CIRCLE` and `ARC` and the header variable `$INSUNITS` set to millimetres. The SVG file is scaled to `drawing.svg_width`; with `drawing.dimensions = 1` it has the width and the height of the box as dimension lines, the size of every hole as a label (`⌀6`, `⌀3 / ⌀8` for a countersink, `4×10` for a slot) and the scale in the corner. Posts, the lip and the inside of the box are not drawn, because they are not seen from outside. A drawing with more than `drawing.max_entities` entities is refused (`PHOENIX-CAD-050`). Neither format has been opened in a drawing program.
 
+### The sheet of views
+
+`export --view sheet` (or **Sheet of views** in the Export menu, `dxf-sheet` and `svg-sheet`) puts the front, the plan and the side on one drawing, each with its own outline, cavity, centre lines and dimensions (`Drawing::sheet`). The front is the main view, at the origin. With `drawing.sheet_angle = 1` (the default, first-angle projection as in ISO) the plan is under the front and the side, which looks from the right, is to its left; with `3` (third angle) the plan is over the front and the side to its right. Between two views are `drawing.sheet_gap` (20 mm by default) and the room that the dimension lines of the view next to the gap take, so no dimension line lies on a neighbour. The legend is written once, to the right of the whole sheet, and lists the holes of the front; the border and the title block go round and under the whole sheet. The three views together count against `drawing.max_entities` (`PHOENIX-CAD-050`).
+
 ### The dimensions of a view
 
 The three views are dimensioned by themselves, in the DXF file (on the layer `COTAS`, as `LINE` and `TEXT` entities) and in the SVG file:
@@ -125,6 +130,8 @@ In `phoenix-cad.default.cfg` (the `config` command writes them):
 | `drawing.legend` | 1 | the list of the dimensions (box, thickness, holes) to the right of the box |
 | `drawing.legend_gap` | 10 mm | the room between the box and the legend |
 | `drawing.hidden_lines` | 1 | the cavity of the box as dashed lines on the layer `OCULTAS` |
+| `drawing.sheet_angle` | 1 | the sheet of views: 1 puts the plan under the front and the side to its left (first angle), 3 the plan over the front and the side to its right (third angle) |
+| `drawing.sheet_gap` | 20 mm | the air between two views of the sheet, besides the room of their dimension lines |
 | `drawing.frame` | 0 | a border on the layer `MARCO` round the views, their dimensions and their legend |
 | `drawing.frame_margin` | 5 mm | the air between what is drawn and the border, from 0 mm to 1000 mm |
 
@@ -143,7 +150,7 @@ With `title_block.enabled = 1` the DXF and SVG drawings of the views and of a sk
 | `title_block.width` | 120 mm | the width of the block, from 60 mm to 400 mm |
 | `title_block.row` | 7 mm | the height of each of the four rows, from 4 mm to 20 mm |
 
-In `phoenix-cad-window.default.cfg`: `export.format` (the format the dialog starts with: `script`, `step`, `stl`, `dxf-top`, `dxf-front`, `dxf-side`, `svg-top`, `svg-front`, `svg-side`, `report`, `bill`, `obj`, `3mf` or `order`), `export.overwrite` and `export.max_kib`.
+In `phoenix-cad-window.default.cfg`: `export.format` (the format the dialog starts with: `script`, `step`, `stl`, `dxf-top`, `dxf-front`, `dxf-side`, `dxf-sheet`, `svg-top`, `svg-front`, `svg-side`, `svg-sheet`, `report`, `bill`, `obj`, `3mf` or `order`), `export.overwrite` and `export.max_kib`.
 
 ## A section of the model
 

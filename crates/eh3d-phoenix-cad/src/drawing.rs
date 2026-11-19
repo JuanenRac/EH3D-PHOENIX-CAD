@@ -600,6 +600,75 @@ impl Drawing {
         self.entities.extend(rect_lines(Layer::Frame, lo, hi));
     }
 
+    /// The drawing moved by `dx` and `dy` millimetres: what is drawn, the dimensions and the labels.
+    fn shifted(mut self, dx: f64, dy: f64) -> Drawing {
+        let at = |p: (f64, f64)| (p.0 + dx, p.1 + dy);
+        for (_, e) in &mut self.entities {
+            *e = match *e {
+                Entity::Line(a, b) => Entity::Line(at(a), at(b)),
+                Entity::Circle(c, r) => Entity::Circle(at(c), r),
+                Entity::Arc(c, r, a0, a1) => Entity::Arc(at(c), r, a0, a1),
+            };
+        }
+        for n in &mut self.notes {
+            n.at = at(n.at);
+            n.measures = n.measures.map(|(a, b)| (at(a), at(b)));
+        }
+        self
+    }
+
+    /// One sheet with the plan, the front and the side, each with its own dimensions and centre
+    /// lines. The front is the main view, at the origin; with `settings.sheet_angle` 1 (first
+    /// angle, ISO) the plan is under it and the side, which looks from the right, is to its left;
+    /// with 3 (third angle) the plan is over it and the side to its right. Between two views are
+    /// `settings.sheet_gap` and the room that the dimension lines of the view next to the gap
+    /// take, so that no dimension line lies on a neighbour. The legend, when it is added, is to
+    /// the right of the whole sheet and lists the holes of the front. Refused with
+    /// `PHOENIX-CAD-050` when the three views together have more entities than
+    /// `drawing.max_entities`.
+    pub fn sheet(enclosure: &Enclosure, settings: &DrawingSettings) -> Result<Drawing, CadError> {
+        let mut views = Drawing::placed(enclosure, settings)?.into_iter();
+        let mut sheet = views.next().expect("a sheet has a front");
+        for part in views {
+            sheet.entities.extend(part.entities);
+            sheet.notes.extend(part.notes);
+        }
+        if sheet.entities.len() > settings.max_entities as usize {
+            return Err(CadError::ExportLimit(format!(
+                "the sheet has {} entities and the settings allow {}",
+                sheet.entities.len(),
+                settings.max_entities
+            )));
+        }
+        let (_, hi) = sheet.bounds();
+        sheet.extent = hi;
+        Ok(sheet)
+    }
+
+    /// The front, the plan and the side, each moved to its place on the sheet.
+    fn placed(enclosure: &Enclosure, settings: &DrawingSettings) -> Result<Vec<Drawing>, CadError> {
+        let front = Drawing::of(enclosure, View::Front, settings)?;
+        let top = Drawing::of(enclosure, View::Top, settings)?;
+        let side = Drawing::of(enclosure, View::Side, settings)?;
+        let gap = mm(settings.sheet_gap.get());
+        let (top_at, side_at) = if settings.sheet_angle == 3 {
+            (
+                (0.0, front.extent.1 + gap + top.dimension_room()),
+                (front.extent.0 + gap + side.dimension_room(), 0.0),
+            )
+        } else {
+            (
+                (0.0, -(gap + front.dimension_room() + top.extent.1)),
+                (-(gap + front.dimension_room() + side.extent.0), 0.0),
+            )
+        };
+        Ok(vec![
+            front,
+            top.shifted(top_at.0, top_at.1),
+            side.shifted(side_at.0, side_at.1),
+        ])
+    }
+
     /// The most dimension lines that lie one above the other.
     fn levels(&self) -> u32 {
         self.notes
@@ -1877,6 +1946,175 @@ frame_margin = -1 mm
             "[drawing]
 frame_margin = 1001 mm
 ",
+        ] {
+            assert!(crate::config::Settings::with_user_config(bad).is_err(), "{bad}");
+        }
+    }
+
+    fn third_angle() -> DrawingSettings {
+        DrawingSettings {
+            sheet_angle: 3,
+            ..settings()
+        }
+    }
+
+    #[test]
+    fn the_sheet_puts_the_plan_under_the_front_and_the_side_to_its_left_in_first_angle() {
+        let e = model();
+        let s = Drawing::sheet(&e, &settings()).unwrap();
+        // 13 mm of dimension line under a view and 20 mm of air: the plan is 64 mm high and the
+        // side 64 mm wide
+        let room = Drawing::of(&e, View::Front, &settings())
+            .unwrap()
+            .dimension_room();
+        assert_eq!(room, 13.0);
+        let at = |x: f64, y: f64| (x, y);
+        let line = |a: (f64, f64), b: (f64, f64)| {
+            s.entities.contains(&(Layer::Outline, Entity::Line(a, b)))
+                || s.entities.contains(&(Layer::Outline, Entity::Line(b, a)))
+        };
+        assert!(line(at(0.0, 0.0), at(104.0, 0.0)));
+        assert!(line(at(0.0, -97.0), at(104.0, -97.0)));
+        assert!(line(at(0.0, -33.0), at(104.0, -33.0)));
+        assert!(line(at(-97.0, 0.0), at(-33.0, 0.0)));
+        assert!(line(at(-97.0, 35.0), at(-33.0, 35.0)));
+        // each view keeps its outline, its cavity and its two centre lines
+        assert_eq!(s.count(Layer::Outline), 12);
+        assert_eq!(s.count(Layer::Hidden), 12);
+        assert_eq!(s.count(Layer::Axes), 6);
+        assert_eq!(s.notes.iter().filter(|n| n.measures.is_some()).count(), 6);
+        assert_eq!(s.view, View::Front);
+    }
+
+    #[test]
+    fn the_sheet_puts_the_plan_over_the_front_and_the_side_to_its_right_in_third_angle() {
+        let e = model();
+        let s = Drawing::sheet(&e, &third_angle()).unwrap();
+        let line = |a: (f64, f64), b: (f64, f64)| {
+            s.entities.contains(&(Layer::Outline, Entity::Line(a, b)))
+                || s.entities.contains(&(Layer::Outline, Entity::Line(b, a)))
+        };
+        // 35 + 20 + 13 for the plan, 104 + 20 + 13 for the side
+        assert!(line((0.0, 68.0), (104.0, 68.0)));
+        assert!(line((0.0, 132.0), (104.0, 132.0)));
+        assert!(line((137.0, 0.0), (201.0, 0.0)));
+        assert!(line((137.0, 35.0), (201.0, 35.0)));
+        // the dimensions moved with their views
+        let widths: Vec<_> = s
+            .notes
+            .iter()
+            .filter(|n| n.text == "64")
+            .filter_map(|n| n.measures)
+            .collect();
+        assert!(widths.contains(&((137.0, 0.0), (201.0, 0.0))), "{widths:?}");
+        assert!(widths.contains(&((0.0, 68.0), (0.0, 132.0))), "{widths:?}");
+    }
+
+    #[test]
+    fn the_views_of_the_sheet_do_not_lie_on_one_another_nor_on_their_dimension_lines() {
+        let mut e = model();
+        hole(&mut e, 1, Face::Front, 60, 17, 6, HoleStyle::Plain);
+        hole(&mut e, 2, Face::Front, 30, 17, 4, HoleStyle::Plain);
+        hole(&mut e, 3, Face::Top, 10, 10, 3, HoleStyle::Plain);
+        for settings in [settings(), third_angle()] {
+            let views = Drawing::placed(&e, &settings).unwrap();
+            assert_eq!(views.len(), 3);
+            for (i, a) in views.iter().enumerate() {
+                // what the view needs: its drawing and the dimension lines under and to the left
+                let ((x0, y0), (x1, y1)) = a.bounds();
+                let room = a.dimension_room();
+                assert!(room >= 13.0);
+                let (x0, y0) = (x0 - room, y0 - room);
+                for (j, b) in views.iter().enumerate() {
+                    if i == j {
+                        continue;
+                    }
+                    let ((u0, v0), (u1, v1)) = b.bounds();
+                    let apart = u1 < x0 || u0 > x1 || v1 < y0 || v0 > y1;
+                    assert!(apart, "view {i} and view {j} touch with angle {}", settings.sheet_angle);
+                }
+            }
+            let s = Drawing::sheet(&e, &settings).unwrap();
+            assert_eq!(s.count(Layer::Holes), 3);
+        }
+    }
+
+    #[test]
+    fn the_legend_of_the_sheet_is_to_the_right_of_all_the_views() {
+        let mut e = model();
+        hole(&mut e, 1, Face::Front, 60, 17, 6, HoleStyle::Plain);
+        for settings in [settings(), third_angle()] {
+            let mut s = Drawing::sheet(&e, &settings).unwrap();
+            let (_, hi) = s.bounds();
+            assert_eq!(s.extent, hi);
+            s.add_legend(&e, &settings, Lang::En);
+            let legend: Vec<_> = s
+                .notes
+                .iter()
+                .filter(|n| n.level == LEGEND_LEVEL)
+                .collect();
+            assert!(legend.len() >= 4);
+            for n in &legend {
+                assert_eq!(n.at.0, hi.0 + 10.0);
+            }
+            // the holes it lists are the ones of the front
+            assert!(legend.iter().any(|n| n.text.starts_with("H1")), "{legend:?}");
+        }
+    }
+
+    #[test]
+    fn the_sheet_gap_moves_the_views_apart_and_a_sheet_in_the_files_has_all_the_lines() {
+        let e = model();
+        let wide = DrawingSettings {
+            sheet_gap: Length::new(50_000_000).unwrap(),
+            ..settings()
+        };
+        let near = Drawing::sheet(&e, &settings()).unwrap();
+        let far = Drawing::sheet(&e, &wide).unwrap();
+        let (a, b) = (near.bounds(), far.bounds());
+        assert_eq!(b.0 .0 - a.0 .0, -30.0);
+        assert_eq!(b.0 .1 - a.0 .1, -30.0);
+        let dxf = near.to_dxf();
+        assert_eq!(dxf.matches("0\nLINE\n8\nCONTORNO\n").count(), 12);
+        assert_eq!(dxf.matches("0\nLINE\n8\nOCULTAS\n").count(), 12);
+        assert!(dxf.ends_with("0\nEOF\n"));
+        let svg = near.to_svg(&settings());
+        assert!(svg.trim_end().ends_with("</svg>"));
+        assert_eq!(svg.matches("<g id=\"CONTORNO\"").count(), 1);
+    }
+
+    #[test]
+    fn the_sheet_is_refused_when_the_three_views_together_have_too_many_entities() {
+        let e = model();
+        // each view has 10 entities (its outline, its cavity and its two centre lines)
+        let few = DrawingSettings {
+            max_entities: 20,
+            ..settings()
+        };
+        assert_eq!(
+            Drawing::of(&e, View::Front, &few).unwrap().entities.len(),
+            10
+        );
+        let err = Drawing::sheet(&e, &few).unwrap_err();
+        assert_eq!(err.code(), "PHOENIX-CAD-050");
+        assert!(Drawing::sheet(&e, &settings()).is_ok());
+    }
+
+    #[test]
+    fn the_settings_of_the_sheet_have_their_defaults_and_their_limits() {
+        assert_eq!(settings().sheet_angle, 1);
+        assert_eq!(settings().sheet_gap.get(), 20_000_000);
+        let own = crate::config::Settings::with_user_config(
+            "[drawing]\nsheet_angle = 3\nsheet_gap = 0 mm\n",
+        )
+        .unwrap();
+        assert_eq!(own.drawing.sheet_angle, 3);
+        assert_eq!(own.drawing.sheet_gap, Length::ZERO);
+        for bad in [
+            "[drawing]\nsheet_angle = 2\n",
+            "[drawing]\nsheet_angle = 0\n",
+            "[drawing]\nsheet_gap = -1 mm\n",
+            "[drawing]\nsheet_gap = 1001 mm\n",
         ] {
             assert!(crate::config::Settings::with_user_config(bad).is_err(), "{bad}");
         }
