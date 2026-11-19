@@ -135,6 +135,11 @@ impl NewStepDefaults {
             "turn" => Some(MateKind::Turn {
                 quarters: self.mate_quarters,
             }),
+            "inset" => Some(MateKind::Inset {
+                axis: self.mate_axis,
+                edge: self.mate_edge,
+                distance: self.mate_distance,
+            }),
             _ => None,
         }
     }
@@ -321,9 +326,9 @@ impl NewStepDefaults {
         let part_axis = word(c, "new_step.part_axis")?;
         let part_roll = count(c, "new_step.part_roll", 0, 270)?;
         let mate_kind = word(c, "new_step.mate_kind")?;
-        if !["gap", "align", "stack", "offset", "symmetric", "turn"].contains(&mate_kind) {
+        if !["gap", "align", "stack", "offset", "symmetric", "turn", "inset"].contains(&mate_kind) {
             return Err(CadError::Config(format!(
-                "new_step.mate_kind: {mate_kind} is not gap, align, stack, offset, symmetric or turn"
+                "new_step.mate_kind: {mate_kind} is not gap, align, stack, offset, symmetric, turn or inset"
             )));
         }
         let mate_direction = word(c, "new_step.mate_direction")?;

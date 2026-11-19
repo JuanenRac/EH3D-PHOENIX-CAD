@@ -1009,6 +1009,7 @@ impl App {
                                 ("offset", Msg::MateOffset),
                                 ("symmetric", Msg::MateSymmetric),
                                 ("turn", Msg::MateTurn),
+                                ("inset", Msg::MateInset),
                             ] {
                                 ui.selectable_value(
                                     &mut draft.kind,
@@ -1030,7 +1031,7 @@ impl App {
                                 }
                             });
                         }
-                        if ["align", "offset", "symmetric"].contains(&kind.as_str()) {
+                        if ["align", "offset", "symmetric", "inset"].contains(&kind.as_str()) {
                             ui.horizontal(|ui| {
                                 ui.label(Msg::FieldMateAxis.tr(lang));
                                 for name in ["x", "y", "z"] {
@@ -1038,7 +1039,7 @@ impl App {
                                 }
                             });
                         }
-                        if kind == "align" {
+                        if kind == "align" || kind == "inset" {
                             ui.horizontal(|ui| {
                                 ui.label(Msg::FieldMateEdge.tr(lang));
                                 for (word, msg) in [
@@ -1054,9 +1055,9 @@ impl App {
                                 }
                             });
                         }
-                        if kind == "gap" || kind == "offset" {
+                        if kind == "gap" || kind == "offset" || kind == "inset" {
                             ui.horizontal(|ui| {
-                                ui.label(if kind == "gap" {
+                                ui.label(if kind != "offset" {
                                     Msg::FieldMateDistance.tr(lang)
                                 } else {
                                     Msg::FieldMateOffset.tr(lang)

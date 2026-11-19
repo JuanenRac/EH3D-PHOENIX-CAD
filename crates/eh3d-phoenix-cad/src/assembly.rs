@@ -228,6 +228,16 @@ pub enum MateKind {
         /// The quarter turns (0 to 3).
         quarters: u8,
     },
+    /// The lower (or the upper) face of `b` lies `distance` inside the lower (or the upper) face
+    /// of `a` along the axis: an alignment with a margin.
+    Inset {
+        /// The axis across the faces.
+        axis: Dim,
+        /// The faces that are set in: `Min` or `Max` (the middles have no inside).
+        edge: Edge,
+        /// How far inside the face of `a` the face of `b` lies; with a minus sign it sticks out.
+        distance: Length,
+    },
 }
 
 /// A part placed relative to another, along one axis.
@@ -254,8 +264,8 @@ fn direction_of(axis: Axis) -> (usize, i8) {
 }
 
 impl MateKind {
-    /// The word of the files for the kind: `gap`, `align`, `stack`, `offset`, `symmetric` or
-    /// `turn`.
+    /// The word of the files for the kind: `gap`, `align`, `stack`, `offset`, `symmetric`, `turn`
+    /// or `inset`.
     pub fn name(self) -> &'static str {
         match self {
             MateKind::Gap { .. } => "gap",
@@ -264,15 +274,19 @@ impl MateKind {
             MateKind::Offset { .. } => "offset",
             MateKind::Symmetric { .. } => "symmetric",
             MateKind::Turn { .. } => "turn",
+            MateKind::Inset { .. } => "inset",
         }
     }
 
-    /// Whether the kind came after the first three (`offset`, `symmetric` and `turn`): a recipe
-    /// that has one is written in version 6 of the mechanical domain.
+    /// Whether the kind came after the first three (`offset`, `symmetric`, `turn` and `inset`): a
+    /// recipe that has one is written in version 6 of the mechanical domain.
     pub fn is_newer(self) -> bool {
         matches!(
             self,
-            MateKind::Offset { .. } | MateKind::Symmetric { .. } | MateKind::Turn { .. }
+            MateKind::Offset { .. }
+                | MateKind::Symmetric { .. }
+                | MateKind::Turn { .. }
+                | MateKind::Inset { .. }
         )
     }
 
@@ -283,7 +297,8 @@ impl MateKind {
             MateKind::Gap { direction, .. } => direction_of(direction).0,
             MateKind::Align { axis, .. }
             | MateKind::Offset { axis, .. }
-            | MateKind::Symmetric { axis, .. } => axis.index(),
+            | MateKind::Symmetric { axis, .. }
+            | MateKind::Inset { axis, .. } => axis.index(),
             MateKind::Stack => 2,
             MateKind::Turn { .. } => 3,
         }
@@ -323,6 +338,16 @@ impl Mate {
                 out.push("turn".to_string());
                 out.push(quarters.to_string());
             }
+            MateKind::Inset {
+                axis,
+                edge,
+                distance,
+            } => {
+                out.push("inset".to_string());
+                out.push(axis.name().to_string());
+                out.push(edge.name().to_string());
+                out.push(distance.get().to_string());
+            }
         }
         out
     }
@@ -355,6 +380,11 @@ impl Mate {
                     .position(|q| q == quarters)
                     .and_then(|q| u8::try_from(q).ok())
                     .ok_or("the quarter turns of a turn are not 0, 1, 2 or 3")?,
+            },
+            [_, _, "inset", axis, edge, distance] => MateKind::Inset {
+                axis: Dim::from_name(axis).ok_or("the axis of an inset is not known")?,
+                edge: Edge::from_name(edge).ok_or("the edge of an inset is not known")?,
+                distance: signed_word(distance, "distance of an inset")?,
             },
             _ => return Err("a mate is not understood".to_string()),
         };
@@ -395,6 +425,19 @@ impl Mate {
                 return Err(mate_error("the quarter turns of a turn are 0, 1, 2 or 3"));
             }
         }
+        if let MateKind::Inset { edge, distance, .. } = self.kind {
+            if edge == Edge::Center {
+                return Err(mate_error(
+                    "an inset sets in the lower or the upper face, not the middle",
+                ));
+            }
+            if distance.get().abs() > largest.get() {
+                return Err(mate_error(format!(
+                    "the distance of an inset must be from -{0} to {0} nm",
+                    largest.get()
+                )));
+            }
+        }
         Ok(())
     }
 }
@@ -429,6 +472,18 @@ fn mated_position(kind: MateKind, a_min: i64, a_size: i64, b_size: i64) -> Resul
             }
         },
         MateKind::Stack => a_min + a_size,
+        MateKind::Inset { edge, distance, .. } => {
+            let d = i128::from(distance.get());
+            match edge {
+                Edge::Min => a_min + d,
+                Edge::Max => a_min + a_size - b_size - d,
+                Edge::Center => {
+                    return Err(mate_error(
+                        "an inset sets in the lower or the upper face, not the middle",
+                    ))
+                }
+            }
+        }
         MateKind::Offset { distance, .. } => {
             let twice = 2 * a_min + a_size - b_size;
             if twice % 2 != 0 {
@@ -2061,5 +2116,85 @@ interference_tolerance = thick
             .axis_index(),
             1
         );
+    }
+
+    #[test]
+    fn an_inset_is_an_alignment_with_a_margin_from_the_lower_or_the_upper_face() {
+        // a is 100 long from 10; b is 30 long
+        let inset = |edge, distance| MateKind::Inset {
+            axis: Dim::X,
+            edge,
+            distance: mm(distance),
+        };
+        let lower = mated_position(inset(Edge::Min, 5), mm(10).get(), mm(100).get(), mm(30).get());
+        assert_eq!(lower.unwrap(), mm(15).get());
+        // the upper face of b is 5 inside the upper face of a: b ends at 105 and starts at 75
+        let upper = mated_position(inset(Edge::Max, 5), mm(10).get(), mm(100).get(), mm(30).get());
+        assert_eq!(upper.unwrap(), mm(75).get());
+        // a minus sign sticks out
+        let out = mated_position(inset(Edge::Min, -5), mm(10).get(), mm(100).get(), mm(30).get());
+        assert_eq!(out.unwrap(), mm(5).get());
+        // a margin of nothing is an alignment
+        for edge in [Edge::Min, Edge::Max] {
+            let flush = mated_position(inset(edge, 0), mm(10).get(), mm(100).get(), mm(30).get());
+            let align = mated_position(
+                MateKind::Align {
+                    axis: Dim::X,
+                    edge,
+                },
+                mm(10).get(),
+                mm(100).get(),
+                mm(30).get(),
+            );
+            assert_eq!(flush.unwrap(), align.unwrap());
+        }
+        // the middles have no inside
+        assert!(
+            mated_position(inset(Edge::Center, 1), mm(10).get(), mm(100).get(), mm(30).get())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn an_inset_is_written_and_read_back_and_checked() {
+        let largest = mm(6000);
+        let kind = MateKind::Inset {
+            axis: Dim::Z,
+            edge: Edge::Max,
+            distance: mm(-4),
+        };
+        let m = kind_mate(1, 2, kind);
+        assert!(kind.is_newer());
+        assert_eq!(kind.name(), "inset");
+        assert_eq!(kind.axis_index(), 2);
+        let words = m.words();
+        assert_eq!(&words[2..], ["inset", "z", "max", "-4000000"]);
+        let refs: Vec<&str> = words.iter().map(String::as_str).collect();
+        assert_eq!(Mate::from_words(&refs).unwrap(), m);
+        assert!(m.check(largest).is_ok());
+        let a = id(1).to_string();
+        let b = id(2).to_string();
+        for bad in [
+            vec![&a, &b, "inset", "w", "min", "5"],
+            vec![&a, &b, "inset", "x", "top", "5"],
+            vec![&a, &b, "inset", "x", "min", "05"],
+            vec![&a, &b, "inset", "x", "min"],
+        ] {
+            let words: Vec<&str> = bad.iter().map(|w| &**w).collect();
+            assert!(Mate::from_words(&words).is_err(), "{words:?}");
+        }
+        // the middles, and a margin beyond the largest dimension, are refused
+        let centre = MateKind::Inset {
+            axis: Dim::X,
+            edge: Edge::Center,
+            distance: mm(1),
+        };
+        assert!(kind_mate(1, 2, centre).check(largest).is_err());
+        let far = MateKind::Inset {
+            axis: Dim::X,
+            edge: Edge::Min,
+            distance: mm(6001),
+        };
+        assert!(kind_mate(1, 2, far).check(largest).is_err());
     }
 }

@@ -1646,6 +1646,7 @@ impl Window {
                     ("offset", Msg::MateOffset),
                     ("symmetric", Msg::MateSymmetric),
                     ("turn", Msg::MateTurn),
+                    ("inset", Msg::MateInset),
                 ],
             ),
         ];
@@ -1712,6 +1713,29 @@ impl Window {
                     (u32::from(quarters) * 90).to_string(),
                 ));
             }
+            MateKind::Inset {
+                axis,
+                edge,
+                distance,
+            } => {
+                out.push(text(
+                    Key::MateAxis,
+                    Msg::FieldMateAxis,
+                    axis.name().to_string(),
+                ));
+                out.push(choice(
+                    Key::MateEdge,
+                    Msg::FieldMateEdge,
+                    edge.name(),
+                    vec![("min", Msg::MateEdgeMin), ("max", Msg::MateEdgeMax)],
+                ));
+                out.push(self.length_field(
+                    Key::MateDistance,
+                    Msg::FieldMateDistance,
+                    distance,
+                    writable,
+                ));
+            }
         }
         if let Ok(placed) = self.built.enclosure.try_placed_all() {
             if let Some(p) = placed.get(&mate.b) {
@@ -1743,14 +1767,18 @@ impl Window {
                 *direction =
                     Axis::from_name(word).ok_or_else(|| CadError::Reference(word.to_string()))?;
             }
-            (Key::MateDistance, MateKind::Gap { distance, .. }) => {
+            (
+                Key::MateDistance,
+                MateKind::Gap { distance, .. } | MateKind::Inset { distance, .. },
+            ) => {
                 *distance = self.parse_text(text)?;
             }
             (
                 Key::MateAxis,
                 MateKind::Align { axis, .. }
                 | MateKind::Offset { axis, .. }
-                | MateKind::Symmetric { axis, .. },
+                | MateKind::Symmetric { axis, .. }
+                | MateKind::Inset { axis, .. },
             ) => {
                 *axis =
                     Dim::from_name(word).ok_or_else(|| CadError::Reference(word.to_string()))?;
@@ -1770,7 +1798,7 @@ impl Window {
                 }
                 *quarters = u8::try_from(degrees / 90).unwrap_or(0);
             }
-            (Key::MateEdge, MateKind::Align { edge, .. }) => {
+            (Key::MateEdge, MateKind::Align { edge, .. } | MateKind::Inset { edge, .. }) => {
                 *edge =
                     Edge::from_name(word).ok_or_else(|| CadError::Reference(word.to_string()))?;
             }
@@ -9393,5 +9421,37 @@ mass: "
         assert!(one
             .mates_panel_text(&one.mate_draft_new())
             .contains("A mate needs two parts in the model."));
+    }
+
+    #[test]
+    fn the_mates_panel_tries_an_inset_and_puts_it_in_words_and_in_the_recipe() {
+        use crate::panels::Panel;
+        let mut w = two_tubes_in_the_window();
+        let mut draft = w.mate_draft_new();
+        draft.kind = "inset".into();
+        draft.axis = "x".into();
+        draft.edge = "min".into();
+        draft.distance = "5".into();
+        let mate = w.mate_from_draft(&draft).unwrap();
+        assert_eq!(w.mate_words(&mate), "inset x lower 5 mm");
+        let t = w.mates_panel_text(&draft);
+        assert!(t.contains("New mate: Part 2 on Part 1: inset x lower 5 mm"), "{t}");
+        assert!(t.contains("Part 2 would be at"), "{t}");
+        // the middles have no inside: the trial says it is refused and nothing is changed
+        draft.edge = "center".into();
+        assert!(w.mates_panel_text(&draft).contains("The mate is refused"));
+        assert!(w.enclosure().mates().is_empty());
+        assert_eq!(w.mech.steps.len(), 2);
+        draft.edge = "max".into();
+        draft.axis = "w".into();
+        assert!(w.mate_from_draft(&draft).is_err());
+        // the words of the language of the window
+        w.lang = Lang::Es;
+        draft.axis = "x".into();
+        draft.edge = "max".into();
+        let es = w.mate_words(&w.mate_from_draft(&draft).unwrap());
+        assert!(es.starts_with("con margen x "), "{es}");
+        w.lang = Lang::En;
+        let _ = Panel::Mates;
     }
 }

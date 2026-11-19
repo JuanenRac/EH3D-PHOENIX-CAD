@@ -507,6 +507,7 @@ messages! {
     FieldMateTurn => ["Roll relative to the fixed part (0, 90, 180, 270 degrees)", "Giro respecto a la pieza de referencia (0, 90, 180, 270 grados)", "Drehung zum Bezugsteil (0, 90, 180, 270 Grad)", "Rotation par rapport à la pièce de référence (0, 90, 180, 270 degrés)", "Rotazione rispetto alla parte di riferimento (0, 90, 180, 270 gradi)", "基準部品に対する回転 (0, 90, 180, 270 度)", "相对基准零件的旋转 (0、90、180、270 度)", "Rotação em relação à peça de referência (0, 90, 180, 270 graus)"],
     MateOffset => ["offset", "desplazamiento", "Versatz", "décalage", "scostamento", "オフセット", "偏移", "deslocamento"],
     MateSymmetric => ["symmetric", "simétrica", "symmetrisch", "symétrique", "simmetrico", "対称", "对称", "simétrica"],
+    MateInset => ["inset", "con margen", "eingerückt", "en retrait", "con margine", "インセット", "内缩", "com recuo"],
     MateTurn => ["turn", "giro", "Drehung", "rotation", "rotazione", "回転", "旋转", "rotação"],
     MateGap => ["gap", "separación", "Abstand", "écart", "distanza", "間隔", "间距", "afastamento"],
     MateAlign => ["align", "alineación", "Ausrichtung", "alignement", "allineamento", "整列", "对齐", "alinhamento"],

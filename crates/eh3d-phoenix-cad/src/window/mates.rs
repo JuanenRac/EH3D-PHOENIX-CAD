@@ -86,6 +86,12 @@ impl Window {
                 axis: axis()?,
                 plane: self.parse_text(&draft.plane)?,
             },
+            "inset" => MateKind::Inset {
+                axis: axis()?,
+                edge: Edge::from_name(draft.edge.trim())
+                    .ok_or_else(|| CadError::Reference(word(&draft.edge)))?,
+                distance: self.parse_text(&draft.distance)?,
+            },
             "turn" => {
                 let degrees = draft
                     .turn
@@ -147,6 +153,24 @@ impl Window {
             ),
             MateKind::Turn { quarters } => {
                 format!("{} {}", Msg::MateTurn.tr(lang), u32::from(quarters) * 90)
+            }
+            MateKind::Inset {
+                axis,
+                edge,
+                distance,
+            } => {
+                let edge = match edge {
+                    Edge::Min => Msg::MateEdgeMin,
+                    Edge::Max => Msg::MateEdgeMax,
+                    Edge::Center => Msg::MateEdgeCenter,
+                };
+                format!(
+                    "{} {} {} {}",
+                    Msg::MateInset.tr(lang),
+                    axis.name(),
+                    edge.tr(lang),
+                    mm(distance)
+                )
             }
         }
     }
