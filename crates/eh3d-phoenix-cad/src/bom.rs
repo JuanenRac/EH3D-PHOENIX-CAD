@@ -229,6 +229,9 @@ pub enum GroupBy {
     Material,
     /// One group for each kind of piece (profile, screw, bracket, turned body, swept body).
     Kind,
+    /// One group for each name of part (the lines of one part in other materials or sizes are
+    /// added up).
+    Name,
 }
 
 impl GroupBy {
@@ -237,6 +240,7 @@ impl GroupBy {
         match self {
             GroupBy::Material => "material",
             GroupBy::Kind => "kind",
+            GroupBy::Name => "name",
         }
     }
 
@@ -245,6 +249,7 @@ impl GroupBy {
         match name {
             "material" => Some(GroupBy::Material),
             "kind" => Some(GroupBy::Kind),
+            "name" => Some(GroupBy::Name),
             _ => None,
         }
     }
@@ -254,8 +259,8 @@ impl GroupBy {
 /// one of the lines, before the markup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Group {
-    /// The material, or the kind of piece (the word of the comma separated values, or the word of
-    /// the language in the text).
+    /// The material, the name of the part, or the kind of piece (the word of the comma separated
+    /// values, or the word of the language in the text).
     pub name: String,
     /// How many lines of the bill are in the group.
     pub lines: usize,
@@ -286,6 +291,7 @@ pub fn groups(bom: &Bom, by: GroupBy, lang: Option<Lang>) -> Vec<Group> {
     for l in &bom.lines {
         let name = match (by, lang) {
             (GroupBy::Material, _) => l.material.clone(),
+            (GroupBy::Name, _) => l.name.clone(),
             (GroupBy::Kind, None) => kind_word(l).to_string(),
             (GroupBy::Kind, Some(lang)) => kind_label(l, lang).to_string(),
         };
@@ -350,6 +356,7 @@ pub fn groups_text_in(bom: &Bom, by: GroupBy, lang: Lang) -> String {
     let title = match by {
         GroupBy::Material => Msg::BomByMaterial,
         GroupBy::Kind => Msg::BomByKind,
+        GroupBy::Name => Msg::BomByName,
     };
     let mut out = format!("{}\n", title.tr(lang));
     for g in groups(bom, by, Some(lang)) {
@@ -622,6 +629,48 @@ mod tests {
         assert_eq!(GroupBy::from_name("kind"), Some(GroupBy::Kind));
         assert_eq!(GroupBy::from_name("size"), None);
         assert_eq!(GroupBy::Material.name(), "material");
+    }
+
+    #[test]
+    fn the_totals_by_name_add_up_the_lines_of_a_part_in_other_materials() {
+        let bom = from_list(&sample(), &cost(100, 10)).unwrap();
+        let by_name = groups(&bom, GroupBy::Name, None);
+        // the cubes are one part in two materials and the ring is a body of its own
+        let names: Vec<(&str, usize, u32)> = by_name
+            .iter()
+            .map(|g| (g.name.as_str(), g.lines, g.pieces))
+            .collect();
+        let mut expected: Vec<(String, usize, u32)> = Vec::new();
+        for l in &bom.lines {
+            match expected.iter_mut().find(|e| e.0 == l.name) {
+                Some(e) => {
+                    e.1 += 1;
+                    e.2 += l.quantity;
+                }
+                None => expected.push((l.name.clone(), 1, l.quantity)),
+            }
+        }
+        expected.sort();
+        let expected: Vec<(&str, usize, u32)> =
+            expected.iter().map(|e| (e.0.as_str(), e.1, e.2)).collect();
+        assert_eq!(names, expected);
+        assert!(by_name.len() < bom.lines.len(), "{names:?}");
+        assert_eq!(by_name.iter().map(|g| g.pieces).sum::<u32>(), bom.pieces);
+        assert_eq!(by_name.iter().map(|g| g.mass_ug).sum::<i128>(), bom.mass_ug);
+        assert_eq!(
+            by_name.iter().map(|g| g.cost_milli).sum::<i128>(),
+            bom.subtotal_milli
+        );
+        assert_eq!(GroupBy::from_name("name"), Some(GroupBy::Name));
+        assert_eq!(GroupBy::Name.name(), "name");
+        assert!(groups_csv(&bom, GroupBy::Name).starts_with("name,lines,pieces,"));
+        assert!(groups_text_in(&bom, GroupBy::Name, Lang::En).starts_with("Totals by part name\n"));
+        // every language names the grouping and leaves no hole in the text
+        for lang in Lang::ALL {
+            let t = groups_text_in(&bom, GroupBy::Name, lang);
+            assert!(t.lines().count() >= 2, "{t}");
+            assert!(!t.contains('{'), "{t}");
+        }
     }
 
     #[test]

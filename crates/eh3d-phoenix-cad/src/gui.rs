@@ -952,6 +952,11 @@ impl App {
                                 Some(crate::bom::GroupBy::Kind),
                                 Msg::BomByKind.tr(lang),
                             );
+                            ui.selectable_value(
+                                &mut self.panels.bom_group,
+                                Some(crate::bom::GroupBy::Name),
+                                Msg::BomByName.tr(lang),
+                            );
                         });
                     }
                     Panel::History => {
