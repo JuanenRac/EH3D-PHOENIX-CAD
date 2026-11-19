@@ -2276,6 +2276,103 @@ interference_tolerance = thick
     }
 
     #[test]
+    fn every_kind_of_mate_puts_the_part_where_its_own_relation_says_for_any_sizes() {
+        // xorshift with a fixed seed, so that a failure can be repeated
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = move |bound: i64| -> i64 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % bound as u64) as i64
+        };
+        let (mut whole, mut half) = (0, 0);
+        for _ in 0..4000 {
+            let a_min = next(2_000_000_000) - 1_000_000_000;
+            let a_size = 1 + next(500_000_000);
+            let b_size = 1 + next(500_000_000);
+            let d = Length::new(next(100_000_000) - 50_000_000).unwrap();
+            let permille = u16::try_from(next(1001)).unwrap();
+            let a_max = a_min + a_size;
+            let at = |kind| mated_position(kind, a_min, a_size, b_size);
+            // twice the middle of a part that starts at `min` and is `size` long
+            let twice = |min: i64, size: i64| 2 * i128::from(min) + i128::from(size);
+            let gap = |direction| MateKind::Gap {
+                direction,
+                distance: Length::new(d.get().abs()).unwrap(),
+            };
+            let reach = d.get().abs();
+            assert_eq!(at(gap(Axis::PlusX)).unwrap(), a_max + reach);
+            assert_eq!(at(gap(Axis::MinusX)).unwrap() + b_size, a_min - reach);
+            assert_eq!(at(MateKind::Stack).unwrap(), a_max);
+            let align = |edge| MateKind::Align { axis: Dim::X, edge };
+            assert_eq!(at(align(Edge::Min)).unwrap(), a_min);
+            assert_eq!(at(align(Edge::Max)).unwrap() + b_size, a_max);
+            let inset = |edge| MateKind::Inset {
+                axis: Dim::X,
+                edge,
+                distance: d,
+            };
+            assert_eq!(at(inset(Edge::Min)).unwrap(), a_min + d.get());
+            assert_eq!(at(inset(Edge::Max)).unwrap() + b_size, a_max - d.get());
+            assert!(at(inset(Edge::Center)).is_err());
+            // the middles: the three kinds that name them agree with the arithmetic, and are
+            // refused together when the middles differ by half a nanometre
+            let centred = at(align(Edge::Center));
+            let offset = at(MateKind::Offset {
+                axis: Dim::X,
+                distance: d,
+            });
+            let sym = at(MateKind::Symmetric {
+                axis: Dim::X,
+                plane: d,
+            });
+            let prop = at(MateKind::Proportion {
+                axis: Dim::X,
+                permille,
+            });
+            let middle = at(MateKind::Proportion {
+                axis: Dim::X,
+                permille: 500,
+            });
+            assert_eq!(centred.is_ok(), (a_size - b_size) % 2 == 0);
+            assert_eq!(centred.is_ok(), offset.is_ok());
+            assert_eq!(centred.as_ref().ok(), middle.as_ref().ok());
+            if let Ok(v) = centred {
+                whole += 1;
+                assert_eq!(twice(v, b_size), twice(a_min, a_size));
+                let shifted = twice(offset.unwrap(), b_size);
+                assert_eq!(shifted, twice(a_min, a_size) + 2 * i128::from(d.get()));
+            } else {
+                half += 1;
+            }
+            // a symmetry is refused exactly when the sum of the two sizes is odd, and when it is
+            // not the two middles are as far from the plane on opposite sides
+            assert_eq!(sym.is_ok(), (a_size + b_size) % 2 == 0);
+            if let Ok(v) = sym {
+                assert_eq!(
+                    twice(v, b_size) + twice(a_min, a_size),
+                    4 * i128::from(d.get())
+                );
+            }
+            // a proportion is refused exactly when the middle of b would not be a whole number
+            // of nanometres, and when it is the middle is at the fraction of a to the thousandth
+            let (size, share) = (i128::from(a_size), i128::from(permille));
+            assert_eq!(
+                prop.is_ok(),
+                (2 * size * share - 1000 * i128::from(b_size)) % 2000 == 0
+            );
+            if let Ok(v) = prop {
+                assert_eq!(
+                    1000 * twice(v, b_size),
+                    2000 * i128::from(a_min) + 2 * size * share
+                );
+            }
+        }
+        // both the whole and the half nanometre cases were met
+        assert!(whole > 1000 && half > 1000, "{whole} {half}");
+    }
+
+    #[test]
     fn a_proportion_places_a_part_in_a_model_with_the_other_mates() {
         // a is 100 mm long along z from 7 mm, b is 40 mm long: a quarter of a is at 32 mm, so b
         // starts at 12 mm
