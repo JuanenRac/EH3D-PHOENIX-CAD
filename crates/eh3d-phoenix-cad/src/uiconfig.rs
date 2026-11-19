@@ -142,6 +142,10 @@ impl NewStepDefaults {
                 edge: self.mate_edge,
                 distance: self.mate_distance,
             }),
+            "overlap" => Some(MateKind::Overlap {
+                direction: self.mate_direction,
+                distance: self.mate_distance,
+            }),
             "proportion" => Some(MateKind::Proportion {
                 axis: self.mate_axis,
                 permille: self.mate_permille,
@@ -341,11 +345,12 @@ impl NewStepDefaults {
             "turn",
             "inset",
             "proportion",
+            "overlap",
         ]
         .contains(&mate_kind)
         {
             return Err(CadError::Config(format!(
-                "new_step.mate_kind: {mate_kind} is not gap, align, stack, offset, symmetric, turn, inset or proportion"
+                "new_step.mate_kind: {mate_kind} is not gap, align, stack, offset, symmetric, turn, inset, proportion or overlap"
             )));
         }
         let mate_direction = word(c, "new_step.mate_direction")?;

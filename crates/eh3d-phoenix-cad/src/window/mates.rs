@@ -73,6 +73,11 @@ impl Window {
                     .ok_or_else(|| CadError::Reference(word(&draft.direction)))?,
                 distance: self.parse_text(&draft.distance)?,
             },
+            "overlap" => MateKind::Overlap {
+                direction: Axis::from_name(draft.direction.trim())
+                    .ok_or_else(|| CadError::Reference(word(&draft.direction)))?,
+                distance: self.parse_text(&draft.distance)?,
+            },
             "align" => MateKind::Align {
                 axis: axis()?,
                 edge: Edge::from_name(draft.edge.trim())
@@ -183,6 +188,15 @@ impl Window {
                     mm(distance)
                 )
             }
+            MateKind::Overlap {
+                direction,
+                distance,
+            } => format!(
+                "{} {} {}",
+                Msg::MateOverlap.tr(lang),
+                direction.name(),
+                mm(distance)
+            ),
             MateKind::Proportion { axis, permille } => format!(
                 "{} {} {}/1000",
                 Msg::MateProportion.tr(lang),

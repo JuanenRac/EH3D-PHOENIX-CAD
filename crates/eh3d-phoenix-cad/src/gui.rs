@@ -1016,6 +1016,7 @@ impl App {
                                 ("turn", Msg::MateTurn),
                                 ("inset", Msg::MateInset),
                                 ("proportion", Msg::MateProportion),
+                                ("overlap", Msg::MateOverlap),
                             ] {
                                 ui.selectable_value(
                                     &mut draft.kind,
@@ -1025,7 +1026,7 @@ impl App {
                             }
                         });
                         let kind = draft.kind.clone();
-                        if kind == "gap" {
+                        if kind == "gap" || kind == "overlap" {
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(Msg::FieldMateDirection.tr(lang));
                                 for a in catalog::Axis::ALL {
@@ -1063,7 +1064,7 @@ impl App {
                                 }
                             });
                         }
-                        if kind == "gap" || kind == "offset" || kind == "inset" {
+                        if ["gap", "offset", "inset", "overlap"].contains(&kind.as_str()) {
                             ui.horizontal(|ui| {
                                 ui.label(if kind != "offset" {
                                     Msg::FieldMateDistance.tr(lang)

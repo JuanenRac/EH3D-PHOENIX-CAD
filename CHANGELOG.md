@@ -16,6 +16,8 @@ All notable changes to this project are documented here.
 
 - **The dimensions of a drawing are not read back as lines:** a DXF drawing read as a sketch (`sketch-import` and the window) leaves out the layer `COTAS` of the dimensions unless that layer is named, counting what it left out with the entities of the layers that were not chosen, so a drawing that this program wrote reads back as its outline and not as its outline with the dimension lines in it. 1 test.
 
+- **Overlap mate, in the eight languages:** a new kind of mate, `overlap <direction> <distance>`, puts a part on the side of another that the direction names with its near face a distance inside the face of the other (a lap, a tongue in a slot; the same as a gap with a minus sign, which a gap does not take, and 0 only touches). It is a step of version 6 like the other newer mates, its distance is from 0 to the largest dimension of the settings, and it is in the mates panel and the property editor of the window (the name in the eight languages, with the fields of a gap) and in `new_step.mate_kind`. 3 tests.
+
 ## [0.0.8] - Sheets of views with paper sizes and scales, more sketch constraints, new mates and a bill of materials by name
 
 - **Every kind of mate against its own relation, with a fixed seed:** for 4000 random positions and sizes (odd ones included) the position that each kind of mate gives (gap, stack, align, inset, offset, symmetric and proportion) is checked against the relation it names, a gap by its distance from the face, an inset by its margin, the middles by twice their value (so that a half nanometre cannot hide), and the kinds that name the middles are refused together exactly when the two sizes differ by an odd number of nanometres. 1 test.

@@ -511,6 +511,7 @@ messages! {
     MateSymmetric => ["symmetric", "simétrica", "symmetrisch", "symétrique", "simmetrico", "対称", "对称", "simétrica"],
     MateProportion => ["proportion", "proporción", "Verhältnis", "proportion", "proporzione", "比率", "比例", "proporção"],
     FieldMateProportion => ["Fraction of the fixed part, in thousandths (0 to 1000)", "Fracción de la pieza de referencia, en milésimas (0 a 1000)", "Anteil des Bezugsteils in Tausendsteln (0 bis 1000)", "Fraction de la pièce de référence, en millièmes (0 à 1000)", "Frazione della parte di riferimento, in millesimi (da 0 a 1000)", "基準部品に対する割合 (千分率, 0 から 1000)", "占基准零件的比例（千分比，0 到 1000）", "Fração da peça de referência, em milésimos (0 a 1000)"],
+    MateOverlap => ["overlap", "solape", "Überlappung", "chevauchement", "sovrapposizione", "重なり", "重叠", "sobreposição"],
     MateInset => ["inset", "con margen", "eingerückt", "en retrait", "con margine", "インセット", "内缩", "com recuo"],
     MateTurn => ["turn", "giro", "Drehung", "rotation", "rotazione", "回転", "旋转", "rotação"],
     MateGap => ["gap", "separación", "Abstand", "écart", "distanza", "間隔", "间距", "afastamento"],

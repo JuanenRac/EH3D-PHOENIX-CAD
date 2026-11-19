@@ -1650,11 +1650,16 @@ impl Window {
                     ("turn", Msg::MateTurn),
                     ("inset", Msg::MateInset),
                     ("proportion", Msg::MateProportion),
+                    ("overlap", Msg::MateOverlap),
                 ],
             ),
         ];
         match mate.kind {
             MateKind::Gap {
+                direction,
+                distance,
+            }
+            | MateKind::Overlap {
                 direction,
                 distance,
             } => {
@@ -1778,13 +1783,18 @@ impl Window {
                     .mate_of(word)
                     .ok_or_else(|| CadError::Reference(word.to_string()))?;
             }
-            (Key::MateDirection, MateKind::Gap { direction, .. }) => {
+            (
+                Key::MateDirection,
+                MateKind::Gap { direction, .. } | MateKind::Overlap { direction, .. },
+            ) => {
                 *direction =
                     Axis::from_name(word).ok_or_else(|| CadError::Reference(word.to_string()))?;
             }
             (
                 Key::MateDistance,
-                MateKind::Gap { distance, .. } | MateKind::Inset { distance, .. },
+                MateKind::Gap { distance, .. }
+                | MateKind::Overlap { distance, .. }
+                | MateKind::Inset { distance, .. },
             ) => {
                 *distance = self.parse_text(text)?;
             }
@@ -9544,6 +9554,50 @@ mass: "
         assert!(es.starts_with("con margen x "), "{es}");
         w.lang = Lang::En;
         let _ = Panel::Mates;
+    }
+
+    #[test]
+    fn an_overlap_has_its_fields_its_words_and_its_place_in_the_mates_panel() {
+        let mut w = two_tubes_in_the_window();
+        w.add_step(NewStep::Mate);
+        assert!(!problem(&w), "{:?}", w.status);
+        set(&mut w, Key::MateKind, "overlap");
+        assert!(!problem(&w), "{:?}", w.status);
+        assert!(!text_of(&w, Key::MateDirection).is_empty());
+        set(&mut w, Key::MateDirection, "-x");
+        assert!(!problem(&w), "{:?}", w.status);
+        set(&mut w, Key::MateDistance, "3");
+        assert!(!problem(&w), "{:?}", w.status);
+        assert_eq!(text_of(&w, Key::MateDirection), "-x");
+        assert_eq!(w.mech.version(), 6);
+        // a direction that is not one and a distance below zero are refused
+        set(&mut w, Key::MateDirection, "w");
+        assert!(problem(&w));
+        set(&mut w, Key::MateDistance, "-1");
+        assert!(problem(&w));
+        // the panel tries it on a copy and puts it in words of the language
+        let mut w = two_tubes_in_the_window();
+        let mut draft = w.mate_draft_new();
+        draft.kind = "overlap".into();
+        draft.direction = "+x".into();
+        draft.distance = "3".into();
+        let mate = w.mate_from_draft(&draft).unwrap();
+        assert_eq!(w.mate_words(&mate), "overlap +x 3 mm");
+        let t = w.mates_panel_text(&draft);
+        assert!(
+            t.contains("New mate: Part 2 on Part 1: overlap +x 3 mm"),
+            "{t}"
+        );
+        assert!(w.enclosure().mates().is_empty());
+        draft.direction = "w".into();
+        assert!(w.mate_from_draft(&draft).is_err());
+        draft.direction = "+x".into();
+        w.lang = Lang::Es;
+        assert_eq!(w.mate_words(&mate), "solape +x 3 mm");
+        w.lang = Lang::En;
+        for l in Lang::ALL {
+            assert!(!Msg::MateOverlap.tr(l).is_empty());
+        }
     }
 
     #[test]

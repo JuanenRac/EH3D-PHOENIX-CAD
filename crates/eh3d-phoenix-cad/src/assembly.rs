@@ -4,7 +4,7 @@
 //!
 //! A [`Mate`] places one part (`b`) relative to another (`a`) along **one** axis, so it takes away
 //! one of the three coordinates of `b` and leaves the other two as they were placed. There are
-//! eight kinds (the last five are the newer ones, see [`MateKind::is_newer`]):
+//! nine kinds (the last six are the newer ones, see [`MateKind::is_newer`]):
 //!
 //! * `gap <direction> <distance>`: `b` lies on the side of `a` that the direction names (`+x`
 //!   to `-z`), `distance` away from its face (0 touches it);
@@ -23,7 +23,9 @@
 //!   inside the same face of `a`, an alignment with a margin;
 //! * `proportion <axis> <thousandths>`: the middle of `b` lies at that many thousandths of the
 //!   size of `a` along the axis, counted from its lower face (refused when the result is not a
-//!   whole number of nanometres).
+//!   whole number of nanometres);
+//! * `overlap <direction> <distance>`: `b` lies on the side of `a` that the direction names, with
+//!   its near face `distance` inside the face of `a` (a lap: 0 only touches it).
 //!
 //! The mates are constraints, not moves: the position typed for a part stays in the model and
 //! [`place`] gives every part its position with the mates applied, so taking a mate away puts the
@@ -251,6 +253,14 @@ pub enum MateKind {
         /// The fraction in thousandths of the size of `a` (0 to 1000).
         permille: u16,
     },
+    /// `b` is on the side of `a` that the direction names, with its near face `distance` inside
+    /// the face of `a`: a gap with a minus sign, which a gap itself does not take.
+    Overlap {
+        /// The side of `a` that `b` lies on.
+        direction: Axis,
+        /// How far the near face of `b` goes into `a`, from zero up.
+        distance: Length,
+    },
 }
 
 /// A part placed relative to another, along one axis.
@@ -278,7 +288,7 @@ fn direction_of(axis: Axis) -> (usize, i8) {
 
 impl MateKind {
     /// The word of the files for the kind: `gap`, `align`, `stack`, `offset`, `symmetric`, `turn`,
-    /// `inset` or `proportion`.
+    /// `inset`, `proportion` or `overlap`.
     pub fn name(self) -> &'static str {
         match self {
             MateKind::Gap { .. } => "gap",
@@ -289,11 +299,12 @@ impl MateKind {
             MateKind::Turn { .. } => "turn",
             MateKind::Inset { .. } => "inset",
             MateKind::Proportion { .. } => "proportion",
+            MateKind::Overlap { .. } => "overlap",
         }
     }
 
-    /// Whether the kind came after the first three (`offset`, `symmetric`, `turn`, `inset` and
-    /// `proportion`): a recipe that has one is written in version 6 of the mechanical domain.
+    /// Whether the kind came after the first three (`offset`, `symmetric`, `turn`, `inset`,
+    /// `proportion` and `overlap`): a recipe that has one is written in version 6 of the mechanical domain.
     pub fn is_newer(self) -> bool {
         matches!(
             self,
@@ -302,6 +313,7 @@ impl MateKind {
                 | MateKind::Turn { .. }
                 | MateKind::Inset { .. }
                 | MateKind::Proportion { .. }
+                | MateKind::Overlap { .. }
         )
     }
 
@@ -309,7 +321,9 @@ impl MateKind {
     /// which places `b` along no axis.
     pub fn axis_index(self) -> usize {
         match self {
-            MateKind::Gap { direction, .. } => direction_of(direction).0,
+            MateKind::Gap { direction, .. } | MateKind::Overlap { direction, .. } => {
+                direction_of(direction).0
+            }
             MateKind::Align { axis, .. }
             | MateKind::Offset { axis, .. }
             | MateKind::Symmetric { axis, .. }
@@ -369,6 +383,14 @@ impl Mate {
                 out.push(axis.name().to_string());
                 out.push(permille.to_string());
             }
+            MateKind::Overlap {
+                direction,
+                distance,
+            } => {
+                out.push("overlap".to_string());
+                out.push(direction.name().to_string());
+                out.push(distance.get().to_string());
+            }
         }
         out
     }
@@ -415,6 +437,11 @@ impl Mate {
                     .filter(|p| p.to_string() == *permille)
                     .ok_or("the fraction of a proportion is not a whole number of thousandths")?,
             },
+            [_, _, "overlap", direction, distance] => MateKind::Overlap {
+                direction: Axis::from_name(direction)
+                    .ok_or("the direction of an overlap is not known")?,
+                distance: length_word(distance, "distance of an overlap")?,
+            },
             _ => return Err("a mate is not understood".to_string()),
         };
         Ok(Mate {
@@ -431,10 +458,10 @@ impl Mate {
         if self.a == self.b {
             return Err(mate_error("a part cannot be placed relative to itself"));
         }
-        if let MateKind::Gap { distance, .. } = self.kind {
+        if let MateKind::Gap { distance, .. } | MateKind::Overlap { distance, .. } = self.kind {
             if distance.get() < 0 || distance.get() > largest.get() {
                 return Err(mate_error(format!(
-                    "the distance of a gap must be from 0 to {} nm",
+                    "the distance of a gap or an overlap must be from 0 to {} nm",
                     largest.get()
                 )));
             }
@@ -492,6 +519,17 @@ fn mated_position(kind: MateKind, a_min: i64, a_size: i64, b_size: i64) -> Resul
                 a_min + a_size + d
             } else {
                 a_min - d - b_size
+            }
+        }
+        MateKind::Overlap {
+            direction,
+            distance,
+        } => {
+            let d = i128::from(distance.get());
+            if direction_of(direction).1 > 0 {
+                a_min + a_size - d
+            } else {
+                a_min + d - b_size
             }
         }
         MateKind::Align { edge, .. } => match edge {
@@ -2459,6 +2497,134 @@ interference_tolerance = thick
         };
         assert!(kind_mate(1, 2, over).check(largest).is_err());
         // a part cannot be placed in proportion to itself
+        assert!(kind_mate(1, 1, kind).check(largest).is_err());
+    }
+
+    #[test]
+    fn an_overlap_puts_a_part_inside_the_face_of_the_other_by_the_distance() {
+        let at = |direction: Axis, distance: i64, a_min: i64, a_size: i64, b_size: i64| {
+            mated_position(
+                MateKind::Overlap {
+                    direction,
+                    distance: Length::new(distance).unwrap(),
+                },
+                a_min,
+                a_size,
+                b_size,
+            )
+        };
+        // a is 100 long from 10 (to 110) and b 30 long: on the side of larger coordinates b
+        // starts 4 before the upper face of a, on the other side it ends 4 after its lower face
+        assert_eq!(
+            at(
+                Axis::PlusX,
+                mm(4).get(),
+                mm(10).get(),
+                mm(100).get(),
+                mm(30).get()
+            )
+            .unwrap(),
+            mm(106).get()
+        );
+        assert_eq!(
+            at(
+                Axis::MinusX,
+                mm(4).get(),
+                mm(10).get(),
+                mm(100).get(),
+                mm(30).get()
+            )
+            .unwrap(),
+            mm(-16).get()
+        );
+        // a distance of 0 is a gap of 0 on both sides
+        for direction in [Axis::PlusY, Axis::MinusY] {
+            let touch = mated_position(
+                MateKind::Gap {
+                    direction,
+                    distance: Length::ZERO,
+                },
+                mm(10).get(),
+                mm(100).get(),
+                mm(30).get(),
+            );
+            assert_eq!(
+                at(direction, 0, mm(10).get(), mm(100).get(), mm(30).get()).unwrap(),
+                touch.unwrap()
+            );
+        }
+        // an overlap by a nanometre moves b a nanometre into a, whatever the sizes
+        assert_eq!(at(Axis::PlusZ, 1, 0, 1001, 7).unwrap(), 1000);
+        assert_eq!(at(Axis::MinusZ, 1, 0, 1001, 7).unwrap(), -6);
+    }
+
+    #[test]
+    fn an_overlap_places_a_part_in_a_model_and_is_written_read_back_and_checked() {
+        let parts = set(vec![
+            (1, bar("a", [5, 6, 7], 100)),
+            (2, bar("b", [0, 50, 50], 40)),
+        ]);
+        let lap = |direction: Axis, mm_in: i64| MateKind::Overlap {
+            direction,
+            distance: mm(mm_in),
+        };
+        // a is 100 mm long along z from 7 mm: b of 40 mm laps 10 mm over its upper face
+        let placed = place(
+            &parts,
+            &mates(vec![(9, kind_mate(1, 2, lap(Axis::PlusZ, 10)))]),
+        )
+        .unwrap();
+        assert_eq!(pos(&placed, 2), [0, 50 * MM, 97 * MM]);
+        // along x on the other side, with a gap along another axis that does not clash
+        let both = place(
+            &parts,
+            &mates(vec![
+                (8, kind_mate(1, 2, lap(Axis::MinusX, 3))),
+                (9, gap(1, 2, Axis::PlusY, Length::ZERO)),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(pos(&both, 2)[0], (5 + 3 - 20) * MM);
+        // two mates along one axis are refused, as for the other kinds
+        let e = place(
+            &parts,
+            &mates(vec![
+                (8, kind_mate(1, 2, lap(Axis::PlusZ, 1))),
+                (9, kind_mate(1, 2, MateKind::Stack)),
+            ]),
+        )
+        .unwrap_err();
+        assert_eq!(e.code(), "PHOENIX-CAD-046");
+        // the file words, the version of the domain and the checks
+        let kind = lap(Axis::MinusY, 3);
+        let m = kind_mate(1, 2, kind);
+        assert!(kind.is_newer());
+        assert_eq!(kind.name(), "overlap");
+        assert_eq!(kind.axis_index(), 1);
+        let words = m.words();
+        assert_eq!(&words[2..], ["overlap", "-y", "3000000"]);
+        let refs: Vec<&str> = words.iter().map(String::as_str).collect();
+        assert_eq!(Mate::from_words(&refs).unwrap(), m);
+        let largest = mm(6000);
+        assert!(m.check(largest).is_ok());
+        let a = id(1).to_string();
+        let b = id(2).to_string();
+        for bad in [
+            vec![&a, &b, "overlap", "w", "5"],
+            vec![&a, &b, "overlap", "+x", "-5"],
+            vec![&a, &b, "overlap", "+x", "05"],
+            vec![&a, &b, "overlap", "+x", "1.5"],
+            vec![&a, &b, "overlap", "+x"],
+        ] {
+            let words: Vec<&str> = bad.iter().map(|w| &**w).collect();
+            assert!(Mate::from_words(&words).is_err(), "{words:?}");
+        }
+        assert!(kind_mate(1, 2, lap(Axis::PlusX, 6001))
+            .check(largest)
+            .is_err());
+        assert!(kind_mate(1, 2, lap(Axis::PlusX, 6000))
+            .check(largest)
+            .is_ok());
         assert!(kind_mate(1, 1, kind).check(largest).is_err());
     }
 
