@@ -11,9 +11,10 @@
 //! ([`crate::drawing`]), so the layers, the colours and the number format are the same.
 
 use crate::config::DrawingSettings;
-use crate::drawing::{Drawing, Entity, Layer, View};
+use crate::drawing::{Drawing, Entity, Layer, Note, View};
 use crate::lang::Lang;
 use crate::profile::{Outline, Piece, Profile, ProfileLimits, Pt};
+use crate::scad::mm_text;
 use crate::sketch::settings::SketchSettings;
 use crate::sketch::Sketch;
 use crate::titleblock::TitleBlockSettings;
@@ -91,7 +92,64 @@ pub fn drawing_of(profile: &Profile) -> Drawing {
     }
 }
 
-/// The text of the DXF or SVG file of a sketch. Refused with `PHOENIX-CAD-036` when the sketch has
+/// Puts the dimensions of a sketch on its drawing, for the settings `drawing.dimensions` (SVG) and
+/// `drawing.dxf_dimensions` (DXF, on the layer `COTAS`): the width and the height of the whole
+/// outline from its lower left corner and, with `drawing.hole_dimensions`, the diameter of every
+/// round hole written beside it (a hole that is a chain of lines and arcs is not labelled).
+/// Refused with `PHOENIX-CAD-050` when there are more labels than `drawing.max_dimensions`. A
+/// drawing with neither of the two settings is left as it is.
+pub fn add_dimensions(
+    drawing: &mut Drawing,
+    profile: &Profile,
+    settings: &DrawingSettings,
+) -> Result<(), CadError> {
+    drawing.dxf_dimensions = settings.dxf_dimensions;
+    if !settings.dimensions && !settings.dxf_dimensions {
+        return Ok(());
+    }
+    let (lo, hi) = profile.bounds();
+    let mut labels = Vec::new();
+    if settings.hole_dimensions {
+        for region in &profile.regions {
+            for hole in &region.holes {
+                if let Some((c, r)) = hole.circle_of() {
+                    labels.push((c, r));
+                }
+            }
+        }
+        if labels.len() > settings.max_dimensions as usize {
+            return Err(CadError::ExportLimit(format!(
+                "the sketch has {} round holes to label and the settings allow {} dimensions",
+                labels.len(),
+                settings.max_dimensions
+            )));
+        }
+    }
+    let corner = point(lo);
+    drawing.notes.push(Note {
+        at: (mm((lo.0 + hi.0) / 2), corner.1),
+        text: mm_text(hi.0 - lo.0),
+        measures: Some((corner, (mm(hi.0), corner.1))),
+        level: 0,
+    });
+    drawing.notes.push(Note {
+        at: (corner.0, mm((lo.1 + hi.1) / 2)),
+        text: mm_text(hi.1 - lo.1),
+        measures: Some((corner, (corner.0, mm(hi.1)))),
+        level: 0,
+    });
+    for (c, r) in labels {
+        drawing.notes.push(Note {
+            at: (mm(c.0 + r) + 1.0, mm(c.1 + r) + 1.0),
+            text: format!("\u{2300}{}", mm_text(2 * r)),
+            measures: None,
+            level: 0,
+        });
+    }
+    Ok(())
+}
+
+// The text of the DXF or SVG file of a sketch. Refused with `PHOENIX-CAD-036` when the sketch has
 /// no usable outline (see [`Profile::from_sketch`]) and with `PHOENIX-CAD-050` when the drawing
 /// has more entities than `drawing.max_entities`.
 pub fn render(
@@ -122,7 +180,7 @@ pub fn render_titled(
     lang: Lang,
 ) -> Result<String, CadError> {
     let profile = Profile::from_sketch(sketch, &ProfileLimits::from_settings(solver))?;
-    let d = drawing_of(&profile);
+    let mut d = drawing_of(&profile);
     if d.entities.len() > drawing.max_entities as usize {
         return Err(CadError::ExportLimit(format!(
             "the sketch has {} entities, more than the {} the settings allow",
@@ -130,6 +188,7 @@ pub fn render_titled(
             drawing.max_entities
         )));
     }
+    add_dimensions(&mut d, &profile, drawing)?;
     Ok(match (title.enabled, dxf) {
         (false, true) => d.to_dxf(),
         (false, false) => d.to_svg(drawing),
@@ -201,7 +260,9 @@ mod tests {
 
     #[test]
     fn the_dxf_file_holds_the_entities_in_millimetres() {
-        let (s, dr) = settings();
+        let (s, mut dr) = settings();
+        // without the dimensions, which have their own test
+        dr.dxf_dimensions = false;
         let dxf = render(&plate(), &s, &dr, true).unwrap();
         assert_eq!(dxf.matches("\nLINE\n").count(), 4);
         assert_eq!(dxf.matches("\nCIRCLE\n").count(), 1);
@@ -211,6 +272,97 @@ mod tests {
         assert!(dxf.ends_with("0\nEOF\n"));
         // the same sketch gives the same bytes
         assert_eq!(dxf, render(&plate(), &s, &dr, true).unwrap());
+    }
+
+    #[test]
+    fn a_sketch_drawing_has_the_width_the_height_and_the_diameter_of_its_round_holes() {
+        let (s, dr) = settings();
+        let dxf = render(&plate(), &s, &dr, true).unwrap();
+        assert!(dxf.contains("\nCOTAS\n"));
+        // two dimension lines with their two extension lines each, besides the four of the outline
+        assert_eq!(dxf.matches("\nLINE\n").count(), 4 + 6);
+        // the texts are the width, the height and the diameter of the hole
+        assert_eq!(dxf.matches("\nTEXT\n").count(), 3);
+        assert!(dxf.contains("\n1\n40\n"), "{dxf}");
+        assert!(dxf.contains("\n1\n25\n"), "{dxf}");
+        assert!(dxf.contains("\n1\n\\U+23006\n"), "{dxf}");
+        let svg = render(&plate(), &s, &dr, false).unwrap();
+        assert!(svg.contains("<g id=\"COTAS\""), "{svg}");
+        assert!(
+            svg.contains(">40</text>") && svg.contains(">25</text>"),
+            "{svg}"
+        );
+        assert!(svg.contains(">\u{2300}6</text>"), "{svg}");
+        // the same sketch gives the same bytes
+        assert_eq!(dxf, render(&plate(), &s, &dr, true).unwrap());
+    }
+
+    #[test]
+    fn the_dimensions_of_a_sketch_follow_the_settings_of_the_drawing() {
+        let (s, mut dr) = settings();
+        dr.hole_dimensions = false;
+        let dxf = render(&plate(), &s, &dr, true).unwrap();
+        assert_eq!(dxf.matches("\nTEXT\n").count(), 2);
+        assert!(!dxf.contains("U+2300"));
+        // the DXF file and the SVG file are switched on their own
+        dr.dxf_dimensions = false;
+        let dxf = render(&plate(), &s, &dr, true).unwrap();
+        assert!(!dxf.contains("COTAS") && !dxf.contains("\nTEXT\n"));
+        assert_eq!(dxf.matches("\nLINE\n").count(), 4);
+        assert!(render(&plate(), &s, &dr, false)
+            .unwrap()
+            .contains("<g id=\"COTAS\""));
+        dr.dimensions = false;
+        let svg = render(&plate(), &s, &dr, false).unwrap();
+        assert!(!svg.contains("COTAS"));
+        // with both off the drawing is the one without notes
+        let p = Profile::from_sketch(&plate(), &ProfileLimits::shipped()).unwrap();
+        let mut d = drawing_of(&p);
+        add_dimensions(&mut d, &p, &dr).unwrap();
+        assert!(d.notes.is_empty());
+    }
+
+    #[test]
+    fn more_round_holes_than_the_settings_allow_dimensions_for_are_refused() {
+        let (s, mut dr) = settings();
+        let mut sketch = plate();
+        circle(&mut sketch, 8, 6, 2);
+        dr.max_dimensions = 1;
+        let e = render(&sketch, &s, &dr, false).unwrap_err();
+        assert_eq!(e.code(), "PHOENIX-CAD-050");
+        // without the labels of the holes there is nothing to count; with room for both, both are
+        dr.hole_dimensions = false;
+        assert!(render(&sketch, &s, &dr, false).is_ok());
+        dr.hole_dimensions = true;
+        dr.max_dimensions = 2;
+        let svg = render(&sketch, &s, &dr, false).unwrap();
+        assert!(svg.contains(">\u{2300}4</text>") && svg.contains(">\u{2300}6</text>"));
+    }
+
+    #[test]
+    fn the_dimensions_start_at_the_lower_left_corner_of_a_sketch_that_is_not_at_the_origin() {
+        let (s, dr) = settings();
+        let mut sketch = new();
+        polygon(&mut sketch, &[(-30, -10), (-10, -10), (-10, 15), (-30, 15)]);
+        let p = Profile::from_sketch(&sketch, &ProfileLimits::shipped()).unwrap();
+        let mut d = drawing_of(&p);
+        add_dimensions(&mut d, &p, &dr).unwrap();
+        let measured: Vec<_> = d.notes.iter().filter_map(|n| n.measures).collect();
+        assert_eq!(
+            measured,
+            vec![
+                ((-30.0, -10.0), (-10.0, -10.0)),
+                ((-30.0, -10.0), (-30.0, 15.0))
+            ]
+        );
+        assert_eq!(d.notes[0].text, "20");
+        assert_eq!(d.notes[1].text, "25");
+        // a sketch drawing with them still has its page around everything
+        let svg = render(&sketch, &s, &dr, false).unwrap();
+        assert!(
+            svg.contains(">20</text>") && svg.contains(">25</text>"),
+            "{svg}"
+        );
     }
 
     #[test]

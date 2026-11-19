@@ -27,6 +27,7 @@
 use std::collections::BTreeMap;
 use std::f64::consts::PI;
 
+use crate::drawing::DIMENSION_LAYER;
 use crate::lang::{fill, Lang, Msg};
 use crate::section::PreviewLine;
 use crate::sketch::{ElementId, Sketch, SketchPlane};
@@ -529,7 +530,7 @@ pub fn layers(text: &str) -> Result<BTreeMap<String, usize>, CadError> {
 
 /// The sketch that a text DXF drawing makes from the entities of some layers only (see
 /// [`from_dxf`] for the rest). `chosen` names the layers, without regard to case; none named
-/// reads them all. The entities of the other layers are counted in `off_layers`. The vertices of
+/// reads them all but the layer of the dimensions (`COTAS`). The entities of the other layers are counted in `off_layers`. The vertices of
 /// a polyline follow the layer of the polyline.
 pub fn from_dxf_layers(
     text: &str,
@@ -578,9 +579,16 @@ pub fn from_dxf_layers(
             j += 1;
         }
         reader.group = &pairs[i + 1..j];
-        if !wanted.is_empty() && name != "VERTEX" && name != "SEQEND" {
+        if name != "VERTEX" && name != "SEQEND" {
             let layer = reader.layer_of_group().to_lowercase();
-            if !wanted.contains(&layer) {
+            // with no layer chosen the dimensions of a drawing this program wrote are not
+            // geometry: they are left out, and counted, like the layers that were not chosen
+            let off = if wanted.is_empty() {
+                layer == DIMENSION_LAYER.to_lowercase()
+            } else {
+                !wanted.contains(&layer)
+            };
+            if off {
                 reader.off_layers += 1;
                 i = j;
                 continue;
@@ -1112,6 +1120,49 @@ mod tests {
             layers("hello\nworld\n").unwrap_err().code(),
             "PHOENIX-CAD-035"
         );
+    }
+
+    #[test]
+    fn the_dimensions_of_a_drawing_of_this_program_are_not_read_as_geometry() {
+        use crate::sketch_export::render;
+        let mut sketch = Sketch::new("p", SketchPlane::on_face(Face::Front)).unwrap();
+        let ids: Vec<_> = [(0, 0), (40, 0), (40, 25), (0, 25)]
+            .iter()
+            .map(|(x, y)| {
+                sketch
+                    .add_point(Length::from_mm(*x).unwrap(), Length::from_mm(*y).unwrap())
+                    .unwrap()
+            })
+            .collect();
+        for i in 0..4 {
+            sketch.add_line(ids[i], ids[(i + 1) % 4]).unwrap();
+        }
+        let settings = crate::config::Settings::defaults();
+        let text = render(
+            &sketch,
+            &crate::sketch::settings::SketchSettings::defaults(),
+            &settings.drawing,
+            true,
+        )
+        .unwrap();
+        assert!(text.contains("COTAS"));
+        let drawn = read(&text).unwrap();
+        // the four lines of the outline come back; the six lines and the two texts of the two
+        // dimensions are counted as left out
+        assert_eq!((drawn.lines, drawn.circles, drawn.arcs), (4, 0, 0));
+        assert_eq!(drawn.off_layers, 8);
+        // a person who names the layer asks for it: the lines of the dimensions are read
+        let named = from_dxf_layers(
+            &text,
+            "p",
+            SketchPlane::on_face(Face::Front),
+            MM,
+            1_000,
+            1000,
+            &["cotas".to_string()],
+        )
+        .unwrap();
+        assert_eq!(named.lines, 6);
     }
 
     #[test]
