@@ -1972,4 +1972,172 @@ mod tests {
         assert_eq!(shipped.max_dimension, mm(6000));
         assert!(shipped.refuse_overlap);
     }
+
+    // -----------------------------------------------------------------------------------------
+    // The libraries of the examples that ship with the program
+    // -----------------------------------------------------------------------------------------
+
+    fn shipped_library(file: &str) -> Library {
+        let path = format!("{}/examples/{file}", env!("CARGO_MANIFEST_DIR"));
+        read_file(Path::new(&path), &limits()).unwrap_or_else(|e| panic!("{file}: {e}"))
+    }
+
+    /// The name of a part of the library of screws: standard, metric size and length.
+    fn screw_name_parts(name: &str) -> (String, u32, u32) {
+        let (standard, rest) = name.split_once("-m").unwrap();
+        let (d, l) = rest.split_once('x').unwrap();
+        (standard.to_string(), d.parse().unwrap(), l.parse().unwrap())
+    }
+
+    #[test]
+    fn the_library_of_metric_screws_has_the_sizes_and_lengths_of_the_standards() {
+        // head across the flats or diameter, head height and the usual lengths, in millimetres
+        let socket: [(u32, f64, f64, &[u32]); 5] = [
+            (3, 5.5, 3.0, &[6, 8, 10, 12, 16, 20, 25, 30]),
+            (4, 7.0, 4.0, &[8, 10, 12, 16, 20, 25, 30, 40]),
+            (5, 8.5, 5.0, &[8, 10, 12, 16, 20, 25, 30, 40]),
+            (6, 10.0, 6.0, &[10, 12, 16, 20, 25, 30, 40]),
+            (8, 13.0, 8.0, &[16, 20, 25, 30, 40]),
+        ];
+        let hexagon: [(u32, f64, f64, &[u32]); 4] = [
+            (4, 7.0, 2.8, &[10, 16, 20, 25, 30]),
+            (5, 8.0, 3.5, &[10, 16, 20, 25, 30, 40]),
+            (6, 10.0, 4.0, &[12, 16, 20, 25, 30, 40]),
+            (8, 13.0, 5.3, &[16, 20, 25, 30, 40]),
+        ];
+        let lib = shipped_library("metric-screws.phoenixlib");
+        assert_eq!(lib.name, "metric-screws");
+        let expected: usize = socket.iter().chain(hexagon.iter()).map(|t| t.3.len()).sum();
+        assert_eq!(lib.parts.len(), expected);
+        let nm = |mm: f64| Length::new((mm * 1e6).round() as i64).unwrap();
+        for part in &lib.parts {
+            let (standard, d, l) = screw_name_parts(&part.name);
+            let Shape::Screw {
+                metric,
+                diameter,
+                length,
+                head,
+                head_diameter,
+                head_height,
+            } = &part.shape
+            else {
+                panic!("{} is not a screw", part.name);
+            };
+            // the name says what the numbers are
+            assert_eq!(metric, &format!("M{d}"), "{}", part.name);
+            assert_eq!(*diameter, nm(f64::from(d)), "{}", part.name);
+            assert_eq!(*length, nm(f64::from(l)), "{}", part.name);
+            let (table, kind, material) = match standard.as_str() {
+                "iso4762" => (&socket[..], Head::Cylinder, "steel"),
+                "iso4017" => (&hexagon[..], Head::Hex, "stainless"),
+                other => panic!("{other} is not a standard of the library"),
+            };
+            assert_eq!(*head, kind, "{}", part.name);
+            assert_eq!(part.material, material, "{}", part.name);
+            let row = table.iter().find(|r| r.0 == d).expect(&part.name);
+            assert_eq!(*head_diameter, nm(row.1), "{}", part.name);
+            assert_eq!(*head_height, nm(row.2), "{}", part.name);
+            assert!(row.3.contains(&l), "{} is not a usual length", part.name);
+        }
+        // every size has every length of its table, once
+        for (standard, table) in [("iso4762", &socket[..]), ("iso4017", &hexagon[..])] {
+            for row in table {
+                for l in row.3 {
+                    let name = format!("{standard}-m{}x{l}", row.0);
+                    assert_eq!(
+                        lib.parts.iter().filter(|p| p.name == name).count(),
+                        1,
+                        "{name}"
+                    );
+                }
+            }
+        }
+        // the text of the library reads back the same
+        assert_eq!(Library::from_text(&lib.to_text(), &limits()).unwrap(), lib);
+    }
+
+    #[test]
+    fn the_library_of_v_slot_profiles_has_sections_that_match_their_names_and_a_mass_near_the_real_one(
+    ) {
+        // the real extrusions weigh about this many kilograms for each metre
+        let nominal = [
+            ("vslot-2020", 0.50),
+            ("vslot-2040", 0.84),
+            ("vslot-2060", 1.10),
+            ("vslot-3030", 1.20),
+            ("vslot-4040", 1.80),
+        ];
+        let lib = shipped_library("vslot.phoenixlib");
+        assert_eq!(lib.name, "vslot-aluminium");
+        let profiles: Vec<&Part> = lib
+            .parts
+            .iter()
+            .filter(|p| matches!(p.shape, Shape::Profile { .. }))
+            .collect();
+        assert_eq!(profiles.len(), nominal.len());
+        for (name, kg_per_m) in nominal {
+            let part = lib.part(name).unwrap_or_else(|| panic!("{name}"));
+            assert_eq!(part.material, "aluminium");
+            let Shape::Profile {
+                width,
+                height,
+                wall,
+                default_cut,
+                max_cut,
+            } = &part.shape
+            else {
+                panic!("{name} is not a profile");
+            };
+            // the name is the section in millimetres
+            let digits = name.trim_start_matches("vslot-");
+            let (w, h) = digits.split_at(2);
+            assert_eq!(width.get(), w.parse::<i64>().unwrap() * 1_000_000, "{name}");
+            assert_eq!(
+                height.get(),
+                h.parse::<i64>().unwrap() * 1_000_000,
+                "{name}"
+            );
+            assert!(wall.get() > 0 && wall.get() * 2 < width.get().min(height.get()));
+            assert!(default_cut <= max_cut && max_cut.get() == 2_000_000_000);
+            // one metre of the section in aluminium (2700 kg per cubic metre), within 3 %
+            let per_metre = part.volume_nm3(Some(mm(1000))).unwrap() as f64 / 1e27 * 2700.0;
+            assert!(
+                (per_metre - kg_per_m).abs() <= kg_per_m * 0.03,
+                "{name}: {per_metre} kg/m against {kg_per_m}"
+            );
+        }
+        // the brackets are named after their legs and the hole fits the width of the legs
+        for part in lib
+            .parts
+            .iter()
+            .filter(|p| matches!(p.shape, Shape::Bracket { .. }))
+        {
+            let Shape::Bracket {
+                leg_a,
+                leg_b,
+                width,
+                thickness,
+                hole_diameter,
+            } = &part.shape
+            else {
+                unreachable!();
+            };
+            assert_eq!(leg_a, leg_b, "{}", part.name);
+            assert!(
+                thickness.get() > 0 && hole_diameter.get() > 0,
+                "{}",
+                part.name
+            );
+            assert!(hole_diameter < width, "{}", part.name);
+            assert!(width <= leg_a, "{}", part.name);
+            if let Some(size) = part.name.strip_prefix("vslot-corner-") {
+                assert_eq!(leg_a.get(), size[..2].parse::<i64>().unwrap() * 1_000_000);
+            } else if let Some(size) = part.name.strip_prefix("angle-") {
+                assert_eq!(leg_a.get(), size.parse::<i64>().unwrap() * 1_000_000);
+            } else {
+                panic!("{} is not named after its legs", part.name);
+            }
+        }
+        assert_eq!(lib.parts.len(), nominal.len() + 6);
+    }
 }

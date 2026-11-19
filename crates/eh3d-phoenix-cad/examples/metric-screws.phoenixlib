@@ -1,0 +1,66 @@
+# A library of metric screws of the usual sizes and lengths: socket head cap screws (ISO 4762,
+# a cylinder head) from M3 to M8 and hexagon head screws (ISO 4017) from M4 to M8. The sizes are
+# the nominal ones of the standards; a screw has no thread drawn and its shank is the full diameter.
+# Lengths are whole nanometres: 10000000 is 10 mm.
+#
+# part NAME screw MATERIAL METRIC DIAMETER LENGTH HEAD HEAD_DIAMETER HEAD_HEIGHT
+phoenix-library 1
+name metric-screws
+part iso4762-m3x6 screw steel M3 3000000 6000000 cylinder 5500000 3000000
+part iso4762-m3x8 screw steel M3 3000000 8000000 cylinder 5500000 3000000
+part iso4762-m3x10 screw steel M3 3000000 10000000 cylinder 5500000 3000000
+part iso4762-m3x12 screw steel M3 3000000 12000000 cylinder 5500000 3000000
+part iso4762-m3x16 screw steel M3 3000000 16000000 cylinder 5500000 3000000
+part iso4762-m3x20 screw steel M3 3000000 20000000 cylinder 5500000 3000000
+part iso4762-m3x25 screw steel M3 3000000 25000000 cylinder 5500000 3000000
+part iso4762-m3x30 screw steel M3 3000000 30000000 cylinder 5500000 3000000
+part iso4762-m4x8 screw steel M4 4000000 8000000 cylinder 7000000 4000000
+part iso4762-m4x10 screw steel M4 4000000 10000000 cylinder 7000000 4000000
+part iso4762-m4x12 screw steel M4 4000000 12000000 cylinder 7000000 4000000
+part iso4762-m4x16 screw steel M4 4000000 16000000 cylinder 7000000 4000000
+part iso4762-m4x20 screw steel M4 4000000 20000000 cylinder 7000000 4000000
+part iso4762-m4x25 screw steel M4 4000000 25000000 cylinder 7000000 4000000
+part iso4762-m4x30 screw steel M4 4000000 30000000 cylinder 7000000 4000000
+part iso4762-m4x40 screw steel M4 4000000 40000000 cylinder 7000000 4000000
+part iso4762-m5x8 screw steel M5 5000000 8000000 cylinder 8500000 5000000
+part iso4762-m5x10 screw steel M5 5000000 10000000 cylinder 8500000 5000000
+part iso4762-m5x12 screw steel M5 5000000 12000000 cylinder 8500000 5000000
+part iso4762-m5x16 screw steel M5 5000000 16000000 cylinder 8500000 5000000
+part iso4762-m5x20 screw steel M5 5000000 20000000 cylinder 8500000 5000000
+part iso4762-m5x25 screw steel M5 5000000 25000000 cylinder 8500000 5000000
+part iso4762-m5x30 screw steel M5 5000000 30000000 cylinder 8500000 5000000
+part iso4762-m5x40 screw steel M5 5000000 40000000 cylinder 8500000 5000000
+part iso4762-m6x10 screw steel M6 6000000 10000000 cylinder 10000000 6000000
+part iso4762-m6x12 screw steel M6 6000000 12000000 cylinder 10000000 6000000
+part iso4762-m6x16 screw steel M6 6000000 16000000 cylinder 10000000 6000000
+part iso4762-m6x20 screw steel M6 6000000 20000000 cylinder 10000000 6000000
+part iso4762-m6x25 screw steel M6 6000000 25000000 cylinder 10000000 6000000
+part iso4762-m6x30 screw steel M6 6000000 30000000 cylinder 10000000 6000000
+part iso4762-m6x40 screw steel M6 6000000 40000000 cylinder 10000000 6000000
+part iso4762-m8x16 screw steel M8 8000000 16000000 cylinder 13000000 8000000
+part iso4762-m8x20 screw steel M8 8000000 20000000 cylinder 13000000 8000000
+part iso4762-m8x25 screw steel M8 8000000 25000000 cylinder 13000000 8000000
+part iso4762-m8x30 screw steel M8 8000000 30000000 cylinder 13000000 8000000
+part iso4762-m8x40 screw steel M8 8000000 40000000 cylinder 13000000 8000000
+part iso4017-m4x10 screw stainless M4 4000000 10000000 hex 7000000 2800000
+part iso4017-m4x16 screw stainless M4 4000000 16000000 hex 7000000 2800000
+part iso4017-m4x20 screw stainless M4 4000000 20000000 hex 7000000 2800000
+part iso4017-m4x25 screw stainless M4 4000000 25000000 hex 7000000 2800000
+part iso4017-m4x30 screw stainless M4 4000000 30000000 hex 7000000 2800000
+part iso4017-m5x10 screw stainless M5 5000000 10000000 hex 8000000 3500000
+part iso4017-m5x16 screw stainless M5 5000000 16000000 hex 8000000 3500000
+part iso4017-m5x20 screw stainless M5 5000000 20000000 hex 8000000 3500000
+part iso4017-m5x25 screw stainless M5 5000000 25000000 hex 8000000 3500000
+part iso4017-m5x30 screw stainless M5 5000000 30000000 hex 8000000 3500000
+part iso4017-m5x40 screw stainless M5 5000000 40000000 hex 8000000 3500000
+part iso4017-m6x12 screw stainless M6 6000000 12000000 hex 10000000 4000000
+part iso4017-m6x16 screw stainless M6 6000000 16000000 hex 10000000 4000000
+part iso4017-m6x20 screw stainless M6 6000000 20000000 hex 10000000 4000000
+part iso4017-m6x25 screw stainless M6 6000000 25000000 hex 10000000 4000000
+part iso4017-m6x30 screw stainless M6 6000000 30000000 hex 10000000 4000000
+part iso4017-m6x40 screw stainless M6 6000000 40000000 hex 10000000 4000000
+part iso4017-m8x16 screw stainless M8 8000000 16000000 hex 13000000 5300000
+part iso4017-m8x20 screw stainless M8 8000000 20000000 hex 13000000 5300000
+part iso4017-m8x25 screw stainless M8 8000000 25000000 hex 13000000 5300000
+part iso4017-m8x30 screw stainless M8 8000000 30000000 hex 13000000 5300000
+part iso4017-m8x40 screw stainless M8 8000000 40000000 hex 13000000 5300000

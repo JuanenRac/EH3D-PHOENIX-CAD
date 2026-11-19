@@ -386,3 +386,23 @@ fn the_interference_asks_for_a_project_and_refuses_a_file_that_is_not_one() {
         "{help}"
     );
 }
+
+#[test]
+fn the_libraries_of_profiles_and_of_metric_screws_are_read_and_listed() {
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let (code, out, error) = run(&["library", &format!("{dir}/examples/vslot.phoenixlib")]);
+    assert_eq!(code, 0, "{error}");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "library vslot-aluminium: 11 parts");
+    assert_eq!(lines[1], "  profile vslot-2020 aluminium");
+    assert_eq!(lines[6], "  bracket vslot-corner-2020 aluminium");
+    let (code, out, error) = run(&[
+        "library",
+        &format!("{dir}/examples/metric-screws.phoenixlib"),
+    ]);
+    assert_eq!(code, 0, "{error}");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "library metric-screws: 58 parts");
+    assert_eq!(lines[1], "  screw iso4762-m3x6 steel");
+    assert_eq!(lines[58], "  screw iso4017-m8x40 stainless");
+}

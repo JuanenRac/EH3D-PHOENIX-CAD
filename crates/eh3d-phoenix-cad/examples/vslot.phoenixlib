@@ -1,0 +1,21 @@
+# A library of aluminium profiles of the V-slot family, with angle brackets to join them.
+# The profiles are solid-looking boxes of the outer section with the wall of an equivalent hollow
+# section, chosen so that the mass per metre is near the one of the real extrusion; the slots are
+# not drawn. The numbers are nominal sizes of the usual stock, not the data sheet of a maker.
+# Lengths are whole nanometres: 20000000 is 20 mm.
+#
+# part NAME profile MATERIAL WIDTH HEIGHT WALL USUAL_CUT LONGEST_CUT
+# part NAME bracket MATERIAL LEG_A LEG_B WIDTH THICKNESS HOLE_DIAMETER
+phoenix-library 1
+name vslot-aluminium
+part vslot-2020 profile aluminium 20000000 20000000 2700000 500000000 2000000000
+part vslot-2040 profile aluminium 20000000 40000000 2900000 500000000 2000000000
+part vslot-2060 profile aluminium 20000000 60000000 2700000 500000000 2000000000
+part vslot-3030 profile aluminium 30000000 30000000 4300000 500000000 2000000000
+part vslot-4040 profile aluminium 40000000 40000000 4700000 500000000 2000000000
+part vslot-corner-2020 bracket aluminium 20000000 20000000 18000000 3000000 5500000
+part vslot-corner-3030 bracket aluminium 30000000 30000000 28000000 4000000 6500000
+part vslot-corner-4040 bracket aluminium 40000000 40000000 38000000 4000000 6500000
+part angle-25 bracket aluminium 25000000 25000000 20000000 2500000 4200000
+part angle-40 bracket aluminium 40000000 40000000 25000000 3500000 5500000
+part angle-50 bracket aluminium 50000000 50000000 30000000 4000000 6500000

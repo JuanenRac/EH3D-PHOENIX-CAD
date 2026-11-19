@@ -87,3 +87,8 @@ The keys of `[catalog]` in `phoenix-cad.default.cfg` hold the limits (`max_bytes
 ## Examples
 
 `crates/eh3d-phoenix-cad/examples/chassis.phoenixlib` is a library of eight generic parts, and `crates/eh3d-phoenix-cad/examples/frame.phoenixproj` places eighteen of them: two rails, two cross members, four uprights, four brackets and six screws. The tests read both.
+
+Two larger libraries ship next to it and are read with `library` like any other (the tests check that every number agrees with the name of the part):
+
+* `vslot.phoenixlib` (`vslot-aluminium`): five aluminium profiles of the V-slot family (`vslot-2020`, `2040`, `2060`, `3030` and `4040`, bars of 2000 mm cut to 500 mm by default) and six angle brackets (`vslot-corner-2020`, `3030` and `4040`, and `angle-25`, `40` and `50`). A profile is the box of the outer section with the wall of an equivalent hollow section, chosen so that its mass for each metre is within 3 % of the one of the real extrusion (0.50, 0.84, 1.10, 1.20 and 1.80 kg/m); the slots are not drawn, so the volume and the mass are right to that accuracy and the shape is not. The sizes are nominal, not the data sheet of a maker.
+* `metric-screws.phoenixlib` (`metric-screws`): socket head cap screws (`iso4762-m3x6` to `iso4762-m8x40`, a cylinder head, in steel) and hexagon head screws (`iso4017-m4x10` to `iso4017-m8x40`, in stainless steel) of the usual lengths of each size (M3 from 6 mm to 30 mm, M4 and M5 from 8 mm to 40 mm, M6 from 10 mm to 40 mm and M8 from 16 mm to 40 mm for the socket head; M4 to M8 from 10 mm to 40 mm for the hexagon), 58 parts with the head diameter or width across the flats and the head height of the standards. A screw has no thread drawn and its shank is the full diameter.
