@@ -1818,6 +1818,43 @@ impl SketchEditor {
         }
     }
 
+    /// Whether the selection is something to mirror and, picked last, the line to mirror it
+    /// across.
+    pub fn can_mirror(&self) -> bool {
+        self.picked.constraints.is_empty()
+            && self.picked.elements.len() >= 2
+            && self
+                .picked
+                .elements
+                .last()
+                .is_some_and(|id| self.kind_of(*id) == Some(Kind::Line))
+    }
+
+    /// Mirrors the selection across the line picked last: copies of its points, lines, circles and
+    /// arcs on the other side of the line, each point tied to its original with a symmetric
+    /// constraint (so the copies follow the originals) and each circle with an equal radius. The
+    /// copies become the selection. A refused mirror leaves the sketch as it was and the status
+    /// says why. One change of the history.
+    pub fn mirror_selection(&mut self) {
+        if !self.can_mirror() {
+            self.status = Status::Problem(Msg::MirrorHint, Vec::new());
+            return;
+        }
+        let mut items = self.picked.elements.clone();
+        let Some(axis) = items.pop() else {
+            return;
+        };
+        let name = Msg::MirrorSelection.tr(self.lang);
+        let done = self.edit(name, |s, _| s.mirror(&items, axis, true));
+        if let Some(made) = done {
+            self.status = Status::Done(Msg::SelectionMirrored, vec![made.len().to_string()]);
+            self.picked = Picked {
+                elements: made,
+                constraints: Vec::new(),
+            };
+        }
+    }
+
     /// The constraints that can be added to the selection.
     pub fn available(&self) -> Vec<ConstraintTool> {
         ConstraintTool::ALL
@@ -4429,5 +4466,66 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn the_selection_is_mirrored_across_the_line_picked_last() {
+        let mut e = editor();
+        rectangle(&mut e);
+        // the rectangle has the points 1 to 4 and the lines 5 to 8; draw a vertical axis to the left
+        e.set_tool(Tool::Line);
+        click(&mut e, -10.0, -5.0);
+        click(&mut e, -10.0, 30.0);
+        e.set_tool(Tool::Select);
+        let axis = e
+            .sketch
+            .elements()
+            .iter()
+            .rev()
+            .find(|x| x.element.kind() == Kind::Line)
+            .map(|x| x.id)
+            .unwrap();
+        // nothing to mirror, or no line last
+        assert!(!e.can_mirror());
+        pick(&mut e, &[5]);
+        assert!(!e.can_mirror());
+        e.mirror_selection();
+        assert!(matches!(e.status, Status::Problem(Msg::MirrorHint, _)));
+        pick(&mut e, &[5, 6, axis.0]);
+        assert!(e.can_mirror());
+        let lines = |e: &SketchEditor| {
+            e.sketch
+                .elements()
+                .iter()
+                .filter(|x| x.element.kind() == Kind::Line)
+                .count()
+        };
+        let before = lines(&e);
+        e.mirror_selection();
+        assert!(
+            matches!(&e.status, Status::Done(Msg::SelectionMirrored, v) if v == &vec!["2".to_owned()]),
+            "{:?}",
+            e.status
+        );
+        assert_eq!(lines(&e), before + 2);
+        // the copies are selected, and one undo takes them all back
+        assert_eq!(e.picked.elements.len(), 2);
+        e.undo();
+        assert_eq!(lines(&e), before);
+        e.redo();
+        assert_eq!(lines(&e), before + 2);
+    }
+
+    #[test]
+    fn a_mirror_that_is_refused_says_so_and_changes_nothing() {
+        let mut e = editor();
+        rectangle(&mut e);
+        let before = e.sketch.clone();
+        // a line mirrored across itself is refused by the library
+        pick(&mut e, &[5, 5]);
+        assert!(e.can_mirror());
+        e.mirror_selection();
+        assert!(matches!(e.status, Status::Error(_)), "{:?}", e.status);
+        assert_eq!(e.sketch, before);
     }
 }

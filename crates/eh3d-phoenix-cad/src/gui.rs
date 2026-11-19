@@ -2224,6 +2224,14 @@ impl App {
                 {
                     self.sketch.round_corner();
                 }
+                let can_mirror = self.sketch.can_mirror();
+                if ui
+                    .add_enabled(can_mirror, egui::Button::new(Msg::MirrorSelection.tr(lang)))
+                    .on_hover_text(Msg::MirrorHint.tr(lang))
+                    .clicked()
+                {
+                    self.sketch.mirror_selection();
+                }
                 let extend = ui.input(|i| i.modifiers.command);
                 let rows: Vec<_> = self
                     .sketch

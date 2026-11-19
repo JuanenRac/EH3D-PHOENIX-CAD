@@ -22,7 +22,7 @@
 //! nanometre; it uses only the operations that every platform computes the same way (sums,
 //! products, quotients and square roots), so the same sketch gives the same result bit for bit.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::config::Settings;
@@ -859,6 +859,144 @@ impl Sketch {
             Some(_) => Err(bad_element(format!("{id} is not a line"))),
             None => Err(CadError::UnknownName(id.to_string())),
         }
+    }
+
+    /// Makes mirror images of `items` across the line `axis`: a point becomes a point, a line a
+    /// line between the images of its ends, a circle a circle of the same radius about the image
+    /// of its centre, and an arc an arc whose start and end are the images of its end and start
+    /// (a mirror image turns the other way round). A point of an item that lies on the axis is its
+    /// own image, so the image is joined to the original there. Each point has one image, however
+    /// many items share it, and an item that would be drawn on top of itself (a line along the
+    /// axis, a circle centred on it, a point on it) has none. The images keep the construction flag of the
+    /// original. With `constrain` each image point is made the mirror image of its original with
+    /// a symmetric constraint and each circle gets an equal radius, so the images follow the
+    /// originals when the sketch is solved again; the sketch is left as it was when anything is
+    /// refused. Returns the new items, in the order of `items`.
+    pub fn mirror(
+        &mut self,
+        items: &[ElementId],
+        axis: ElementId,
+        constrain: bool,
+    ) -> Result<Vec<ElementId>, CadError> {
+        let saved = self.clone();
+        let result = self.mirror_inner(items, axis, constrain);
+        if result.is_err() {
+            *self = saved;
+        }
+        result
+    }
+
+    fn mirror_inner(
+        &mut self,
+        items: &[ElementId],
+        axis: ElementId,
+        constrain: bool,
+    ) -> Result<Vec<ElementId>, CadError> {
+        if items.is_empty() {
+            return Err(bad_element("there is nothing to mirror"));
+        }
+        let (a0, a1) = self.line_points(axis)?;
+        if items.contains(&axis) {
+            return Err(bad_element("the axis of a mirror image is not mirrored"));
+        }
+        for (i, id) in items.iter().enumerate() {
+            if self.element(*id).is_none() {
+                return Err(CadError::UnknownName(id.to_string()));
+            }
+            if items[..i].contains(id) {
+                return Err(bad_element(format!("{id} is named twice")));
+            }
+        }
+        let at = |sk: &Sketch, id: ElementId| -> Result<(f64, f64), CadError> {
+            let (x, y) = sk.point(id)?;
+            Ok((x.get() as f64, y.get() as f64))
+        };
+        let (p, q) = (at(self, a0)?, at(self, a1)?);
+        let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+        let len = dx.hypot(dy);
+        if len < 1.0 {
+            return Err(bad_element("the axis of a mirror image has no length"));
+        }
+        let (dx, dy) = (dx / len, dy / len);
+        let reflect = |v: (f64, f64)| -> (f64, f64) {
+            let t = (v.0 - p.0) * dx + (v.1 - p.1) * dy;
+            (2.0 * (p.0 + t * dx) - v.0, 2.0 * (p.1 + t * dy) - v.1)
+        };
+        // the points the items are made of, in the order of the items
+        let mut needed: Vec<ElementId> = Vec::new();
+        for id in items {
+            let parts = match self.element(*id) {
+                Some(Element::Point { .. }) => vec![*id],
+                Some(e) => e.parts(),
+                None => Vec::new(),
+            };
+            for part in parts {
+                if !needed.contains(&part) {
+                    needed.push(part);
+                }
+            }
+        }
+        let mut image: BTreeMap<ElementId, ElementId> = BTreeMap::new();
+        let mut moved: Vec<(ElementId, ElementId)> = Vec::new();
+        for id in needed {
+            let here = self.point(id)?;
+            let (x, y) = reflect(at(self, id)?);
+            let there = (Length::new(x.round() as i64)?, Length::new(y.round() as i64)?);
+            if there == here {
+                image.insert(id, id);
+            } else {
+                let new = self.add_point(there.0, there.1)?;
+                image.insert(id, new);
+                moved.push((id, new));
+            }
+        }
+        let mut made = Vec::new();
+        for id in items {
+            let Some(entry) = self.elements.iter().find(|e| e.id == *id).cloned() else {
+                continue;
+            };
+            let new = match entry.element {
+                Element::Point { .. } => (image[id] != *id).then_some(image[id]),
+                Element::Line { a, b } => {
+                    let (ia, ib) = (image[&a], image[&b]);
+                    if (ia, ib) == (a, b) || (ia, ib) == (b, a) {
+                        None
+                    } else {
+                        Some(self.add_line(ia, ib)?)
+                    }
+                }
+                Element::Circle { center, radius } => {
+                    if image[&center] == center {
+                        None
+                    } else {
+                        let new = self.add_circle(image[&center], radius)?;
+                        if constrain {
+                            self.add_constraint(Constraint::Equal(*id, new))?;
+                        }
+                        Some(new)
+                    }
+                }
+                Element::Arc { center, start, end } => {
+                    Some(self.add_arc(image[&center], image[&end], image[&start])?)
+                }
+            };
+            if let Some(new) = new {
+                if entry.construction {
+                    self.set_construction(new, true)?;
+                }
+                made.push(new);
+            }
+        }
+        if constrain {
+            for (original, copy) in moved {
+                self.add_constraint(Constraint::SymmetricLine {
+                    a: original,
+                    b: copy,
+                    axis,
+                })?;
+            }
+        }
+        Ok(made)
     }
 
     /// Rounds the corner where two lines meet with an arc of `radius`: the lines are shortened to
@@ -1977,5 +2115,152 @@ mod tests {
             .unwrap();
         });
         assert!(no.is_err());
+    }
+
+    fn solved(s: &mut Sketch) -> bool {
+        matches!(
+            s.solve(&crate::sketch::settings::SketchSettings::defaults()),
+            Ok(crate::sketch::solver::Outcome::Solved { .. })
+        )
+    }
+
+    #[test]
+    fn a_line_and_a_circle_are_mirrored_across_a_vertical_axis() {
+        let mut s = sketch();
+        let o = s.add_point(mm(0), mm(0)).unwrap();
+        let top = s.add_point(mm(0), mm(10)).unwrap();
+        let axis = s.add_line(o, top).unwrap();
+        let p = s.add_point(mm(3), mm(1)).unwrap();
+        let q = s.add_point(mm(8), mm(6)).unwrap();
+        let line = s.add_line(p, q).unwrap();
+        let c = s.add_point(mm(5), mm(2)).unwrap();
+        let circle = s.add_circle(c, mm(2)).unwrap();
+        let made = s.mirror(&[line, circle], axis, false).unwrap();
+        assert_eq!(made.len(), 2);
+        let Some(Element::Line { a, b }) = s.element(made[0]).copied() else {
+            panic!("not a line");
+        };
+        assert_eq!(s.point(a).unwrap(), (mm(-3), mm(1)));
+        assert_eq!(s.point(b).unwrap(), (mm(-8), mm(6)));
+        let Some(Element::Circle { center, radius }) = s.element(made[1]).copied() else {
+            panic!("not a circle");
+        };
+        assert_eq!(s.point(center).unwrap(), (mm(-5), mm(2)));
+        assert_eq!(radius, mm(2));
+        // without the constraints nothing was tied
+        assert!(s.constraints().is_empty());
+        s.validate().unwrap();
+    }
+
+    #[test]
+    fn the_images_are_tied_with_symmetric_constraints_that_the_solver_keeps() {
+        let mut s = sketch();
+        let o = s.add_point(mm(0), mm(0)).unwrap();
+        let q0 = s.add_point(mm(10), mm(10)).unwrap();
+        // an axis at 45 degrees, held where it is
+        let axis = s.add_line(o, q0).unwrap();
+        s.fix_point(o).unwrap();
+        s.fix_point(q0).unwrap();
+        let p = s.add_point(mm(6), mm(0)).unwrap();
+        let r = s.add_point(mm(9), mm(3)).unwrap();
+        let line = s.add_line(p, r).unwrap();
+        let c = s.add_point(mm(7), mm(1)).unwrap();
+        let circle = s.add_circle(c, mm(1)).unwrap();
+        let made = s.mirror(&[line, circle], axis, true).unwrap();
+        // one symmetric constraint for each of the three points that moved, one equal radius
+        let kinds: Vec<_> = s.constraints().iter().map(|k| k.constraint.kind_name()).collect();
+        assert_eq!(kinds.iter().filter(|k| **k == "symmetric_line").count(), 3, "{kinds:?}");
+        assert_eq!(kinds.iter().filter(|k| **k == "equal").count(), 1);
+        let Some(Element::Line { a, b }) = s.element(made[0]).copied() else {
+            panic!("not a line");
+        };
+        // the image of (6, 0) across y = x is (0, 6)
+        assert_eq!(s.point(a).unwrap(), (mm(0), mm(6)));
+        assert_eq!(s.point(b).unwrap(), (mm(3), mm(9)));
+        s.validate().unwrap();
+        assert!(solved(&mut s));
+        // after the solver the images are still where they were
+        assert_eq!(s.point(a).unwrap(), (mm(0), mm(6)));
+        // an original that is held where it is moved drags its image with it
+        s.move_point(p, mm(8), mm(0)).unwrap();
+        s.fix_point(p).unwrap();
+        assert!(solved(&mut s));
+        let (x, y) = s.point(a).unwrap();
+        let moved = (x.get(), y.get());
+        assert!(moved.0.abs() < 1000 && (moved.1 - 8_000_000).abs() < 1000, "{moved:?}");
+    }
+
+    #[test]
+    fn an_arc_keeps_its_turn_and_the_points_on_the_axis_are_shared() {
+        let mut s = sketch();
+        let o = s.add_point(mm(0), mm(0)).unwrap();
+        let top = s.add_point(mm(0), mm(10)).unwrap();
+        let axis = s.add_line(o, top).unwrap();
+        // a quarter of a circle about (0, 0) from (5, 0) to (0, 5): it ends on the axis, and its
+        // image is the quarter from (0, 5) to (-5, 0), joined to it at the axis
+        let c = o;
+        let start = s.add_point(mm(5), mm(0)).unwrap();
+        let end = s.add_point(mm(0), mm(5)).unwrap();
+        let arc = s.add_arc(c, start, end).unwrap();
+        let made = s.mirror(&[arc], axis, false).unwrap();
+        let Some(Element::Arc { center, start: s1, end: e1 }) = s.element(made[0]).copied() else {
+            panic!("not an arc");
+        };
+        assert_eq!((center, s1), (o, end));
+        assert_eq!(s.point(e1).unwrap(), (mm(-5), mm(0)));
+        // an arc about another centre
+        let mut s = sketch();
+        let o = s.add_point(mm(0), mm(0)).unwrap();
+        let top = s.add_point(mm(0), mm(10)).unwrap();
+        let axis = s.add_line(o, top).unwrap();
+        let c = s.add_point(mm(4), mm(4)).unwrap();
+        let start = s.add_point(mm(6), mm(4)).unwrap();
+        let end = s.add_point(mm(4), mm(6)).unwrap();
+        let arc = s.add_arc(c, start, end).unwrap();
+        let made = s.mirror(&[arc], axis, false).unwrap();
+        let Some(Element::Arc { center, start: s2, end: e2 }) = s.element(made[0]).copied() else {
+            panic!("not an arc");
+        };
+        assert_eq!(s.point(center).unwrap(), (mm(-4), mm(4)));
+        // the start of the image is the image of the end, so it still runs counter-clockwise
+        assert_eq!(s.point(s2).unwrap(), (mm(-4), mm(6)));
+        assert_eq!(s.point(e2).unwrap(), (mm(-6), mm(4)));
+        // a line that ends on the axis is joined to its image there
+        let on = s.add_point(mm(0), mm(7)).unwrap();
+        let away = s.add_point(mm(5), mm(9)).unwrap();
+        let line = s.add_line(on, away).unwrap();
+        let made = s.mirror(&[line], axis, true).unwrap();
+        let Some(Element::Line { a, .. }) = s.element(made[0]).copied() else {
+            panic!("not a line");
+        };
+        assert_eq!(a, on);
+        // only the far end got a symmetric constraint
+        assert_eq!(
+            s.constraints()
+                .iter()
+                .filter(|k| k.constraint.kind_name() == "symmetric_line")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_mirror_that_is_refused_leaves_the_sketch_as_it_was() {
+        let mut s = sketch();
+        let o = s.add_point(mm(0), mm(0)).unwrap();
+        let top = s.add_point(mm(0), mm(10)).unwrap();
+        let axis = s.add_line(o, top).unwrap();
+        let p = s.add_point(mm(3), mm(1)).unwrap();
+        let q = s.add_point(mm(8), mm(6)).unwrap();
+        let line = s.add_line(p, q).unwrap();
+        let before = s.clone();
+        assert!(s.mirror(&[], axis, true).is_err());
+        assert!(s.mirror(&[line, axis], axis, true).is_err());
+        assert!(s.mirror(&[line, line], axis, true).is_err());
+        assert!(s.mirror(&[line], p, true).is_err());
+        assert!(s.mirror(&[ElementId(99)], axis, true).is_err());
+        // the axis along itself has no image, and an axis of no length cannot be used
+        assert_eq!(s.mirror(&[o], axis, true).unwrap(), Vec::<ElementId>::new());
+        assert_eq!(s, before);
     }
 }
