@@ -4,7 +4,7 @@ A chassis is parts held in place against each other. The catalog (see [CATALOG.m
 
 ## Mates
 
-A mate places one part (`b`) relative to another (`a`) along **one** axis. It takes away one of the three coordinates of `b` and leaves the other two as they were typed. There are six kinds (the last three came later and write the project in version 6):
+A mate places one part (`b`) relative to another (`a`) along **one** axis. It takes away one of the three coordinates of `b` and leaves the other two as they were typed. There are eight kinds (the last five came later and write the project in version 6):
 
 | Kind | Text | What it asks for |
 |---|---|---|
@@ -14,6 +14,7 @@ A mate places one part (`b`) relative to another (`a`) along **one** axis. It ta
 | offset | `offset <axis> <distance>` | the middle of `b` is `distance` (with its sign, in whole nanometres) from the middle of `a` along the axis; refused when the middles differ by half a nanometre |
 | symmetric | `symmetric <axis> <plane>` | the middle of `b` is the mirror image of the middle of `a` in the plane that lies at that coordinate across the axis (the sizes of the two parts may differ); refused when the result is half a nanometre off |
 | inset | `inset <axis> <min or max> <distance>` | the lower (`min`) or the upper (`max`) face of `b` lies `distance` inside the same face of `a` along the axis: with `min`, `b` starts at the lower face of `a` plus the distance; with `max`, it ends at the upper face of `a` minus the distance. A minus sign makes it stick out, and a distance of 0 is the alignment of that face. The middles have no inside, so `center` is refused |
+| proportion | `proportion <axis> <thousandths>` | the middle of `b` lies at that many thousandths (0 to 1000) of the size of `a` along the axis, counted from the lower face of `a`: 0 centres `b` on the lower face, 500 is the alignment of the middles and 1000 centres `b` on the upper face; refused when the result is not a whole number of nanometres |
 | turn | `turn <quarters>` | no coordinate is taken away: the roll of `b` about its length is the roll of `a` plus that many quarter turns (0 to 3). It is the only angle that two parts can make, because a part is turned in steps of 90 degrees (24 turns); the position typed for `b` is not touched |
 
 The sizes are those of the bounding box of each part in the model, which depend on how the part is turned (24 turns, see the catalog), never on where it is. So a profile along `+x` of 300 mm is 300 mm long on the `x` axis, and the faces of a screw are those of its bounding square.
@@ -57,7 +58,7 @@ What the check does not know:
 
 ## In the window
 
-* The tree has a group of **mates**, one item for each, with the name of the step (`Mate 1`). The **Add mate** button puts a mate between the selected part (the one it places; the last part when none is selected) and the part before it in the tree (the next one when it is the first); the kind and its values start as the settings `[new_step]` say (`mate_kind`, `mate_direction`, `mate_distance`, `mate_axis`, `mate_edge`, `mate_offset`, `mate_plane` and `mate_quarters` in `phoenix-cad-window.default.cfg`). The kind is a choice of the six; an offset has its axis and distance, a symmetry its axis and the position of its plane, and a turn the roll in degrees (0, 90, 180 or 270).
+* The tree has a group of **mates**, one item for each, with the name of the step (`Mate 1`). The **Add mate** button puts a mate between the selected part (the one it places; the last part when none is selected) and the part before it in the tree (the next one when it is the first); the kind and its values start as the settings `[new_step]` say (`mate_kind`, `mate_direction`, `mate_distance`, `mate_axis`, `mate_edge`, `mate_offset`, `mate_plane`, `mate_quarters` and `mate_permille` in `phoenix-cad-window.default.cfg`). The kind is a choice of the eight; an offset has its axis and distance, a symmetry its axis and the position of its plane, a turn the roll in degrees (0, 90, 180 or 270) and a proportion its axis and its fraction in thousandths (0 to 1000).
 * The fields of a mate are the part it is relative to and the part it places (typed by name; a name that is not there, or is used twice, is refused), the kind (a choice), the side and the distance of a gap or the axis and the faces of an alignment, and, read only, where the placed part really is. Each change of a field is an entry of the history, and a value the model refuses is told in the status bar and leaves the mate as it was.
 * A part says where its mates put it when that is not where it was typed, and which parts it shares volume with.
 * The parts in conflict are drawn in the colour of danger in the 3D view and in the plan (the selected part keeps the colour of the selection), and the **fit report** has the number of mates, then the line `Interference: ...` with the pairs in conflict (the first `assembly.max_report_pairs`, then how many more) or `Interference: none (...)` when there are two parts or more.

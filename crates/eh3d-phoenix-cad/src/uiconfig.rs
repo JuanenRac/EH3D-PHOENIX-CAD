@@ -107,6 +107,8 @@ pub struct NewStepDefaults {
     pub mate_plane: Length,
     /// The quarter turns of the roll of the placed part, for a new turn (0 to 3).
     pub mate_quarters: u8,
+    /// The fraction of the fixed part, in thousandths, for a new proportion (0 to 1000).
+    pub mate_permille: u16,
     /// The material of a new turned body, a name of the table of densities of the settings.
     pub turned_material: String,
 }
@@ -139,6 +141,10 @@ impl NewStepDefaults {
                 axis: self.mate_axis,
                 edge: self.mate_edge,
                 distance: self.mate_distance,
+            }),
+            "proportion" => Some(MateKind::Proportion {
+                axis: self.mate_axis,
+                permille: self.mate_permille,
             }),
             _ => None,
         }
@@ -334,11 +340,12 @@ impl NewStepDefaults {
             "symmetric",
             "turn",
             "inset",
+            "proportion",
         ]
         .contains(&mate_kind)
         {
             return Err(CadError::Config(format!(
-                "new_step.mate_kind: {mate_kind} is not gap, align, stack, offset, symmetric, turn or inset"
+                "new_step.mate_kind: {mate_kind} is not gap, align, stack, offset, symmetric, turn, inset or proportion"
             )));
         }
         let mate_direction = word(c, "new_step.mate_direction")?;
@@ -436,6 +443,8 @@ impl NewStepDefaults {
             mate_offset: c.length("new_step.mate_offset")?,
             mate_plane: c.length("new_step.mate_plane")?,
             mate_quarters: u8::try_from(count(c, "new_step.mate_quarters", 0, 3)?).unwrap_or(0),
+            mate_permille: u16::try_from(count(c, "new_step.mate_permille", 0, 1000)?)
+                .unwrap_or(500),
         })
     }
 }
@@ -720,6 +729,14 @@ mod tests {
             })
         );
         assert_eq!(n.mate_of("turn"), Some(MateKind::Turn { quarters: 1 }));
+        assert_eq!(n.mate_permille, 500);
+        assert_eq!(
+            n.mate_of("proportion"),
+            Some(MateKind::Proportion {
+                axis: Dim::Z,
+                permille: 500
+            })
+        );
         assert_eq!(n.mate_of("stack"), Some(MateKind::Stack));
         assert_eq!(
             n.mate_of("gap"),

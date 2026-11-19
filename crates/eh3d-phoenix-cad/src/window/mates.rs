@@ -43,6 +43,7 @@ impl Window {
             distance: mm_text(d.mate_distance.get()),
             plane: mm_text(d.mate_plane.get()),
             turn: (u32::from(d.mate_quarters) * 90).to_string(),
+            proportion: d.mate_permille.to_string(),
         }
     }
 
@@ -91,6 +92,16 @@ impl Window {
                 edge: Edge::from_name(draft.edge.trim())
                     .ok_or_else(|| CadError::Reference(word(&draft.edge)))?,
                 distance: self.parse_text(&draft.distance)?,
+            },
+            "proportion" => MateKind::Proportion {
+                axis: axis()?,
+                permille: draft
+                    .proportion
+                    .trim()
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|p| *p <= 1000)
+                    .ok_or(CadError::ValueOutOfRange("proportion"))?,
             },
             "turn" => {
                 let degrees = draft
@@ -172,6 +183,12 @@ impl Window {
                     mm(distance)
                 )
             }
+            MateKind::Proportion { axis, permille } => format!(
+                "{} {} {}/1000",
+                Msg::MateProportion.tr(lang),
+                axis.name(),
+                permille
+            ),
         }
     }
 

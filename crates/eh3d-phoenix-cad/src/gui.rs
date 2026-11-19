@@ -1015,6 +1015,7 @@ impl App {
                                 ("symmetric", Msg::MateSymmetric),
                                 ("turn", Msg::MateTurn),
                                 ("inset", Msg::MateInset),
+                                ("proportion", Msg::MateProportion),
                             ] {
                                 ui.selectable_value(
                                     &mut draft.kind,
@@ -1036,7 +1037,9 @@ impl App {
                                 }
                             });
                         }
-                        if ["align", "offset", "symmetric", "inset"].contains(&kind.as_str()) {
+                        if ["align", "offset", "symmetric", "inset", "proportion"]
+                            .contains(&kind.as_str())
+                        {
                             ui.horizontal(|ui| {
                                 ui.label(Msg::FieldMateAxis.tr(lang));
                                 for name in ["x", "y", "z"] {
@@ -1078,6 +1081,15 @@ impl App {
                                 ui.label(Msg::FieldMatePlane.tr(lang));
                                 ui.add(
                                     egui::TextEdit::singleline(&mut draft.plane)
+                                        .desired_width(80.0),
+                                );
+                            });
+                        }
+                        if kind == "proportion" {
+                            ui.horizontal(|ui| {
+                                ui.label(Msg::FieldMateProportion.tr(lang));
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut draft.proportion)
                                         .desired_width(80.0),
                                 );
                             });

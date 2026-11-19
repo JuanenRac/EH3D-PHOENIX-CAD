@@ -305,6 +305,8 @@ pub enum Key {
     MatePlane,
     /// The roll of the placed part relative to the fixed one, for a turn, in degrees.
     MateTurn,
+    /// The fraction of the fixed part, in thousandths, for a proportion.
+    MateProportion,
     /// Where a part really is once its mates are applied (read only).
     PartPlaced,
     /// The parts that share volume with a part (read only).
@@ -1647,6 +1649,7 @@ impl Window {
                     ("symmetric", Msg::MateSymmetric),
                     ("turn", Msg::MateTurn),
                     ("inset", Msg::MateInset),
+                    ("proportion", Msg::MateProportion),
                 ],
             ),
         ];
@@ -1736,6 +1739,18 @@ impl Window {
                     writable,
                 ));
             }
+            MateKind::Proportion { axis, permille } => {
+                out.push(text(
+                    Key::MateAxis,
+                    Msg::FieldMateAxis,
+                    axis.name().to_string(),
+                ));
+                out.push(text(
+                    Key::MateProportion,
+                    Msg::FieldMateProportion,
+                    permille.to_string(),
+                ));
+            }
         }
         if let Ok(placed) = self.built.enclosure.try_placed_all() {
             if let Some(p) = placed.get(&mate.b) {
@@ -1778,7 +1793,8 @@ impl Window {
                 MateKind::Align { axis, .. }
                 | MateKind::Offset { axis, .. }
                 | MateKind::Symmetric { axis, .. }
-                | MateKind::Inset { axis, .. },
+                | MateKind::Inset { axis, .. }
+                | MateKind::Proportion { axis, .. },
             ) => {
                 *axis =
                     Dim::from_name(word).ok_or_else(|| CadError::Reference(word.to_string()))?;
@@ -1788,6 +1804,13 @@ impl Window {
             }
             (Key::MatePlane, MateKind::Symmetric { plane, .. }) => {
                 *plane = self.parse_text(text)?;
+            }
+            (Key::MateProportion, MateKind::Proportion { permille, .. }) => {
+                *permille = word
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|p| *p <= 1000)
+                    .ok_or(CadError::ValueOutOfRange("proportion"))?;
             }
             (Key::MateTurn, MateKind::Turn { quarters }) => {
                 let degrees = word
@@ -9521,5 +9544,53 @@ mass: "
         assert!(es.starts_with("con margen x "), "{es}");
         w.lang = Lang::En;
         let _ = Panel::Mates;
+    }
+
+    #[test]
+    fn a_proportion_has_its_fields_its_words_and_its_place_in_the_mates_panel() {
+        let mut w = two_tubes_in_the_window();
+        w.add_step(NewStep::Mate);
+        assert!(!problem(&w), "{:?}", w.status);
+        set(&mut w, Key::MateKind, "proportion");
+        assert!(!problem(&w), "{:?}", w.status);
+        assert_eq!(text_of(&w, Key::MateAxis), "z");
+        assert_eq!(text_of(&w, Key::MateProportion), "500");
+        set(&mut w, Key::MateProportion, "250");
+        assert!(!problem(&w), "{:?}", w.status);
+        assert_eq!(text_of(&w, Key::MateProportion), "250");
+        // more than the whole and what is not a number are refused
+        for bad in ["1001", "-1", "abc", "2.5"] {
+            set(&mut w, Key::MateProportion, bad);
+            assert!(problem(&w), "{bad}");
+        }
+        set(&mut w, Key::MateProportion, "1000");
+        assert!(!problem(&w), "{:?}", w.status);
+        assert_eq!(w.mech.version(), 6);
+        // the panel tries it on a copy and puts it in words of the language
+        let mut w = two_tubes_in_the_window();
+        let mut draft = w.mate_draft_new();
+        draft.kind = "proportion".into();
+        draft.axis = "x".into();
+        draft.proportion = "250".into();
+        let mate = w.mate_from_draft(&draft).unwrap();
+        assert_eq!(w.mate_words(&mate), "proportion x 250/1000");
+        let t = w.mates_panel_text(&draft);
+        assert!(
+            t.contains("New mate: Part 2 on Part 1: proportion x 250/1000"),
+            "{t}"
+        );
+        assert!(w.enclosure().mates().is_empty());
+        for bad in ["1001", "", "x"] {
+            draft.proportion = bad.into();
+            assert!(w.mate_from_draft(&draft).is_err(), "{bad:?}");
+        }
+        draft.proportion = "250".into();
+        draft.axis = "w".into();
+        assert!(w.mate_from_draft(&draft).is_err());
+        w.lang = Lang::Es;
+        draft.axis = "x".into();
+        let es = w.mate_words(&w.mate_from_draft(&draft).unwrap());
+        assert_eq!(es, "proporción x 250/1000");
+        w.lang = Lang::En;
     }
 }

@@ -105,7 +105,8 @@ impl Panel {
 /// [`crate::window::Window::mate_choices`] gives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MateDraft {
-    /// The kind of mate: `gap`, `align`, `stack`, `offset`, `symmetric` or `turn`.
+    /// The kind of mate: `gap`, `align`, `stack`, `offset`, `symmetric`, `turn`, `inset` or
+    /// `proportion`.
     pub kind: String,
     /// The place of the part that stays, in the list of parts.
     pub fixed: usize,
@@ -113,7 +114,8 @@ pub struct MateDraft {
     pub placed: usize,
     /// The side of a `gap`: `+x`, `-x`, `+y`, `-y`, `+z` or `-z`.
     pub direction: String,
-    /// The axis of an `align`, an `offset` or a `symmetric`: `x`, `y` or `z`.
+    /// The axis of an `align`, an `offset`, a `symmetric`, an `inset` or a `proportion`: `x`, `y`
+    /// or `z`.
     pub axis: String,
     /// The faces an `align` puts on one plane: `min`, `max` or `center`.
     pub edge: String,
@@ -123,6 +125,8 @@ pub struct MateDraft {
     pub plane: String,
     /// The roll of a `turn` in degrees (0, 90, 180 or 270).
     pub turn: String,
+    /// The fraction of a `proportion` in thousandths (0 to 1000).
+    pub proportion: String,
 }
 
 impl Default for MateDraft {
@@ -138,6 +142,7 @@ impl Default for MateDraft {
             distance: "0".to_string(),
             plane: "0".to_string(),
             turn: "90".to_string(),
+            proportion: "500".to_string(),
         }
     }
 }

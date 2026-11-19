@@ -4,7 +4,7 @@
 //!
 //! A [`Mate`] places one part (`b`) relative to another (`a`) along **one** axis, so it takes away
 //! one of the three coordinates of `b` and leaves the other two as they were placed. There are
-//! six kinds (the last three are the newer ones, see [`MateKind::is_newer`]):
+//! eight kinds (the last five are the newer ones, see [`MateKind::is_newer`]):
 //!
 //! * `gap <direction> <distance>`: `b` lies on the side of `a` that the direction names (`+x`
 //!   to `-z`), `distance` away from its face (0 touches it);
@@ -18,7 +18,12 @@
 //!   that coordinate across the axis (`a` mirrored in the plane gives the middle of `b`);
 //! * `turn <quarters>`: no coordinate of `b` is taken away: its roll is the roll of `a` plus that
 //!   many quarter turns (0 to 3), the only angle between two parts that the 24 turns of a part
-//!   can give.
+//!   can give;
+//! * `inset <axis> <min|max> <distance>`: the lower (or the upper) face of `b` lies `distance`
+//!   inside the same face of `a`, an alignment with a margin;
+//! * `proportion <axis> <thousandths>`: the middle of `b` lies at that many thousandths of the
+//!   size of `a` along the axis, counted from its lower face (refused when the result is not a
+//!   whole number of nanometres).
 //!
 //! The mates are constraints, not moves: the position typed for a part stays in the model and
 //! [`place`] gives every part its position with the mates applied, so taking a mate away puts the
@@ -238,6 +243,14 @@ pub enum MateKind {
         /// How far inside the face of `a` the face of `b` lies; with a minus sign it sticks out.
         distance: Length,
     },
+    /// The middle of `b` lies at a fraction of the size of `a` along the axis, counted from the
+    /// lower face of `a`: 0 is the lower face, 500 the middle and 1000 the upper face.
+    Proportion {
+        /// The axis along which the fraction is taken.
+        axis: Dim,
+        /// The fraction in thousandths of the size of `a` (0 to 1000).
+        permille: u16,
+    },
 }
 
 /// A part placed relative to another, along one axis.
@@ -264,8 +277,8 @@ fn direction_of(axis: Axis) -> (usize, i8) {
 }
 
 impl MateKind {
-    /// The word of the files for the kind: `gap`, `align`, `stack`, `offset`, `symmetric`, `turn`
-    /// or `inset`.
+    /// The word of the files for the kind: `gap`, `align`, `stack`, `offset`, `symmetric`, `turn`,
+    /// `inset` or `proportion`.
     pub fn name(self) -> &'static str {
         match self {
             MateKind::Gap { .. } => "gap",
@@ -275,11 +288,12 @@ impl MateKind {
             MateKind::Symmetric { .. } => "symmetric",
             MateKind::Turn { .. } => "turn",
             MateKind::Inset { .. } => "inset",
+            MateKind::Proportion { .. } => "proportion",
         }
     }
 
-    /// Whether the kind came after the first three (`offset`, `symmetric`, `turn` and `inset`): a
-    /// recipe that has one is written in version 6 of the mechanical domain.
+    /// Whether the kind came after the first three (`offset`, `symmetric`, `turn`, `inset` and
+    /// `proportion`): a recipe that has one is written in version 6 of the mechanical domain.
     pub fn is_newer(self) -> bool {
         matches!(
             self,
@@ -287,6 +301,7 @@ impl MateKind {
                 | MateKind::Symmetric { .. }
                 | MateKind::Turn { .. }
                 | MateKind::Inset { .. }
+                | MateKind::Proportion { .. }
         )
     }
 
@@ -298,7 +313,8 @@ impl MateKind {
             MateKind::Align { axis, .. }
             | MateKind::Offset { axis, .. }
             | MateKind::Symmetric { axis, .. }
-            | MateKind::Inset { axis, .. } => axis.index(),
+            | MateKind::Inset { axis, .. }
+            | MateKind::Proportion { axis, .. } => axis.index(),
             MateKind::Stack => 2,
             MateKind::Turn { .. } => 3,
         }
@@ -348,6 +364,11 @@ impl Mate {
                 out.push(edge.name().to_string());
                 out.push(distance.get().to_string());
             }
+            MateKind::Proportion { axis, permille } => {
+                out.push("proportion".to_string());
+                out.push(axis.name().to_string());
+                out.push(permille.to_string());
+            }
         }
         out
     }
@@ -386,6 +407,14 @@ impl Mate {
                 edge: Edge::from_name(edge).ok_or("the edge of an inset is not known")?,
                 distance: signed_word(distance, "distance of an inset")?,
             },
+            [_, _, "proportion", axis, permille] => MateKind::Proportion {
+                axis: Dim::from_name(axis).ok_or("the axis of a proportion is not known")?,
+                permille: permille
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|p| p.to_string() == *permille)
+                    .ok_or("the fraction of a proportion is not a whole number of thousandths")?,
+            },
             _ => return Err("a mate is not understood".to_string()),
         };
         Ok(Mate {
@@ -423,6 +452,13 @@ impl Mate {
         if let MateKind::Turn { quarters } = self.kind {
             if quarters > 3 {
                 return Err(mate_error("the quarter turns of a turn are 0, 1, 2 or 3"));
+            }
+        }
+        if let MateKind::Proportion { permille, .. } = self.kind {
+            if permille > 1000 {
+                return Err(mate_error(
+                    "the fraction of a proportion is from 0 to 1000 thousandths",
+                ));
             }
         }
         if let MateKind::Inset { edge, distance, .. } = self.kind {
@@ -483,6 +519,22 @@ fn mated_position(kind: MateKind, a_min: i64, a_size: i64, b_size: i64) -> Resul
                     ))
                 }
             }
+        }
+        MateKind::Proportion { permille, .. } => {
+            if permille > 1000 {
+                return Err(mate_error(
+                    "the fraction of a proportion is from 0 to 1000 thousandths",
+                ));
+            }
+            // the middle of b is at a_min + a_size * permille / 1000: b starts half its size
+            // before it, which is a whole number of nanometres only when the division is exact
+            let scaled = 2000 * a_min + 2 * a_size * i128::from(permille) - 1000 * b_size;
+            if scaled % 2000 != 0 {
+                return Err(mate_error(
+                    "the middle cannot be put there: it is not a whole number of nanometres",
+                ));
+            }
+            scaled / 2000
         }
         MateKind::Offset { distance, .. } => {
             let twice = 2 * a_min + a_size - b_size;
@@ -2168,6 +2220,149 @@ interference_tolerance = thick
             mm(30).get()
         )
         .is_err());
+    }
+
+    #[test]
+    fn a_proportion_puts_the_middle_of_a_part_at_a_fraction_of_the_other() {
+        let at = |permille: u16, a_min: i64, a_size: i64, b_size: i64| {
+            mated_position(
+                MateKind::Proportion {
+                    axis: Dim::X,
+                    permille,
+                },
+                a_min,
+                a_size,
+                b_size,
+            )
+        };
+        // a is 100 long from 10; b is 30 long: its middle is 10 + 100 x 250 / 1000 = 35, so it
+        // starts at 20
+        assert_eq!(
+            at(250, mm(10).get(), mm(100).get(), mm(30).get()).unwrap(),
+            mm(20).get()
+        );
+        // 500 is the alignment of the middles, 0 and 1000 centre b on the faces of a
+        let middle = mated_position(
+            MateKind::Align {
+                axis: Dim::X,
+                edge: Edge::Center,
+            },
+            mm(10).get(),
+            mm(100).get(),
+            mm(30).get(),
+        );
+        assert_eq!(
+            at(500, mm(10).get(), mm(100).get(), mm(30).get()).unwrap(),
+            middle.unwrap()
+        );
+        assert_eq!(
+            at(0, mm(10).get(), mm(100).get(), mm(30).get()).unwrap(),
+            mm(-5).get()
+        );
+        assert_eq!(
+            at(1000, mm(10).get(), mm(100).get(), mm(30).get()).unwrap(),
+            mm(95).get()
+        );
+        // a part as long as the other with 0 of it is a part starting where the other does
+        assert_eq!(
+            at(0, mm(10).get(), mm(100).get(), mm(100).get()).unwrap(),
+            mm(-40).get()
+        );
+        // a point of a part that is not a whole number of nanometres is refused: a is 1001 nm
+        // long, 1 thousandth of it is 1.001 nm, and b of 2 nm needs half of it
+        assert!(at(1, 0, 1001, 2).is_err());
+        // more than the whole of a is refused
+        assert!(at(1001, 0, mm(100).get(), mm(10).get()).is_err());
+    }
+
+    #[test]
+    fn a_proportion_places_a_part_in_a_model_with_the_other_mates() {
+        // a is 100 mm long along z from 7 mm, b is 40 mm long: a quarter of a is at 32 mm, so b
+        // starts at 12 mm
+        let parts = set(vec![
+            (1, bar("a", [5, 6, 7], 100)),
+            (2, bar("b", [0, 50, 50], 40)),
+        ]);
+        let prop = |axis: Dim, permille: u16| MateKind::Proportion { axis, permille };
+        let placed = place(
+            &parts,
+            &mates(vec![(9, kind_mate(1, 2, prop(Dim::Z, 250)))]),
+        )
+        .unwrap();
+        assert_eq!(pos(&placed, 2), [0, 50 * MM, 12 * MM]);
+        // along x a is 20 mm wide from 5 mm and b 20 mm wide: the middle of b goes to the
+        // fifth of a, 9 mm, so b starts at -1 mm
+        let placed = place(
+            &parts,
+            &mates(vec![(9, kind_mate(1, 2, prop(Dim::X, 200)))]),
+        )
+        .unwrap();
+        assert_eq!(pos(&placed, 2)[0], -MM);
+        // a proportion along one axis and a gap along another do not clash
+        let both = place(
+            &parts,
+            &mates(vec![
+                (8, kind_mate(1, 2, prop(Dim::Z, 500))),
+                (9, gap(1, 2, Axis::PlusX, Length::ZERO)),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(pos(&both, 2)[0], 25 * MM);
+        assert_eq!(pos(&both, 2)[2], 37 * MM);
+        // two mates along the same axis are refused, as for the other kinds
+        let e = place(
+            &parts,
+            &mates(vec![
+                (8, kind_mate(1, 2, prop(Dim::Z, 500))),
+                (9, kind_mate(1, 2, MateKind::Stack)),
+            ]),
+        )
+        .unwrap_err();
+        assert_eq!(e.code(), "PHOENIX-CAD-046");
+    }
+
+    #[test]
+    fn a_proportion_is_written_and_read_back_and_checked() {
+        let largest = mm(6000);
+        let kind = MateKind::Proportion {
+            axis: Dim::Y,
+            permille: 333,
+        };
+        let m = kind_mate(1, 2, kind);
+        assert!(kind.is_newer());
+        assert_eq!(kind.name(), "proportion");
+        assert_eq!(kind.axis_index(), 1);
+        let words = m.words();
+        assert_eq!(&words[2..], ["proportion", "y", "333"]);
+        let refs: Vec<&str> = words.iter().map(String::as_str).collect();
+        assert_eq!(Mate::from_words(&refs).unwrap(), m);
+        assert!(m.check(largest).is_ok());
+        let a = id(1).to_string();
+        let b = id(2).to_string();
+        for bad in [
+            vec![&a, &b, "proportion", "w", "5"],
+            vec![&a, &b, "proportion", "x", "05"],
+            vec![&a, &b, "proportion", "x", "-5"],
+            vec![&a, &b, "proportion", "x", "70000"],
+            vec![&a, &b, "proportion", "x", "5.5"],
+            vec![&a, &b, "proportion", "x"],
+        ] {
+            let words: Vec<&str> = bad.iter().map(|w| &**w).collect();
+            assert!(Mate::from_words(&words).is_err(), "{words:?}");
+        }
+        // 1000 is the upper face and the most there is
+        let top = MateKind::Proportion {
+            axis: Dim::X,
+            permille: 1000,
+        };
+        assert!(kind_mate(1, 2, top).check(largest).is_ok());
+        let over = MateKind::Proportion {
+            axis: Dim::X,
+            permille: 1001,
+        };
+        assert!(kind_mate(1, 2, over).check(largest).is_err());
+        // a part cannot be placed in proportion to itself
+        assert!(kind_mate(1, 1, kind).check(largest).is_err());
     }
 
     #[test]
