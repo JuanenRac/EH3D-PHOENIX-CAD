@@ -528,28 +528,51 @@ impl Drawing {
                 ],
             ),
         ];
-        let near = self.view.face().name();
-        let rows: Vec<_> = schedule::rows(enclosure)
-            .into_iter()
-            .filter(|r| r.face == near)
-            .collect();
-        let shown = settings.max_dimensions as usize;
-        for r in rows.iter().take(shown) {
-            let size = match r.shape {
-                HoleStyle::Rectangular { .. } | HoleStyle::Oval { .. } => mm_text(r.diameter),
-                _ => format!("\u{2300}{}", mm_text(r.diameter)),
-            };
-            lines.push(fill(
-                Msg::LegendHole.tr(lang),
-                &[&r.tag, &size, &mm_text(r.u), &mm_text(r.v)],
-            ));
+        lines.extend(hole_lines(enclosure, self.view, settings, lang));
+        self.put_legend(lines, settings);
+    }
+
+    /// Adds the legend of a sheet of views to the right of it: the title, the size of the box and
+    /// the thickness of its walls, floor and lid once, and then, under the name of each view (the
+    /// front, the plan and the side), the holes of the face that the view looks at, up to
+    /// `drawing.max_dimensions` of them for each view. A view whose face has no hole has its name
+    /// and no lines.
+    pub fn add_sheet_legend(
+        &mut self,
+        enclosure: &Enclosure,
+        settings: &DrawingSettings,
+        lang: Lang,
+    ) {
+        let params = enclosure.params();
+        let (x, y, z) = params.outer();
+        let mut lines = vec![
+            Msg::LegendTitle.tr(lang).to_string(),
+            fill(
+                Msg::LegendBox.tr(lang),
+                &[&mm_text(x.get()), &mm_text(y.get()), &mm_text(z.get())],
+            ),
+            fill(
+                Msg::LegendThickness.tr(lang),
+                &[
+                    &mm_text(params.wall.get()),
+                    &mm_text(params.floor.get()),
+                    &mm_text(params.lid.get()),
+                ],
+            ),
+        ];
+        for (view, name) in [
+            (View::Front, Msg::LegendFront),
+            (View::Top, Msg::ViewPlan),
+            (View::Side, Msg::LegendSide),
+        ] {
+            lines.push(format!("{}:", name.tr(lang)));
+            lines.extend(hole_lines(enclosure, view, settings, lang));
         }
-        if rows.len() > shown {
-            lines.push(fill(
-                Msg::LegendMore.tr(lang),
-                &[&(rows.len() - shown).to_string()],
-            ));
-        }
+        self.put_legend(lines, settings);
+    }
+
+    /// Writes the lines of a legend, one under the other, to the right of the box.
+    fn put_legend(&mut self, lines: Vec<String>, settings: &DrawingSettings) {
         let left = self.extent.0 + mm(settings.legend_gap.get());
         for (i, text) in lines.into_iter().enumerate() {
             self.notes.push(Note {
@@ -1254,6 +1277,41 @@ impl Drawing {
     }
 }
 
+/// The lines of a legend for the holes of the face that `view` looks at: one line each with its
+/// tag (the one of the hole schedule), its diameter (or width) and its position, up to
+/// `drawing.max_dimensions`, and a last line that says how many more there are.
+fn hole_lines(
+    enclosure: &Enclosure,
+    view: View,
+    settings: &DrawingSettings,
+    lang: Lang,
+) -> Vec<String> {
+    let near = view.face().name();
+    let rows: Vec<_> = schedule::rows(enclosure)
+        .into_iter()
+        .filter(|r| r.face == near)
+        .collect();
+    let shown = settings.max_dimensions as usize;
+    let mut lines = Vec::new();
+    for r in rows.iter().take(shown) {
+        let size = match r.shape {
+            HoleStyle::Rectangular { .. } | HoleStyle::Oval { .. } => mm_text(r.diameter),
+            _ => format!("\u{2300}{}", mm_text(r.diameter)),
+        };
+        lines.push(fill(
+            Msg::LegendHole.tr(lang),
+            &[&r.tag, &size, &mm_text(r.u), &mm_text(r.v)],
+        ));
+    }
+    if rows.len() > shown {
+        lines.push(fill(
+            Msg::LegendMore.tr(lang),
+            &[&(rows.len() - shown).to_string()],
+        ));
+    }
+    lines
+}
+
 /// The standard scales of a drawing (millimetres of paper for each millimetre of the model), from
 /// 50:1 down to 1:100.
 const STANDARD_SCALES: [f64; 12] = [
@@ -1660,6 +1718,99 @@ mod tests {
         let lines = legend(&front);
         assert_eq!(lines.len(), 5);
         assert_eq!(lines[4], "1 more holes are not listed");
+    }
+
+    #[test]
+    fn the_legend_of_the_sheet_lists_the_holes_of_each_view_under_its_name() {
+        let mut e = model();
+        hole(&mut e, 1, Face::Front, 60, 17, 6, HoleStyle::Plain);
+        hole(&mut e, 2, Face::Top, 10, 12, 3, HoleStyle::Plain);
+        hole(&mut e, 3, Face::Right, 20, 9, 4, HoleStyle::Plain);
+        hole(&mut e, 4, Face::Right, 30, 9, 4, HoleStyle::Plain);
+        let mut s = Drawing::sheet(&e, &settings()).unwrap();
+        s.add_sheet_legend(&e, &settings(), Lang::En);
+        let lines = legend(&s);
+        // the title, the box and the thickness once, then a name and the holes of each view
+        assert_eq!(lines[0], "Dimensions (mm)");
+        assert_eq!(lines[1], "box: 104 x 64 x 35");
+        assert_eq!(lines[2], "wall 2, floor 2, lid 3");
+        let at = |name: &str| lines.iter().position(|l| l == name).unwrap();
+        let (front, plan, side) = (at("Front view:"), at("Plan view:"), at("Side view:"));
+        assert!(front < plan && plan < side);
+        assert_eq!(plan - front, 2, "{lines:?}");
+        assert_eq!(side - plan, 2, "{lines:?}");
+        assert_eq!(lines.len() - side, 3, "{lines:?}");
+        assert!(lines[front + 1].starts_with("H") && lines[front + 1].contains("6 at 60, 17"));
+        assert!(lines[plan + 1].contains("3 at 10, 12"));
+        assert!(lines[side + 1].contains("4 at 20, 9") && lines[side + 2].contains("4 at 30, 9"));
+        // the lines are one under the other, to the right of the whole sheet
+        let notes: Vec<_> = s.notes.iter().filter(|n| n.level == LEGEND_LEVEL).collect();
+        assert!(notes
+            .windows(2)
+            .all(|w| w[0].at.1 > w[1].at.1 && w[0].at.0 == w[1].at.0));
+        let (_, hi) = s.bounds();
+        assert!(notes[0].at.0 >= hi.0);
+    }
+
+    #[test]
+    fn the_legend_of_the_sheet_names_a_view_with_no_hole_and_cuts_each_view_at_the_limit() {
+        let mut e = model();
+        hole(&mut e, 1, Face::Top, 10, 12, 3, HoleStyle::Plain);
+        hole(&mut e, 2, Face::Top, 20, 12, 3, HoleStyle::Plain);
+        let few = DrawingSettings {
+            max_dimensions: 1,
+            ..settings()
+        };
+        let mut s = Drawing::sheet(&e, &settings()).unwrap();
+        s.add_sheet_legend(&e, &few, Lang::En);
+        let lines = legend(&s);
+        // the front and the side have no hole: the name and nothing under it
+        assert_eq!(
+            lines[3..],
+            [
+                "Front view:",
+                "Plan view:",
+                "H1: \u{2300}3 at 10, 12",
+                "1 more holes are not listed",
+                "Side view:"
+            ]
+            .map(str::to_owned)
+        );
+        // in another language the names of the views change and the count of lines does not
+        let mut es = Drawing::sheet(&e, &settings()).unwrap();
+        es.add_sheet_legend(&e, &few, Lang::Es);
+        let spanish = legend(&es);
+        assert_eq!(spanish.len(), lines.len());
+        assert!(spanish.contains(&"Vista frontal:".to_owned()));
+        assert!(spanish.contains(&"Vista lateral:".to_owned()));
+        assert!(spanish.contains(&"Vista de planta:".to_owned()));
+    }
+
+    #[test]
+    fn the_sheet_exports_the_legend_of_every_view_unless_the_settings_say_otherwise() {
+        let mut e = model();
+        hole(&mut e, 1, Face::Top, 10, 12, 3, HoleStyle::Plain);
+        assert!(settings().sheet_legends);
+        let own =
+            crate::config::Settings::with_user_config("[drawing]\nsheet_legends = 0\n").unwrap();
+        assert!(!own.drawing.sheet_legends);
+        assert!(
+            crate::config::Settings::with_user_config("[drawing]\nsheet_legends = 2\n").is_err()
+        );
+        let all = crate::export::render(
+            crate::export::Format::SvgSheet,
+            &e,
+            "box",
+            &crate::config::Settings::defaults(),
+        )
+        .unwrap();
+        let all = String::from_utf8(all).unwrap();
+        assert!(all.contains(">Plan view:</text>") && all.contains(">Side view:</text>"));
+        let front_only =
+            crate::export::render(crate::export::Format::SvgSheet, &e, "box", &own).unwrap();
+        let front_only = String::from_utf8(front_only).unwrap();
+        assert!(!front_only.contains("Plan view:") && !front_only.contains("Front view:"));
+        assert!(front_only.contains(">Dimensions (mm)</text>"));
     }
 
     #[test]

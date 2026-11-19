@@ -86,7 +86,7 @@ The DXF file is R12 text with the entities `LINE`, `CIRCLE` and `ARC` and the he
 
 ### The sheet of views
 
-`export --view sheet` (or **Sheet of views** in the Export menu, `dxf-sheet` and `svg-sheet`) puts the front, the plan and the side on one drawing, each with its own outline, cavity, centre lines and dimensions (`Drawing::sheet`). The front is the main view, at the origin. With `drawing.sheet_angle = 1` (the default, first-angle projection as in ISO) the plan is under the front and the side, which looks from the right, is to its left; with `3` (third angle) the plan is over the front and the side to its right. Between two views are `drawing.sheet_gap` (20 mm by default) and the room that the dimension lines of the view next to the gap take, so no dimension line lies on a neighbour. The legend is written once, to the right of the whole sheet, and lists the holes of the front; the border and the title block go round and under the whole sheet. The three views together count against `drawing.max_entities` (`PHOENIX-CAD-050`).
+`export --view sheet` (or **Sheet of views** in the Export menu, `dxf-sheet` and `svg-sheet`) puts the front, the plan and the side on one drawing, each with its own outline, cavity, centre lines and dimensions (`Drawing::sheet`). The front is the main view, at the origin. With `drawing.sheet_angle = 1` (the default, first-angle projection as in ISO) the plan is under the front and the side, which looks from the right, is to its left; with `3` (third angle) the plan is over the front and the side to its right. Between two views are `drawing.sheet_gap` (20 mm by default) and the room that the dimension lines of the view next to the gap take, so no dimension line lies on a neighbour. The legend is written once, to the right of the whole sheet, and lists the holes of each view under its name (*Front view*, *Plan view*, *Side view*, each cut at `drawing.max_dimensions`; with `drawing.sheet_legends = 0` only those of the front); the border and the title block go round and under the whole sheet. The three views together count against `drawing.max_entities` (`PHOENIX-CAD-050`).
 
 ### Paper size and scale
 
@@ -136,6 +136,7 @@ In `phoenix-cad.default.cfg` (the `config` command writes them):
 | `drawing.hidden_lines` | 1 | the cavity of the box as dashed lines on the layer `OCULTAS` |
 | `drawing.sheet_angle` | 1 | the sheet of views: 1 puts the plan under the front and the side to its left (first angle), 3 the plan over the front and the side to its right (third angle) |
 | `drawing.sheet_gap` | 20 mm | the air between two views of the sheet, besides the room of their dimension lines |
+| `drawing.sheet_legends` | 1 | the legend of the sheet lists the holes of every view under the name of the view; 0 lists only those of the front |
 | `drawing.paper` | 0 | the paper of the SVG drawing: 0 scales it to `drawing.svg_width`, 1 to 5 put it centred on a sheet of the A series (A1 to A5) at the largest standard scale that fits |
 | `drawing.paper_margin` | 10 mm | the air between the drawing and the edge of the paper, from 0 mm to 100 mm |
 | `drawing.paper_portrait` | 0 | 1 stands the paper upright, 0 lays it across |

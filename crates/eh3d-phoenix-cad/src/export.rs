@@ -217,7 +217,11 @@ pub fn render_titled(
                 Drawing::of(enclosure, view, &settings.drawing)?
             };
             if settings.drawing.legend {
-                drawing.add_legend(enclosure, &settings.drawing, lang);
+                if format.is_sheet() && settings.drawing.sheet_legends {
+                    drawing.add_sheet_legend(enclosure, &settings.drawing, lang);
+                } else {
+                    drawing.add_legend(enclosure, &settings.drawing, lang);
+                }
             }
             if settings.drawing.frame {
                 drawing.add_frame(settings.drawing.frame_margin.get() as f64 / 1_000_000.0);

@@ -390,6 +390,9 @@ pub struct DrawingSettings {
     /// The air between two views on the sheet, from 0 to 1000 mm, besides the room their
     /// dimension lines take.
     pub sheet_gap: Length,
+    /// Whether the legend of the sheet of views lists the holes of every view under the name of
+    /// the view (1) or only those of the front (0).
+    pub sheet_legends: bool,
     /// The paper of the SVG drawing: 0 scales the drawing to `svg_width`, 1 to 5 put it on a
     /// sheet of the A series (A1 to A5) at the largest standard scale that fits, centred.
     pub paper: u8,
@@ -509,6 +512,7 @@ impl DrawingSettings {
             frame_margin,
             sheet_angle,
             sheet_gap,
+            sheet_legends: flag("drawing.sheet_legends")?,
             paper: paper as u8,
             paper_margin,
             paper_portrait: flag("drawing.paper_portrait")?,
@@ -1617,6 +1621,7 @@ markup_percent = 1000
                 frame_margin: Length::new(5_000_000).unwrap(),
                 sheet_angle: 1,
                 sheet_gap: Length::new(20_000_000).unwrap(),
+                sheet_legends: true,
                 paper: 0,
                 paper_margin: Length::new(10_000_000).unwrap(),
                 paper_portrait: false,
