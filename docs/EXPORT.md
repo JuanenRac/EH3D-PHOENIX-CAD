@@ -137,6 +137,8 @@ In `phoenix-cad.default.cfg` (the `config` command writes them):
 | `drawing.sheet_angle` | 1 | the sheet of views: 1 puts the plan under the front and the side to its left (first angle), 3 the plan over the front and the side to its right (third angle) |
 | `drawing.sheet_gap` | 20 mm | the air between two views of the sheet, besides the room of their dimension lines |
 | `drawing.sheet_legends` | 1 | the legend of the sheet lists the holes of every view under the name of the view; 0 lists only those of the front |
+| `drawing.sheet_symbol` | 0 | 1 draws the symbol of the projection under the lower left corner of the sheet (the circles to the right of a truncated cone for first angle, to its left for third angle) |
+| `drawing.sheet_symbol_size` | 10 mm | the height of the large end of that symbol, from 4 mm to 50 mm |
 | `drawing.paper` | 0 | the paper of the SVG drawing: 0 scales it to `drawing.svg_width`, 1 to 5 put it centred on a sheet of the A series (A1 to A5) at the largest standard scale that fits |
 | `drawing.paper_margin` | 10 mm | the air between the drawing and the edge of the paper, from 0 mm to 100 mm |
 | `drawing.paper_portrait` | 0 | 1 stands the paper upright, 0 lays it across |

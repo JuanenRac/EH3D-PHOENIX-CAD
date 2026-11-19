@@ -571,6 +571,49 @@ impl Drawing {
         self.put_legend(lines, settings);
     }
 
+    /// Draws the symbol of the projection under the lower left corner of the drawing, clear of
+    /// the dimension lines: a truncated cone seen from the side (the large end `size` high, the
+    /// small end half of that, 1.5 `size` long) and, apart from it, the two circles of its ends
+    /// seen from the large end, with their centre line. With first-angle projection (`third` is
+    /// false) the circles are to the right of the cone, with third-angle projection to its left.
+    /// An empty drawing gets nothing.
+    pub fn add_projection_symbol(&mut self, third: bool, size: f64) {
+        if self.entities.is_empty() || !size.is_finite() || size <= 0.0 {
+            return;
+        }
+        let (lo, _) = self.bounds();
+        let top = lo.1 - self.dimension_room() - size * 0.5;
+        let centre = top - size / 2.0;
+        let (cone_from, circles_at) = if third {
+            (1.6 * size, size / 2.0)
+        } else {
+            (0.0, 2.6 * size)
+        };
+        let x0 = lo.0;
+        let cone_to = cone_from + 1.5 * size;
+        let (small, large) = (size / 4.0, size / 2.0);
+        let line = |a: (f64, f64), b: (f64, f64)| (Layer::Outline, Entity::Line(a, b));
+        let at = |x: f64, y: f64| (x0 + x, y);
+        self.entities.extend([
+            line(at(cone_from, centre - small), at(cone_to, centre - large)),
+            line(at(cone_from, centre + small), at(cone_to, centre + large)),
+            line(at(cone_from, centre - small), at(cone_from, centre + small)),
+            line(at(cone_to, centre - large), at(cone_to, centre + large)),
+            (
+                Layer::Outline,
+                Entity::Circle(at(circles_at, centre), large),
+            ),
+            (
+                Layer::Outline,
+                Entity::Circle(at(circles_at, centre), small),
+            ),
+            (
+                Layer::Axes,
+                Entity::Line(at(0.0, centre), at(3.1 * size + 0.2 * size, centre)),
+            ),
+        ]);
+    }
+
     /// Writes the lines of a legend, one under the other, to the right of the box.
     fn put_legend(&mut self, lines: Vec<String>, settings: &DrawingSettings) {
         let left = self.extent.0 + mm(settings.legend_gap.get());
@@ -1718,6 +1761,140 @@ mod tests {
         let lines = legend(&front);
         assert_eq!(lines.len(), 5);
         assert_eq!(lines[4], "1 more holes are not listed");
+    }
+
+    fn circles_of(d: &Drawing) -> Vec<((f64, f64), f64)> {
+        d.entities
+            .iter()
+            .filter_map(|(_, e)| match e {
+                Entity::Circle(c, r) => Some((*c, *r)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_projection_symbol_is_under_the_sheet_with_the_circles_on_the_side_of_the_angle() {
+        let e = model();
+        let plain = Drawing::sheet(&e, &settings()).unwrap();
+        let (lo, _) = plain.bounds();
+        // first angle: the cone on the left, the two circles to the right of it
+        let mut first = plain.clone();
+        first.add_projection_symbol(false, 10.0);
+        assert_eq!(first.entities.len(), plain.entities.len() + 7);
+        let circles = circles_of(&first);
+        let ring: Vec<_> = circles
+            .iter()
+            .filter(|(_, r)| *r == 5.0 || *r == 2.5)
+            .collect();
+        assert_eq!(ring.len(), 2);
+        assert_eq!(ring[0].0, ring[1].0, "the circles are concentric");
+        // the cone runs from the left edge of the sheet to 15 mm, the circles are at 26 mm
+        assert!((ring[0].0 .0 - (lo.0 + 26.0)).abs() < 1e-9, "{:?}", ring[0]);
+        // third angle: the circles to the left of the cone
+        let mut third = plain.clone();
+        third.add_projection_symbol(true, 10.0);
+        let ring3: Vec<_> = circles_of(&third)
+            .into_iter()
+            .filter(|(_, r)| *r == 5.0 || *r == 2.5)
+            .collect();
+        assert!(
+            (ring3[0].0 .0 - (lo.0 + 5.0)).abs() < 1e-9,
+            "{:?}",
+            ring3[0]
+        );
+        // both are under everything the sheet had, clear of its dimension lines
+        let (new_lo, new_hi) = first.bounds();
+        let (_, old_hi) = plain.bounds();
+        assert!(
+            new_lo.1 <= lo.1 - plain.dimension_room() - 5.0 - 10.0 + 1e-9,
+            "{new_lo:?}"
+        );
+        assert_eq!(new_lo.0, lo.0);
+        assert!(new_hi.1 >= old_hi.1);
+        // the symbol is made of lines of the outline layer and one centre line
+        let added = &first.entities[plain.entities.len()..];
+        assert_eq!(added.iter().filter(|(l, _)| *l == Layer::Axes).count(), 1);
+        assert_eq!(
+            added.iter().filter(|(l, _)| *l == Layer::Outline).count(),
+            6
+        );
+    }
+
+    #[test]
+    fn the_projection_symbol_scales_with_its_size_and_does_nothing_on_nothing() {
+        let e = model();
+        let plain = Drawing::sheet(&e, &settings()).unwrap();
+        let measure = |size: f64| {
+            let mut d = plain.clone();
+            d.add_projection_symbol(false, size);
+            let rings: Vec<f64> = circles_of(&d).iter().map(|(_, r)| *r).collect();
+            rings
+        };
+        assert_eq!(measure(20.0), vec![10.0, 5.0]);
+        assert_eq!(measure(4.0), vec![2.0, 1.0]);
+        // a size that is not a size, and an empty drawing, add nothing
+        for size in [0.0, -3.0, f64::NAN, f64::INFINITY] {
+            let mut d = plain.clone();
+            d.add_projection_symbol(true, size);
+            assert_eq!(d, plain, "{size}");
+        }
+        let mut empty = Drawing::of(&e, View::Top, &settings()).unwrap();
+        empty.entities.clear();
+        let before = empty.clone();
+        empty.add_projection_symbol(false, 10.0);
+        assert_eq!(empty, before);
+    }
+
+    #[test]
+    fn the_sheet_has_the_projection_symbol_in_its_files_only_when_the_settings_say_so() {
+        let e = model();
+        let off = crate::config::Settings::defaults();
+        assert!(!off.drawing.sheet_symbol);
+        assert_eq!(off.drawing.sheet_symbol_size.get(), 10_000_000);
+        let on = crate::config::Settings::with_user_config(
+            "[drawing]\nsheet_symbol = 1\nsheet_symbol_size = 12 mm\nsheet_angle = 3\n",
+        )
+        .unwrap();
+        assert!(on.drawing.sheet_symbol);
+        assert_eq!(on.drawing.sheet_symbol_size.get(), 12_000_000);
+        let render = |s: &crate::config::Settings, f| {
+            String::from_utf8(crate::export::render(f, &e, "box", s).unwrap()).unwrap()
+        };
+        use crate::export::Format;
+        let (plain, symbol) = (
+            render(&off, Format::SvgSheet),
+            render(&on, Format::SvgSheet),
+        );
+        // the circles of the symbol are circles of 6 and 3 mm
+        assert!(!plain.contains("r=\"6\""));
+        assert!(
+            symbol.contains("r=\"6\"") && symbol.contains("r=\"3\""),
+            "{symbol}"
+        );
+        // a drawing of one view has none, with the setting on
+        assert_eq!(
+            render(&on, Format::SvgTop).matches("<circle").count(),
+            render(&off, Format::SvgTop).matches("<circle").count()
+        );
+        // and the DXF file of the sheet has the new entities
+        assert!(
+            render(&on, Format::DxfSheet).matches("0\nCIRCLE\n").count()
+                == render(&off, Format::DxfSheet)
+                    .matches("0\nCIRCLE\n")
+                    .count()
+                    + 2
+        );
+        for bad in [
+            "[drawing]\nsheet_symbol_size = 3 mm\n",
+            "[drawing]\nsheet_symbol_size = 51 mm\n",
+            "[drawing]\nsheet_symbol = 2\n",
+        ] {
+            assert!(
+                crate::config::Settings::with_user_config(bad).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

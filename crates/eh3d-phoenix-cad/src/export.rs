@@ -216,6 +216,12 @@ pub fn render_titled(
                 let view = format.view().unwrap_or(View::Top);
                 Drawing::of(enclosure, view, &settings.drawing)?
             };
+            if format.is_sheet() && settings.drawing.sheet_symbol {
+                drawing.add_projection_symbol(
+                    settings.drawing.sheet_angle == 3,
+                    settings.drawing.sheet_symbol_size.get() as f64 / 1_000_000.0,
+                );
+            }
             if settings.drawing.legend {
                 if format.is_sheet() && settings.drawing.sheet_legends {
                     drawing.add_sheet_legend(enclosure, &settings.drawing, lang);

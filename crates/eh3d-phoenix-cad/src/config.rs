@@ -393,6 +393,11 @@ pub struct DrawingSettings {
     /// Whether the legend of the sheet of views lists the holes of every view under the name of
     /// the view (1) or only those of the front (0).
     pub sheet_legends: bool,
+    /// Whether the sheet of views has the symbol of the projection (first or third angle) under
+    /// its lower left corner (1) or not (0).
+    pub sheet_symbol: bool,
+    /// The height of the large end of that symbol, from 4 to 50 mm.
+    pub sheet_symbol_size: Length,
     /// The paper of the SVG drawing: 0 scales the drawing to `svg_width`, 1 to 5 put it on a
     /// sheet of the A series (A1 to A5) at the largest standard scale that fits, centred.
     pub paper: u8,
@@ -496,6 +501,12 @@ impl DrawingSettings {
                 "drawing.paper_margin must be from 0 mm to 100 mm".into(),
             ));
         }
+        let sheet_symbol_size = c.length("drawing.sheet_symbol_size")?;
+        if sheet_symbol_size.get() < 4_000_000 || sheet_symbol_size.get() > 50_000_000 {
+            return Err(CadError::Config(
+                "drawing.sheet_symbol_size must be from 4 mm to 50 mm".into(),
+            ));
+        }
         Ok(DrawingSettings {
             max_entities,
             svg_width,
@@ -513,6 +524,8 @@ impl DrawingSettings {
             sheet_angle,
             sheet_gap,
             sheet_legends: flag("drawing.sheet_legends")?,
+            sheet_symbol: flag("drawing.sheet_symbol")?,
+            sheet_symbol_size,
             paper: paper as u8,
             paper_margin,
             paper_portrait: flag("drawing.paper_portrait")?,
@@ -1622,6 +1635,8 @@ markup_percent = 1000
                 sheet_angle: 1,
                 sheet_gap: Length::new(20_000_000).unwrap(),
                 sheet_legends: true,
+                sheet_symbol: false,
+                sheet_symbol_size: Length::new(10_000_000).unwrap(),
                 paper: 0,
                 paper_margin: Length::new(10_000_000).unwrap(),
                 paper_portrait: false,
