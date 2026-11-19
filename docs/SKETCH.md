@@ -151,9 +151,9 @@ The window has a **Sketch** part beside the **Box** part (the switch in the top 
 | Selection | Constraints offered |
 |---|---|
 | two points | coincident, horizontal, vertical |
-| lines | horizontal, vertical (each line), parallel, perpendicular, collinear (two lines) and equal (two or more: each one is made equal to the first) |
+| lines | horizontal, vertical (each line), parallel and collinear (two or more: each one is made parallel to, or collinear with, the first), perpendicular (two lines) and equal (two or more: each one is made equal to the first) |
 | a point and a line, circle or arc | point on object; with a line also midpoint |
-| a line and a circle or arc, or two of those | tangent; for two circles or arcs also concentric, and equal for two or more |
+| a line and a circle or arc, or two of those | tangent; for two circles or arcs also concentric, and for two or more concentric and equal (each one with the first) |
 | three points, or two points and a line | symmetric about a point, or about the line; for three points also collinear |
 | four points | equal distance (the first pair of points as far apart as the second) |
 | three lines, or two circles or arcs and a line | symmetric lines, or symmetric circles, across the line picked last |

@@ -1691,14 +1691,22 @@ impl SketchEditor {
             ConstraintTool::Vertical if all.len() == 2 && points.len() == 2 => {
                 vec![Constraint::VerticalPoints(points[0], points[1])]
             }
-            ConstraintTool::Parallel if all.len() == 2 && lines.len() == 2 => {
-                vec![Constraint::Parallel(lines[0], lines[1])]
+            ConstraintTool::Parallel if all.len() >= 2 && lines.len() == all.len() => {
+                // three or more: every one is made parallel to the first
+                lines[1..]
+                    .iter()
+                    .map(|other| Constraint::Parallel(lines[0], *other))
+                    .collect()
             }
             ConstraintTool::Perpendicular if all.len() == 2 && lines.len() == 2 => {
                 vec![Constraint::Perpendicular(lines[0], lines[1])]
             }
-            ConstraintTool::Collinear if all.len() == 2 && lines.len() == 2 => {
-                vec![Constraint::Collinear(lines[0], lines[1])]
+            ConstraintTool::Collinear if all.len() >= 2 && lines.len() == all.len() => {
+                // three or more: every one is made collinear with the first
+                lines[1..]
+                    .iter()
+                    .map(|other| Constraint::Collinear(lines[0], *other))
+                    .collect()
             }
             ConstraintTool::Tangent if all.len() == 2 && !rounds.is_empty() => {
                 vec![Constraint::Tangent(all[0], all[1])]
@@ -1723,8 +1731,12 @@ impl SketchEditor {
                     d: points[3],
                 }]
             }
-            ConstraintTool::Concentric if all.len() == 2 && rounds.len() == 2 => {
-                vec![Constraint::Concentric(rounds[0], rounds[1])]
+            ConstraintTool::Concentric if all.len() >= 2 && rounds.len() == all.len() => {
+                // three or more: every one is made concentric with the first
+                rounds[1..]
+                    .iter()
+                    .map(|other| Constraint::Concentric(rounds[0], *other))
+                    .collect()
             }
             ConstraintTool::Symmetric if all.len() == 3 && points.len() == 3 => {
                 vec![Constraint::SymmetricPoint {
@@ -4344,6 +4356,74 @@ mod tests {
         // a circle, a line and a point do not fit
         pick(&mut e, &[r1.0, axis.0, a.0]);
         assert!(!e.available().contains(&ConstraintTool::Symmetric));
+    }
+
+    #[test]
+    fn parallel_collinear_and_concentric_tie_every_selected_item_to_the_first() {
+        let mut e = editor();
+        let mut lines = Vec::new();
+        for y in [0.0, 10.0, 20.0, 30.0] {
+            let a = e.sketch.add_point(mm(0.0), mm(y)).unwrap();
+            let b = e.sketch.add_point(mm(10.0), mm(y + 1.0)).unwrap();
+            lines.push(e.sketch.add_line(a, b).unwrap());
+        }
+        let n: Vec<u32> = lines.iter().map(|l| l.0).collect();
+        // two lines: one constraint, as before; four lines: three
+        pick(&mut e, &n[..2]);
+        assert!(e.available().contains(&ConstraintTool::Parallel));
+        assert!(e.available().contains(&ConstraintTool::Collinear));
+        assert!(e.available().contains(&ConstraintTool::Perpendicular));
+        pick(&mut e, &n);
+        assert!(e.available().contains(&ConstraintTool::Parallel));
+        assert!(e.available().contains(&ConstraintTool::Collinear));
+        assert!(
+            !e.available().contains(&ConstraintTool::Perpendicular),
+            "a perpendicular still takes two lines"
+        );
+        e.add_constraint(ConstraintTool::Parallel);
+        let made: Vec<_> = e
+            .sketch
+            .constraints()
+            .iter()
+            .map(|c| c.constraint.clone())
+            .collect();
+        assert_eq!(
+            made,
+            vec![
+                Constraint::Parallel(lines[0], lines[1]),
+                Constraint::Parallel(lines[0], lines[2]),
+                Constraint::Parallel(lines[0], lines[3]),
+            ]
+        );
+        pick(&mut e, &n[1..]);
+        e.add_constraint(ConstraintTool::Collinear);
+        assert!(e
+            .sketch
+            .constraints()
+            .iter()
+            .any(|c| c.constraint == Constraint::Collinear(lines[1], lines[3])));
+        // a line and a point are not offered the three tools
+        let p = e.sketch.add_point(mm(50.0), mm(50.0)).unwrap();
+        pick(&mut e, &[n[0], p.0]);
+        assert!(!e.available().contains(&ConstraintTool::Parallel));
+        assert!(!e.available().contains(&ConstraintTool::Collinear));
+        // circles: three of them share one centre
+        let mut circles = Vec::new();
+        for (x, r) in [(60.0, 3.0), (70.0, 4.0), (80.0, 5.0)] {
+            let c = e.sketch.add_point(mm(x), mm(10.0)).unwrap();
+            circles.push(e.sketch.add_circle(c, mm(r)).unwrap());
+        }
+        let c: Vec<u32> = circles.iter().map(|c| c.0).collect();
+        pick(&mut e, &c);
+        assert!(e.available().contains(&ConstraintTool::Concentric));
+        e.add_constraint(ConstraintTool::Concentric);
+        for other in &circles[1..] {
+            assert!(e
+                .sketch
+                .constraints()
+                .iter()
+                .any(|k| k.constraint == Constraint::Concentric(circles[0], *other)));
+        }
     }
 
     #[test]
