@@ -2256,6 +2256,66 @@ impl App {
                 {
                     self.sketch.mirror_selection();
                 }
+                let can_chamfer_corner = self.sketch.can_chamfer_corner();
+                if ui
+                    .add_enabled(
+                        can_chamfer_corner,
+                        egui::Button::new(Msg::ChamferCorner.tr(lang)),
+                    )
+                    .on_hover_text(Msg::ChamferHint.tr(lang))
+                    .clicked()
+                {
+                    self.sketch.chamfer_corner();
+                }
+                let can_trim_line = self.sketch.can_trim_line();
+                if ui
+                    .add_enabled(can_trim_line, egui::Button::new(Msg::TrimLine.tr(lang)))
+                    .on_hover_text(Msg::TrimHint.tr(lang))
+                    .clicked()
+                {
+                    self.sketch.trim_selected_line();
+                }
+                let can_extend_line = self.sketch.can_extend_line();
+                if ui
+                    .add_enabled(can_extend_line, egui::Button::new(Msg::ExtendLine.tr(lang)))
+                    .on_hover_text(Msg::ExtendHint.tr(lang))
+                    .clicked()
+                {
+                    self.sketch.extend_selected_line();
+                }
+                let can_linear_pattern = self.sketch.can_linear_pattern();
+                if ui
+                    .add_enabled(
+                        can_linear_pattern,
+                        egui::Button::new(Msg::LinearPattern.tr(lang)),
+                    )
+                    .on_hover_text(Msg::LinearPatternHint.tr(lang))
+                    .clicked()
+                {
+                    self.sketch.linear_pattern_selection();
+                }
+                let can_circular_pattern = self.sketch.can_circular_pattern();
+                if ui
+                    .add_enabled(
+                        can_circular_pattern,
+                        egui::Button::new(Msg::CircularPattern.tr(lang)),
+                    )
+                    .on_hover_text(Msg::CircularPatternHint.tr(lang))
+                    .clicked()
+                {
+                    self.sketch.circular_pattern_selection();
+                }
+                let can_offset_outline = self.sketch.can_offset_outline();
+                if ui
+                    .add_enabled(
+                        can_offset_outline,
+                        egui::Button::new(Msg::OffsetOutline.tr(lang)),
+                    )
+                    .on_hover_text(Msg::OffsetHint.tr(lang))
+                    .clicked()
+                {
+                    self.sketch.offset_selection();
+                }
                 let extend = ui.input(|i| i.modifiers.command);
                 let rows: Vec<_> = self
                     .sketch

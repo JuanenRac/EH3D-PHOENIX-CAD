@@ -16,7 +16,9 @@
 //!   constraints that are redundant or in conflict, or that it did not converge;
 //! * [`settings`] holds the tuned values of the solver and of the profiles (a file outside the
 //!   code), [`file`] the text file of a sketch (a way in and out) and [`domain`] the domain
-//!   `sketch` of the project file, where the sketches of a project are kept.
+//!   `sketch` of the project file, where the sketches of a project are kept;
+//! * the editing operations on a sketch (chamfering a corner, trimming and extending a line, repeating
+//!   elements along a line or round a point, offsetting an outline) are methods of [`Sketch`].
 //!
 //! The solver works on floating point numbers in millimetres and rounds the result to the
 //! nanometre; it uses only the operations that every platform computes the same way (sums,
@@ -35,6 +37,7 @@ use crate::{CadError, Length};
 
 pub mod domain;
 pub mod file;
+mod ops;
 pub mod settings;
 pub mod solver;
 

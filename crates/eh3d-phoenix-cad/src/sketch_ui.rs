@@ -84,6 +84,15 @@ pub struct SketchUiSettings {
     /// The radius, in millimetres, that rounding a corner takes when no number is typed in the
     /// box of the dimensions.
     pub fillet_radius: f64,
+    /// The distance, in millimetres, that chamfering a corner takes when no number is typed in
+    /// the box of the dimensions.
+    pub chamfer_distance: f64,
+    /// The number of positions of a pattern (the original included) when no number is typed in
+    /// the box of the dimensions.
+    pub pattern_count: u32,
+    /// The distance, in millimetres, that offsetting an outline takes (outwards) when no number
+    /// is typed in the box of the dimensions.
+    pub offset_distance: f64,
 }
 
 fn missing(key: &str) -> CadError {
@@ -152,6 +161,9 @@ impl SketchUiSettings {
             label_offset: real(c, "sketch_ui.label_offset", 0.0, 200.0)?,
             margin: real(c, "sketch_ui.margin", 0.0, 400.0)?,
             fillet_radius: real(c, "sketch_ui.fillet_radius", 0.001, 1000.0)?,
+            chamfer_distance: real(c, "sketch_ui.chamfer_distance", 0.001, 1000.0)?,
+            pattern_count: count(c, "sketch_ui.pattern_count", 2, 1000)?,
+            offset_distance: real(c, "sketch_ui.offset_distance", 0.001, 1000.0)?,
         };
         if s.scale_min >= s.scale_max || !(s.scale_min..=s.scale_max).contains(&s.scale) {
             return Err(CadError::Config(
@@ -697,6 +709,29 @@ pub enum Prim {
 // -------------------------------------------------------------------------------------------
 // Geometry of the drawing
 // -------------------------------------------------------------------------------------------
+
+/// The number typed in the box of the dimensions (in the unit of the project) or, when the box is
+/// empty, the default in millimetres, as nanometres. A number that is not positive is refused
+/// unless `signed`, which still refuses zero.
+fn typed_nm(
+    text: &str,
+    default_mm: f64,
+    unit_nm: i128,
+    signed: bool,
+    what: &str,
+) -> Result<i64, CadError> {
+    let mm = if text.is_empty() {
+        default_mm
+    } else {
+        text.parse::<f64>()
+            .ok()
+            .filter(|v| v.is_finite() && ((signed && *v != 0.0) || *v > 0.0))
+            .map(|v| v * unit_nm as f64 / NM_PER_MM)
+            .ok_or_else(|| CadError::SketchElement(format!("{what} is a number")))?
+    };
+    i64::try_from((mm * NM_PER_MM).round() as i128)
+        .map_err(|_| CadError::SketchElement(format!("{what} is out of range")))
+}
 
 fn mm_of(l: Length) -> f64 {
     l.get() as f64 / NM_PER_MM
@@ -1903,6 +1938,261 @@ impl SketchEditor {
                 elements: made,
                 constraints: Vec::new(),
             };
+        }
+    }
+
+    /// Whether the selection is two lines that meet, which is what chamfering a corner takes.
+    pub fn can_chamfer_corner(&self) -> bool {
+        self.can_round_corner()
+    }
+
+    /// Cuts the corner where the two selected lines meet with a straight line: both lines are
+    /// shortened by the distance typed in the box of the dimensions (in the unit of the project)
+    /// or, when the box is empty, by `sketch_ui.chamfer_distance`. A refused corner leaves the
+    /// sketch as it was, and the status says why. One change of the history.
+    pub fn chamfer_corner(&mut self) {
+        if !self.can_chamfer_corner() {
+            self.status = Status::Problem(Msg::ChamferHint, Vec::new());
+            return;
+        }
+        let lines = self.picked_of(&[Kind::Line]);
+        let text = self.dim_input.trim().replace(',', ".");
+        let default = self.ui.chamfer_distance;
+        let name = Msg::ChamferCorner.tr(self.lang);
+        let done = self.edit(name, |s, ctx| {
+            let nm = typed_nm(
+                &text,
+                default,
+                ctx.library.unit.nanometres(),
+                false,
+                "the distance of a chamfer",
+            )?;
+            let line = s.chamfer_corner(lines[0], lines[1], Length::new(nm)?)?;
+            Ok((line, nm))
+        });
+        if let Some((line, nm)) = done {
+            self.picked = Picked {
+                elements: vec![line],
+                constraints: Vec::new(),
+            };
+            self.dim_input.clear();
+            self.status = Status::Done(Msg::CornerChamfered, vec![mm_text(nm)]);
+        }
+    }
+
+    /// Whether the selection is the line to trim, the line that cuts it and, if wanted, the end
+    /// of the first line to cut off.
+    pub fn can_trim_line(&self) -> bool {
+        let e = &self.picked.elements;
+        self.picked.constraints.is_empty()
+            && (e.len() == 2 || e.len() == 3)
+            && e[..2]
+                .iter()
+                .all(|id| self.kind_of(*id) == Some(Kind::Line))
+            && e.get(2)
+                .is_none_or(|id| self.kind_of(*id) == Some(Kind::Point))
+    }
+
+    /// Cuts the first selected line where the second one crosses it. The part that goes is the
+    /// one with the end selected third or, without it, the shorter one; the new end is tied to
+    /// the cutter. A refused trim leaves the sketch as it was, and the status says why. One
+    /// change of the history.
+    pub fn trim_selected_line(&mut self) {
+        if !self.can_trim_line() {
+            self.status = Status::Problem(Msg::TrimHint, Vec::new());
+            return;
+        }
+        let e = self.picked.elements.clone();
+        let name = Msg::TrimLine.tr(self.lang);
+        let done = self.edit(name, |s, _| s.trim_line(e[0], e[1], e.get(2).copied()));
+        if done.is_some() {
+            self.picked = Picked {
+                elements: vec![e[0]],
+                constraints: Vec::new(),
+            };
+            self.status = Status::Done(Msg::LineTrimmed, Vec::new());
+        }
+    }
+
+    /// Whether the selection is the line to extend and the line it must reach.
+    pub fn can_extend_line(&self) -> bool {
+        self.picked.constraints.is_empty()
+            && self.picked.elements.len() == 2
+            && self.picked_of(&[Kind::Line]).len() == 2
+    }
+
+    /// Extends the first selected line until it meets the second; the new end is tied to the
+    /// second line. A refused extension leaves the sketch as it was, and the status says why.
+    /// One change of the history.
+    pub fn extend_selected_line(&mut self) {
+        if !self.can_extend_line() {
+            self.status = Status::Problem(Msg::ExtendHint, Vec::new());
+            return;
+        }
+        let e = self.picked.elements.clone();
+        let name = Msg::ExtendLine.tr(self.lang);
+        let done = self.edit(name, |s, _| s.extend_line(e[0], e[1]));
+        if done.is_some() {
+            self.picked = Picked {
+                elements: vec![e[0]],
+                constraints: Vec::new(),
+            };
+            self.status = Status::Done(Msg::LineExtended, Vec::new());
+        }
+    }
+
+    /// The number of positions of a pattern: the number typed in the box of the dimensions or,
+    /// when the box is empty, `sketch_ui.pattern_count`.
+    fn typed_pattern_count(&self) -> Result<u32, CadError> {
+        let text = self.dim_input.trim();
+        if text.is_empty() {
+            return Ok(self.ui.pattern_count);
+        }
+        text.parse::<u32>().map_err(|_| {
+            CadError::SketchElement("the number of positions of a pattern is a whole number".into())
+        })
+    }
+
+    /// Whether the selection is something to repeat and, picked last, the line whose direction
+    /// and length are the step of a linear pattern.
+    pub fn can_linear_pattern(&self) -> bool {
+        let e = &self.picked.elements;
+        self.picked.constraints.is_empty()
+            && e.len() >= 2
+            && e.last().is_some_and(|id| {
+                self.kind_of(*id) == Some(Kind::Line) && !e[..e.len() - 1].contains(id)
+            })
+    }
+
+    /// Repeats the selection along the line picked last: each copy is one step (from the first
+    /// end of the line to the second) further than the one before, with as many positions as the
+    /// box of the dimensions or `sketch_ui.pattern_count` says. The copies become the selection.
+    /// A refused pattern leaves the sketch as it was, and the status says why. One change of the
+    /// history.
+    pub fn linear_pattern_selection(&mut self) {
+        if !self.can_linear_pattern() {
+            self.status = Status::Problem(Msg::LinearPatternHint, Vec::new());
+            return;
+        }
+        let count = match self.typed_pattern_count() {
+            Ok(count) => count,
+            Err(e) => {
+                self.status = Status::Error(e);
+                return;
+            }
+        };
+        let mut items = self.picked.elements.clone();
+        let Some(direction) = items.pop() else {
+            return;
+        };
+        let name = Msg::LinearPattern.tr(self.lang);
+        let done = self.edit(name, |s, _| {
+            let Some(Element::Line { a, b }) = s.element(direction).copied() else {
+                return Err(CadError::SketchElement(
+                    "the step of a pattern is a line".into(),
+                ));
+            };
+            let (pa, pb) = (s.point(a)?, s.point(b)?);
+            let dx = Length::new(pb.0.get() - pa.0.get())?;
+            let dy = Length::new(pb.1.get() - pa.1.get())?;
+            s.linear_pattern(&items, dx, dy, count)
+        });
+        if let Some(made) = done {
+            self.status = Status::Done(Msg::PatternMade, vec![made.len().to_string()]);
+            self.picked = Picked {
+                elements: made,
+                constraints: Vec::new(),
+            };
+            self.dim_input.clear();
+        }
+    }
+
+    /// Whether the selection is something to repeat and, picked last, the point that is the
+    /// centre of a circular pattern.
+    pub fn can_circular_pattern(&self) -> bool {
+        self.picked.constraints.is_empty()
+            && self.picked.elements.len() >= 2
+            && self
+                .picked
+                .elements
+                .last()
+                .is_some_and(|id| self.kind_of(*id) == Some(Kind::Point))
+    }
+
+    /// Repeats the selection round the point picked last, sharing a full turn equally between as
+    /// many positions as the box of the dimensions or `sketch_ui.pattern_count` says. The copies
+    /// become the selection. A refused pattern leaves the sketch as it was, and the status says
+    /// why. One change of the history.
+    pub fn circular_pattern_selection(&mut self) {
+        if !self.can_circular_pattern() {
+            self.status = Status::Problem(Msg::CircularPatternHint, Vec::new());
+            return;
+        }
+        let count = match self.typed_pattern_count() {
+            Ok(count) => count,
+            Err(e) => {
+                self.status = Status::Error(e);
+                return;
+            }
+        };
+        let mut items = self.picked.elements.clone();
+        let Some(center) = items.pop() else {
+            return;
+        };
+        let name = Msg::CircularPattern.tr(self.lang);
+        let done = self.edit(name, |s, _| {
+            let step = Angle::new(360_000_000_000 / i64::from(count.max(1)))?;
+            s.circular_pattern(&items, center, count, step)
+        });
+        if let Some(made) = done {
+            self.status = Status::Done(Msg::PatternMade, vec![made.len().to_string()]);
+            self.picked = Picked {
+                elements: made,
+                constraints: Vec::new(),
+            };
+            self.dim_input.clear();
+        }
+    }
+
+    /// Whether the selection is circles, or the lines of an outline, which is what an offset takes.
+    pub fn can_offset_outline(&self) -> bool {
+        let e = &self.picked.elements;
+        self.picked.constraints.is_empty()
+            && !e.is_empty()
+            && (self.picked_of(&[Kind::Circle]).len() == e.len()
+                || self.picked_of(&[Kind::Line]).len() == e.len())
+    }
+
+    /// Draws a parallel copy of the selected circles or closed outline at the distance typed in
+    /// the box of the dimensions (negative goes inwards) or, when the box is empty, at
+    /// `sketch_ui.offset_distance` outwards. The new elements become the selection. A refused
+    /// offset leaves the sketch as it was, and the status says why. One change of the history.
+    pub fn offset_selection(&mut self) {
+        if !self.can_offset_outline() {
+            self.status = Status::Problem(Msg::OffsetHint, Vec::new());
+            return;
+        }
+        let items = self.picked.elements.clone();
+        let text = self.dim_input.trim().replace(',', ".");
+        let default = self.ui.offset_distance;
+        let name = Msg::OffsetOutline.tr(self.lang);
+        let done = self.edit(name, |s, ctx| {
+            let nm = typed_nm(
+                &text,
+                default,
+                ctx.library.unit.nanometres(),
+                true,
+                "the distance of an offset",
+            )?;
+            s.offset_outline(&items, Length::new(nm)?)
+        });
+        if let Some(made) = done {
+            self.status = Status::Done(Msg::OutlineOffset, vec![made.len().to_string()]);
+            self.picked = Picked {
+                elements: made,
+                constraints: Vec::new(),
+            };
+            self.dim_input.clear();
         }
     }
 
@@ -4755,6 +5045,351 @@ mod tests {
         assert!(e.can_mirror());
         e.mirror_selection();
         assert!(matches!(e.status, Status::Error(_)), "{:?}", e.status);
+        assert_eq!(e.sketch, before);
+    }
+
+    /// A line of the sketch from (x0, y0) to (x1, y1) in millimetres, with its two points.
+    fn extra_line(e: &mut SketchEditor, x0: f64, y0: f64, x1: f64, y1: f64) -> ElementId {
+        let a = e.sketch.add_point(mm(x0), mm(y0)).unwrap();
+        let b = e.sketch.add_point(mm(x1), mm(y1)).unwrap();
+        e.sketch.add_line(a, b).unwrap()
+    }
+
+    fn line_ends(e: &SketchEditor, line: ElementId) -> ((f64, f64), (f64, f64)) {
+        let Some(Element::Line { a, b }) = e.sketch.element(line).copied() else {
+            panic!("not a line");
+        };
+        let at = |id| {
+            let (x, y) = e.sketch.point(id).unwrap();
+            (mm_of(x), mm_of(y))
+        };
+        (at(a), at(b))
+    }
+
+    #[test]
+    fn the_new_edits_have_settings_with_limits() {
+        let s = SketchUiSettings::defaults();
+        assert_eq!(
+            (s.chamfer_distance, s.pattern_count, s.offset_distance),
+            (2.0, 3, 2.0)
+        );
+        let own = SketchUiSettings::with_user_config(
+            "[sketch_ui]\nchamfer_distance = 0.5\npattern_count = 7\noffset_distance = 4\n",
+        )
+        .unwrap();
+        assert_eq!(
+            (own.chamfer_distance, own.pattern_count, own.offset_distance),
+            (0.5, 7, 4.0)
+        );
+        for bad in [
+            "chamfer_distance = 0",
+            "chamfer_distance = 1001",
+            "pattern_count = 1",
+            "pattern_count = 1001",
+            "offset_distance = -1",
+            "offset_distance = x",
+        ] {
+            assert!(
+                SketchUiSettings::with_user_config(&format!("[sketch_ui]\n{bad}\n")).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_corner_is_chamfered_with_the_distance_of_the_box_or_of_the_settings() {
+        let mut e = editor();
+        rectangle(&mut e);
+        // the selection does not fit
+        pick(&mut e, &[5]);
+        assert!(!e.can_chamfer_corner());
+        e.chamfer_corner();
+        assert!(matches!(e.status, Status::Problem(Msg::ChamferHint, _)));
+        pick(&mut e, &[5, 6]);
+        assert!(e.can_chamfer_corner());
+        e.dim_input = "3".to_owned();
+        e.chamfer_corner();
+        assert!(
+            matches!(&e.status, Status::Done(Msg::CornerChamfered, v) if v == &vec!["3".to_owned()]),
+            "{:?}",
+            e.status
+        );
+        assert!(e.dim_input.is_empty());
+        assert_eq!(e.picked.elements.len(), 1);
+        assert_eq!(line_ends(&e, ElementId(5)).1 .0, 37.0);
+        // one change of the history
+        e.undo();
+        assert_eq!(line_ends(&e, ElementId(5)).1 .0, 40.0);
+        // an empty box takes the setting
+        pick(&mut e, &[5, 6]);
+        e.chamfer_corner();
+        assert!(
+            matches!(&e.status, Status::Done(Msg::CornerChamfered, v) if v == &vec!["2".to_owned()]),
+            "{:?}",
+            e.status
+        );
+    }
+
+    #[test]
+    fn a_chamfer_that_is_refused_leaves_the_sketch_and_the_history_as_they_were() {
+        let mut e = editor();
+        rectangle(&mut e);
+        let before = e.sketch.clone();
+        let can_undo = e.can_undo();
+        pick(&mut e, &[5, 6]);
+        for text in ["30", "abc", "0", "-2"] {
+            e.dim_input = text.to_owned();
+            e.chamfer_corner();
+            assert!(
+                matches!(e.status, Status::Error(_)),
+                "{text}: {:?}",
+                e.status
+            );
+            assert_eq!(e.sketch, before, "{text}");
+            assert_eq!(e.can_undo(), can_undo, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_line_is_trimmed_at_the_one_that_crosses_it_and_the_end_can_be_chosen() {
+        let mut e = editor();
+        rectangle(&mut e);
+        let line = extra_line(&mut e, -10.0, 10.0, 50.0, 10.0);
+        // the right side of the rectangle (x = 40) cuts it: the shorter side, the right one, goes
+        pick(&mut e, &[line.0, 6]);
+        assert!(e.can_trim_line());
+        e.trim_selected_line();
+        assert!(
+            matches!(e.status, Status::Done(Msg::LineTrimmed, _)),
+            "{:?}",
+            e.status
+        );
+        assert_eq!(line_ends(&e, line), ((-10.0, 10.0), (40.0, 10.0)));
+        e.undo();
+        assert_eq!(line_ends(&e, line), ((-10.0, 10.0), (50.0, 10.0)));
+        // with an end chosen, the other side goes
+        let Some(Element::Line { a, .. }) = e.sketch.element(line).copied() else {
+            panic!();
+        };
+        pick(&mut e, &[line.0, 6, a.0]);
+        assert!(e.can_trim_line());
+        e.trim_selected_line();
+        assert_eq!(line_ends(&e, line), ((40.0, 10.0), (50.0, 10.0)));
+    }
+
+    #[test]
+    fn a_trim_that_does_not_fit_or_is_refused_changes_nothing() {
+        let mut e = editor();
+        rectangle(&mut e);
+        let line = extra_line(&mut e, -10.0, 10.0, 30.0, 10.0);
+        let before = e.sketch.clone();
+        pick(&mut e, &[line.0]);
+        assert!(!e.can_trim_line());
+        e.trim_selected_line();
+        assert!(matches!(e.status, Status::Problem(Msg::TrimHint, _)));
+        // a point first, or a line third
+        pick(&mut e, &[1, 6]);
+        assert!(!e.can_trim_line());
+        pick(&mut e, &[line.0, 6, 7]);
+        assert!(!e.can_trim_line());
+        // the right side of the rectangle is out of the reach of the line: nothing is cut
+        pick(&mut e, &[line.0, 6]);
+        e.trim_selected_line();
+        assert!(matches!(e.status, Status::Error(_)), "{:?}", e.status);
+        assert_eq!(e.sketch, before);
+    }
+
+    #[test]
+    fn a_line_is_extended_to_the_one_it_must_reach() {
+        let mut e = editor();
+        rectangle(&mut e);
+        let line = extra_line(&mut e, -10.0, 10.0, 20.0, 10.0);
+        pick(&mut e, &[line.0, 6]);
+        assert!(e.can_extend_line());
+        e.extend_selected_line();
+        assert!(
+            matches!(e.status, Status::Done(Msg::LineExtended, _)),
+            "{:?}",
+            e.status
+        );
+        assert_eq!(line_ends(&e, line), ((-10.0, 10.0), (40.0, 10.0)));
+        e.undo();
+        assert_eq!(line_ends(&e, line), ((-10.0, 10.0), (20.0, 10.0)));
+        // a line that already reaches it is refused, and so is a selection that does not fit
+        let before = e.sketch.clone();
+        pick(&mut e, &[5, 6]);
+        e.extend_selected_line();
+        assert!(matches!(e.status, Status::Error(_)), "{:?}", e.status);
+        assert_eq!(e.sketch, before);
+        pick(&mut e, &[5]);
+        assert!(!e.can_extend_line());
+        e.extend_selected_line();
+        assert!(matches!(e.status, Status::Problem(Msg::ExtendHint, _)));
+    }
+
+    #[test]
+    fn a_selection_is_repeated_along_the_line_picked_last() {
+        let mut e = editor();
+        rectangle(&mut e);
+        let seed = e.sketch.add_point(mm(5.0), mm(5.0)).unwrap();
+        // the bottom side of the rectangle is the step: 40 mm along the first axis
+        pick(&mut e, &[seed.0]);
+        assert!(!e.can_linear_pattern());
+        pick(&mut e, &[seed.0, 5]);
+        assert!(e.can_linear_pattern());
+        e.dim_input = "4".to_owned();
+        e.linear_pattern_selection();
+        assert!(
+            matches!(&e.status, Status::Done(Msg::PatternMade, v) if v == &vec!["3".to_owned()]),
+            "{:?}",
+            e.status
+        );
+        assert_eq!(e.picked.elements.len(), 3);
+        let xs: Vec<f64> = e
+            .picked
+            .elements
+            .iter()
+            .map(|id| mm_of(e.sketch.point(*id).unwrap().0))
+            .collect();
+        assert_eq!(xs, vec![45.0, 85.0, 125.0]);
+        e.undo();
+        assert_eq!(e.sketch.elements().len(), 9);
+        // an empty box takes the setting (3 positions: two copies)
+        pick(&mut e, &[seed.0, 5]);
+        e.linear_pattern_selection();
+        assert!(
+            matches!(&e.status, Status::Done(Msg::PatternMade, v) if v == &vec!["2".to_owned()]),
+            "{:?}",
+            e.status
+        );
+    }
+
+    #[test]
+    fn a_pattern_that_is_refused_leaves_the_sketch_and_the_history_as_they_were() {
+        let mut e = editor();
+        rectangle(&mut e);
+        let seed = e.sketch.add_point(mm(5.0), mm(5.0)).unwrap();
+        let before = e.sketch.clone();
+        let can_undo = e.can_undo();
+        for text in ["1", "abc", "-3", "2.5", "5000"] {
+            pick(&mut e, &[seed.0, 5]);
+            e.dim_input = text.to_owned();
+            e.linear_pattern_selection();
+            assert!(
+                matches!(e.status, Status::Error(_)),
+                "{text}: {:?}",
+                e.status
+            );
+            assert_eq!(e.sketch, before, "{text}");
+            assert_eq!(e.can_undo(), can_undo, "{text}");
+            pick(&mut e, &[seed.0, 1]);
+            e.circular_pattern_selection();
+            assert!(
+                matches!(e.status, Status::Error(_)),
+                "{text}: {:?}",
+                e.status
+            );
+            assert_eq!(e.sketch, before, "{text}");
+        }
+        // the step line named twice, a line where a point is needed
+        pick(&mut e, &[5, 5]);
+        assert!(!e.can_linear_pattern());
+        pick(&mut e, &[seed.0, 5]);
+        assert!(!e.can_circular_pattern());
+        e.circular_pattern_selection();
+        assert!(matches!(
+            e.status,
+            Status::Problem(Msg::CircularPatternHint, _)
+        ));
+    }
+
+    #[test]
+    fn a_selection_is_repeated_round_the_point_picked_last() {
+        let mut e = editor();
+        let centre = e.sketch.add_point(mm(0.0), mm(0.0)).unwrap();
+        let seed = e.sketch.add_point(mm(10.0), mm(0.0)).unwrap();
+        pick(&mut e, &[seed.0]);
+        assert!(!e.can_circular_pattern());
+        pick(&mut e, &[seed.0, centre.0]);
+        assert!(e.can_circular_pattern());
+        e.dim_input = "4".to_owned();
+        e.circular_pattern_selection();
+        assert!(
+            matches!(&e.status, Status::Done(Msg::PatternMade, v) if v == &vec!["3".to_owned()]),
+            "{:?}",
+            e.status
+        );
+        let spots: Vec<(f64, f64)> = e
+            .picked
+            .elements
+            .iter()
+            .map(|id| {
+                let (x, y) = e.sketch.point(*id).unwrap();
+                (mm_of(x), mm_of(y))
+            })
+            .collect();
+        assert_eq!(spots, vec![(0.0, 10.0), (-10.0, 0.0), (0.0, -10.0)]);
+        e.undo();
+        assert_eq!(e.sketch.elements().len(), 2);
+        e.redo();
+        assert_eq!(e.sketch.elements().len(), 5);
+    }
+
+    #[test]
+    fn an_outline_is_offset_outwards_or_inwards() {
+        let mut e = editor();
+        rectangle(&mut e);
+        pick(&mut e, &[5, 6, 7, 8]);
+        assert!(e.can_offset_outline());
+        // the setting, outwards
+        e.offset_selection();
+        assert!(
+            matches!(&e.status, Status::Done(Msg::OutlineOffset, v) if v == &vec!["4".to_owned()]),
+            "{:?}",
+            e.status
+        );
+        assert_eq!(e.picked.elements.len(), 4);
+        let first = e.picked.elements[0];
+        assert_eq!(line_ends(&e, first).0, (-2.0, -2.0));
+        e.undo();
+        // inwards with a negative number, in the unit of the project
+        pick(&mut e, &[5, 6, 7, 8]);
+        e.dim_input = "-3,5".to_owned();
+        e.offset_selection();
+        let first = e.picked.elements[0];
+        assert_eq!(line_ends(&e, first).0, (3.5, 3.5));
+        assert!(e.dim_input.is_empty());
+    }
+
+    #[test]
+    fn an_offset_that_does_not_fit_or_is_refused_changes_nothing() {
+        let mut e = editor();
+        rectangle(&mut e);
+        let before = e.sketch.clone();
+        let can_undo = e.can_undo();
+        pick(&mut e, &[]);
+        assert!(!e.can_offset_outline());
+        e.offset_selection();
+        assert!(matches!(e.status, Status::Problem(Msg::OffsetHint, _)));
+        pick(&mut e, &[1, 2]);
+        assert!(!e.can_offset_outline());
+        pick(&mut e, &[5, 6, 7, 8]);
+        for text in ["-13", "0", "abc"] {
+            e.dim_input = text.to_owned();
+            e.offset_selection();
+            assert!(
+                matches!(e.status, Status::Error(_)),
+                "{text}: {:?}",
+                e.status
+            );
+            assert_eq!(e.sketch, before, "{text}");
+            assert_eq!(e.can_undo(), can_undo, "{text}");
+        }
+        // three sides are not an outline
+        pick(&mut e, &[5, 6, 7]);
+        e.dim_input.clear();
+        e.offset_selection();
+        assert!(matches!(e.status, Status::Error(_)));
         assert_eq!(e.sketch, before);
     }
 }
