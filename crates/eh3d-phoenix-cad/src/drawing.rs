@@ -1828,8 +1828,7 @@ mod tests {
         let measure = |size: f64| {
             let mut d = plain.clone();
             d.add_projection_symbol(false, size);
-            let rings: Vec<f64> = circles_of(&d).iter().map(|(_, r)| *r).collect();
-            rings
+            circles_of(&d).iter().map(|(_, r)| *r).collect::<Vec<f64>>()
         };
         assert_eq!(measure(20.0), vec![10.0, 5.0]);
         assert_eq!(measure(4.0), vec![2.0, 1.0]);
