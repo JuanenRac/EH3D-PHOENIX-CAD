@@ -882,6 +882,7 @@ impl App {
         let mut write = false;
         let mut choose = false;
         let mut import = false;
+        let mut look = false;
         let mut add_mate = false;
         let mut write_all = false;
         let mut undo_now = false;
@@ -1166,10 +1167,43 @@ impl App {
                                 );
                             }
                         });
+                        ui.horizontal(|ui| {
+                            ui.label(Msg::PanelImportLayers.tr(lang));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.panels.import_layers)
+                                    .desired_width(200.0),
+                            );
+                        });
                         if self.panels.import_file.trim().is_empty() {
                             ui.label(egui::RichText::new(Msg::PanelImportNone.tr(lang)).color(DIM));
-                        } else if ui.button(Msg::PanelImportDo.tr(lang)).clicked() {
-                            import = true;
+                        } else {
+                            ui.horizontal(|ui| {
+                                if ui.button(Msg::PanelImportPreview.tr(lang)).clicked() {
+                                    look = true;
+                                }
+                                if ui.button(Msg::PanelImportDo.tr(lang)).clicked() {
+                                    import = true;
+                                }
+                            });
+                        }
+                        if !self.panels.import_look.is_empty() {
+                            ui.label(
+                                egui::RichText::new(self.panels.import_look.as_str()).color(DIM),
+                            );
+                        }
+                        if !self.panels.import_lines.is_empty() {
+                            let side = self.win.ui.panels.import_preview_size as f32;
+                            let (response, painter) =
+                                ui.allocate_painter(Vec2::new(side, side), egui::Sense::hover());
+                            let rect = response.rect;
+                            painter.rect_filled(rect, 0.0, BACKGROUND);
+                            for l in &self.panels.import_lines {
+                                let at = |p: (f64, f64)| {
+                                    Pos2::new(rect.min.x + p.0 as f32, rect.min.y + p.1 as f32)
+                                };
+                                let colour = if l.hole { ACCENT } else { OK };
+                                painter.line_segment([at(l.a), at(l.b)], Stroke::new(1.5, colour));
+                            }
                         }
                     }
                     Panel::Section => {
@@ -1346,10 +1380,22 @@ impl App {
             let file = PathBuf::from(self.panels.import_file.trim());
             let name = self.panels.import_name.clone();
             let unit = self.panels.import_unit.clone();
+            let layers = self.panels.import_layers.clone();
             self.panels.import_report = self
                 .win
-                .import_dxf(&file, &name, self.panels.import_face, &unit)
+                .import_dxf_layers(&file, &name, self.panels.import_face, &unit, &layers)
                 .unwrap_or_default();
+        }
+        if look {
+            let file = PathBuf::from(self.panels.import_file.trim());
+            let unit = self.panels.import_unit.clone();
+            let layers = self.panels.import_layers.clone();
+            let (text, lines) = self
+                .win
+                .dxf_preview(&file, &unit, &layers)
+                .unwrap_or_default();
+            self.panels.import_look = text;
+            self.panels.import_lines = lines;
         }
         if copy {
             ctx.copy_text(text);

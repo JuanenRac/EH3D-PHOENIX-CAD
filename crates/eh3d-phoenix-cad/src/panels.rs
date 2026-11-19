@@ -183,7 +183,7 @@ pub struct PanelOptions {
 }
 
 /// The state of the panels of the window: which one is open and what is chosen in it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PanelState {
     /// The panel that is open, if any.
     pub open: Option<Panel>,
@@ -225,6 +225,12 @@ pub struct PanelState {
     pub import_unit: String,
     /// What the last import read, as text in the language it was made in; empty before one.
     pub import_report: String,
+    /// The layers typed for the import panel, separated by commas; empty means all of them.
+    pub import_layers: String,
+    /// The lines of the picture of the drawing the last preview made of the import panel.
+    pub import_lines: Vec<crate::section::PreviewLine>,
+    /// The text of that preview (the layers and what the choice would read); empty before one.
+    pub import_look: String,
     /// The mate being written in the mates panel.
     pub mate: MateDraft,
     /// The number of the step being typed in the history panel to go to.
@@ -255,6 +261,9 @@ impl PanelState {
             import_face: settings.import_face,
             import_unit: settings.import_unit.clone(),
             import_report: String::new(),
+            import_layers: String::new(),
+            import_lines: Vec::new(),
+            import_look: String::new(),
             mate: MateDraft::default(),
             history_goto: String::new(),
         }
@@ -758,6 +767,8 @@ mod tests {
             (Face::Front, "mm")
         );
         assert!(st.import_report.is_empty());
+        assert!(st.import_layers.is_empty() && st.import_look.is_empty());
+        assert!(st.import_lines.is_empty());
         let mut st = PanelState::new(&s, true);
         assert!(st.overwrite);
         st.explode = true;

@@ -208,6 +208,10 @@ pub struct PanelSettings {
     pub section_preview_size: u32,
     /// The margin, in pixels, between the outline and the edge of that picture.
     pub section_preview_margin: u32,
+    /// The side, in pixels, of the picture of a DXF drawing in the import panel.
+    pub import_preview_size: u32,
+    /// How many lines make a full circle in that picture.
+    pub import_preview_segments: u32,
     /// The unit the panel that imports a DXF drawing starts with: `mm`, `cm`, `m` or `in`.
     pub import_unit: String,
     /// The face the sketch of an imported DXF drawing starts on.
@@ -500,6 +504,8 @@ impl PanelSettings {
             history_shown: count(c, "panels.history_shown", 1, 10_000)?,
             section_preview_size: count(c, "panels.section_preview_size", 60, 1000)?,
             section_preview_margin: count(c, "panels.section_preview_margin", 0, 100)?,
+            import_preview_size: count(c, "panels.import_preview_size", 60, 1000)?,
+            import_preview_segments: count(c, "panels.import_preview_segments", 8, 360)?,
             import_unit: crate::dxf_import::unit_nm(import_unit)
                 .map(|_| import_unit.to_string())
                 .ok_or_else(|| {
@@ -639,6 +645,13 @@ mod tests {
                 s.panels.section_preview_margin
             ),
             (6, 180, 8)
+        );
+        assert_eq!(
+            (
+                s.panels.import_preview_size,
+                s.panels.import_preview_segments
+            ),
+            (240, 24)
         );
         assert_eq!(s.panels.import_unit, "mm");
         assert_eq!(s.panels.import_face, crate::enclosure::Face::Front);

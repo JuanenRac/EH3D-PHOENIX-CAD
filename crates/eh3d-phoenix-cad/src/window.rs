@@ -3721,6 +3721,38 @@ impl Window {
         face: Face,
         unit: &str,
     ) -> Option<String> {
+        self.import_dxf_layers(path, name, face, unit, "")
+    }
+
+    /// The names in a line of layers typed as `CUT, HOLES` (separated by commas or semicolons,
+    /// the empty ones dropped).
+    fn layer_names(typed: &str) -> Vec<String> {
+        typed
+            .split([',', ';'])
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect()
+    }
+
+    /// The text of a DXF drawing, read within the size limit of the export settings.
+    fn dxf_text(&self, path: &Path) -> Result<String, CadError> {
+        store::load_limited(path, u64::from(self.ui.export.max_kib) * 1024).and_then(|bytes| {
+            String::from_utf8(bytes)
+                .map_err(|_| CadError::SketchFile("the drawing is not text".into()))
+        })
+    }
+
+    /// Like [`Window::import_dxf`] but reads only the entities of the layers in `layers` (names
+    /// typed separated by commas or semicolons, compared without regard to case; empty reads them
+    /// all). The report says how many entities the layers left out.
+    pub fn import_dxf_layers(
+        &mut self,
+        path: &Path,
+        name: &str,
+        face: Face,
+        unit: &str,
+        layers: &str,
+    ) -> Option<String> {
         if self.read_only_refusal() {
             return None;
         }
@@ -3737,26 +3769,77 @@ impl Window {
                 .unwrap_or_default(),
             typed => typed.to_string(),
         };
-        let read = store::load_limited(path, u64::from(self.ui.export.max_kib) * 1024)
-            .and_then(|bytes| {
-                String::from_utf8(bytes)
-                    .map_err(|_| CadError::SketchFile("the drawing is not text".into()))
-            })
-            .and_then(|text| {
-                crate::dxf_import::from_dxf(
-                    &text,
-                    &name,
-                    crate::sketch::SketchPlane::on_face(face),
-                    unit_nm,
-                    ProfileLimits::from_settings(&self.sketch_settings).join_nm,
-                    self.settings.drawing.max_entities as usize,
-                )
-            });
+        let chosen = Self::layer_names(layers);
+        let read = self.dxf_text(path).and_then(|text| {
+            crate::dxf_import::from_dxf_layers(
+                &text,
+                &name,
+                crate::sketch::SketchPlane::on_face(face),
+                unit_nm,
+                ProfileLimits::from_settings(&self.sketch_settings).join_nm,
+                self.settings.drawing.max_entities as usize,
+                &chosen,
+            )
+        });
         match read {
             Ok(imported) => {
                 let report = crate::dxf_import::report_text(&imported, self.lang);
                 self.keep_sketch(imported.sketch);
                 (!self.status.is_problem()).then_some(report)
+            }
+            Err(e) => {
+                self.status = Status::Error(e);
+                None
+            }
+        }
+    }
+
+    /// A look at a DXF drawing before it is imported: the text lists the layers with how many
+    /// entities each holds and what the choice of layers (see [`Window::import_dxf_layers`])
+    /// would read, in the language of the window, and the lines are the picture of that, fitted in
+    /// a pane of `panels.import_preview_size` pixels (the lines of circles are marked as holes).
+    /// The project is not changed; a refusal is in the status bar and gives nothing.
+    pub fn dxf_preview(
+        &mut self,
+        path: &Path,
+        unit: &str,
+        layers: &str,
+    ) -> Option<(String, Vec<crate::section::PreviewLine>)> {
+        let Some(unit_nm) = crate::dxf_import::unit_nm(unit) else {
+            self.status = Status::Error(CadError::SketchFile(format!(
+                "{unit} is not a unit of a drawing (mm, cm, m or in)"
+            )));
+            return None;
+        };
+        let chosen = Self::layer_names(layers);
+        let looked = self.dxf_text(path).and_then(|text| {
+            let found = crate::dxf_import::layers(&text)?;
+            let imported = crate::dxf_import::from_dxf_layers(
+                &text,
+                "preview",
+                crate::sketch::SketchPlane::on_face(Face::Front),
+                unit_nm,
+                ProfileLimits::from_settings(&self.sketch_settings).join_nm,
+                self.settings.drawing.max_entities as usize,
+                &chosen,
+            )?;
+            Ok((found, imported))
+        });
+        match looked {
+            Ok((found, imported)) => {
+                let listed: Vec<String> = found.iter().map(|(k, v)| format!("{k} ({v})")).collect();
+                let mut text = fill(Msg::DxfLayers.tr(self.lang), &[&listed.join(", ")]);
+                text.push('\n');
+                text.push_str(&crate::dxf_import::report_text(&imported, self.lang));
+                let side = f64::from(self.ui.panels.import_preview_size);
+                let lines = crate::dxf_import::preview(
+                    &imported,
+                    side,
+                    side,
+                    8.0,
+                    self.ui.panels.import_preview_segments as usize,
+                );
+                Some((text, lines))
             }
             Err(e) => {
                 self.status = Status::Error(e);
@@ -6017,6 +6100,89 @@ mod tests {
         locked.read_only = true;
         assert!(locked.import_dxf(&good, "", Face::Front, "mm").is_none());
         assert!(locked.sketch_names().is_empty());
+    }
+
+    /// A drawing with a square on the layer CUT and a circle on the layer HOLES.
+    fn two_layer_dxf() -> String {
+        let line = |x1: f64, y1: f64, x2: f64, y2: f64| {
+            format!("0\nLINE\n8\nCUT\n10\n{x1}\n20\n{y1}\n11\n{x2}\n21\n{y2}\n")
+        };
+        format!(
+            "0\nSECTION\n2\nENTITIES\n{}{}{}{}0\nCIRCLE\n8\nHOLES\n10\n5\n20\n5\n40\n2\n0\nENDSEC\n0\nEOF\n",
+            line(0.0, 0.0, 10.0, 0.0),
+            line(10.0, 0.0, 10.0, 10.0),
+            line(10.0, 10.0, 0.0, 10.0),
+            line(0.0, 10.0, 0.0, 0.0)
+        )
+    }
+
+    #[test]
+    fn only_the_layers_that_are_typed_are_imported_and_the_report_counts_the_rest() {
+        let dir = Scratch::new("dxf-layers");
+        let file = dir.0.join("plate.dxf");
+        std::fs::write(&file, two_layer_dxf()).unwrap();
+        let mut w = fresh();
+        let all = w
+            .import_dxf_layers(&file, "all", Face::Front, "mm", "")
+            .unwrap();
+        assert_eq!(all, "read: 4 lines, 1 circles, 0 arcs");
+        let cut = w
+            .import_dxf_layers(&file, "cut", Face::Front, "mm", " cut ")
+            .unwrap();
+        assert_eq!(
+            cut,
+            "read: 4 lines, 0 circles, 0 arcs\nleft out by layer: 1 entities"
+        );
+        let holes = w
+            .import_dxf_layers(&file, "holes", Face::Front, "mm", "x; HOLES,")
+            .unwrap();
+        assert_eq!(
+            holes,
+            "read: 0 lines, 1 circles, 0 arcs\nleft out by layer: 4 entities"
+        );
+        assert_eq!(w.sketch_names(), ["all", "cut", "holes"]);
+        // a layer the drawing does not have leaves nothing to import and nothing changes
+        assert!(w
+            .import_dxf_layers(&file, "none", Face::Front, "mm", "missing")
+            .is_none());
+        assert_eq!(w.sketch_names(), ["all", "cut", "holes"]);
+    }
+
+    #[test]
+    fn the_preview_lists_the_layers_and_draws_what_the_choice_would_read_without_changing_anything()
+    {
+        let dir = Scratch::new("dxf-preview");
+        let file = dir.0.join("plate.dxf");
+        std::fs::write(&file, two_layer_dxf()).unwrap();
+        let mut w = fresh();
+        let (text, lines) = w.dxf_preview(&file, "mm", "").expect("previewed");
+        assert_eq!(
+            text,
+            "layers: CUT (4), HOLES (1)\nread: 4 lines, 1 circles, 0 arcs"
+        );
+        // four sides and a circle of the segments of the settings
+        let ring = w.ui.panels.import_preview_segments as usize;
+        assert_eq!(lines.len(), 4 + ring);
+        assert_eq!(lines.iter().filter(|l| l.hole).count(), ring);
+        let side = f64::from(w.ui.panels.import_preview_size);
+        let inside = |p: (f64, f64)| (0.0..=side).contains(&p.0) && (0.0..=side).contains(&p.1);
+        assert!(lines.iter().all(|l| inside(l.a) && inside(l.b)));
+        let (text, lines) = w.dxf_preview(&file, "mm", "HOLES").unwrap();
+        assert!(text.ends_with("left out by layer: 4 entities"), "{text}");
+        assert_eq!(lines.len(), ring);
+        w.lang = Lang::Es;
+        let (text, _) = w.dxf_preview(&file, "mm", "").unwrap();
+        assert!(text.starts_with("capas: CUT (4), HOLES (1)"), "{text}");
+        // nothing was imported
+        assert!(w.sketch_names().is_empty() && !w.dirty && !w.can_undo());
+        // a refusal is in the status bar and gives nothing
+        assert!(w.dxf_preview(&file, "furlong", "").is_none());
+        assert!(w
+            .dxf_preview(&dir.0.join("missing.dxf"), "mm", "")
+            .is_none());
+        std::fs::write(dir.0.join("bad.dxf"), "this is not a drawing\n").unwrap();
+        assert!(w.dxf_preview(&dir.0.join("bad.dxf"), "mm", "").is_none());
+        assert!(w.dxf_preview(&file, "mm", "missing").is_none());
     }
 
     #[test]

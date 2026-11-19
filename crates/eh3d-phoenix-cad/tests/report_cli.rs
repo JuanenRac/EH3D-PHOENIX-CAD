@@ -650,3 +650,51 @@ fn a_dxf_drawing_is_read_into_a_sketch_that_can_be_drawn_again() {
         assert!(err.contains(why), "{args:?}: {err}");
     }
 }
+
+#[test]
+fn the_layers_of_a_dxf_drawing_are_listed_and_chosen_when_it_is_read() {
+    let dir = Scratch::new("sketch-import-layers");
+    let drawing = dir.file("layers.dxf");
+    let mut text = String::from("0\nSECTION\n2\nENTITIES\n");
+    for (a, b) in [((0, 0), (10, 0)), ((10, 0), (10, 10)), ((10, 10), (0, 0))] {
+        text.push_str(&format!(
+            "0\nLINE\n8\nCUT\n10\n{}\n20\n{}\n11\n{}\n21\n{}\n",
+            a.0, a.1, b.0, b.1
+        ));
+    }
+    text.push_str("0\nCIRCLE\n8\nHOLES\n10\n3\n20\n2\n40\n1\n0\nENDSEC\n0\nEOF\n");
+    fs::write(&drawing, text).unwrap();
+    let (code, out, err) = run(&["sketch-import", &drawing, "--list-layers"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out.trim_end(), "layers: CUT (3), HOLES (1)");
+    let (_, out, _) = run(&["sketch-import", &drawing, "--list-layers", "--lang", "es"]);
+    assert_eq!(out.trim_end(), "capas: CUT (3), HOLES (1)");
+    let sketch = dir.file("cut.phoenixsketch");
+    let (code, out, err) = run(&[
+        "sketch-import",
+        &drawing,
+        "--layers",
+        "cut, other",
+        "--out",
+        &sketch,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.starts_with("read: 3 lines, 0 circles, 0 arcs\nleft out by layer: 1 entities\n"),
+        "{out}"
+    );
+    // a layer the drawing does not have leaves nothing to read
+    let (code, _, err) = run(&[
+        "sketch-import",
+        &drawing,
+        "--layers",
+        "missing",
+        "--out",
+        &sketch,
+    ]);
+    assert_ne!(code, 0);
+    assert!(err.contains("PHOENIX-CAD-035"), "{err}");
+    let (code, _, err) = run(&["sketch-import", &drawing, "--layers"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("--layers needs"), "{err}");
+}

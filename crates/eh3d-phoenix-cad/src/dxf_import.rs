@@ -7,7 +7,11 @@
 //! records (a segment with a bulge is an arc, the closing flag joins the last vertex to the first).
 //! Anything else (text, dimensions, splines, ellipses, hatches, blocks) is left out and counted by
 //! its name, so the person is told what was not read. The units of the drawing are not looked
-//! at: the caller says how many nanometres one unit is. The layers are not looked at either.
+//! at: the caller says how many nanometres one unit is. The layers can be chosen: [`layers`] lists
+//! them with how many entities each holds, [`from_dxf_layers`] reads only the entities of the
+//! layers it is given (names compared without regard to case; none given reads them all) and
+//! counts the others, and [`preview`] fits what was read in a small pane to be drawn before the
+//! import is made.
 //!
 //! Two ends that are no farther apart than the join distance (on each axis) become one point, so
 //! the lines of a closed outline share their corners and the profile of the sketch is closed. A
@@ -19,6 +23,7 @@ use std::collections::BTreeMap;
 use std::f64::consts::PI;
 
 use crate::lang::{fill, Lang, Msg};
+use crate::section::PreviewLine;
 use crate::sketch::{ElementId, Sketch, SketchPlane};
 use crate::{CadError, Length};
 
@@ -52,6 +57,13 @@ pub fn report_text(import: &Import, lang: Lang) -> String {
         out.push('\n');
         out.push_str(&fill(Msg::DxfSkipped.tr(lang), &[what, &count.to_string()]));
     }
+    if import.off_layers > 0 {
+        out.push('\n');
+        out.push_str(&fill(
+            Msg::DxfOffLayers.tr(lang),
+            &[&import.off_layers.to_string()],
+        ));
+    }
     out
 }
 
@@ -69,6 +81,9 @@ pub struct Import {
     /// What was left out, by the name of the entity of the file (`degenerate` for a line, a circle
     /// or an arc without length or radius), with how many.
     pub skipped: BTreeMap<String, usize>,
+    /// How many entities were left out because they are on a layer that was not chosen (none when
+    /// every layer was).
+    pub off_layers: usize,
 }
 
 fn file_error(why: impl Into<String>) -> CadError {
@@ -129,6 +144,7 @@ struct Reader<'a> {
     circles: usize,
     arcs: usize,
     skipped: BTreeMap<String, usize>,
+    off_layers: usize,
     group: &'a [(i32, &'a str)],
 }
 
@@ -147,6 +163,15 @@ impl Reader<'_> {
             Some((_, v)) => number(v),
             None => Ok(0.0),
         }
+    }
+
+    /// The layer the current group names (`0` when it names none).
+    fn layer_of_group(&self) -> String {
+        self.group
+            .iter()
+            .find(|(c, _)| *c == 8)
+            .map_or("0", |(_, v)| *v)
+            .to_string()
     }
 
     /// A number of drawing units as whole nanometres.
@@ -342,9 +367,11 @@ pub fn from_dxf(
     join_nm: i64,
     max_entities: usize,
 ) -> Result<Import, CadError> {
-    if unit_nm <= 0 {
-        return Err(file_error("the unit of the drawing is not positive"));
-    }
+    from_dxf_layers(text, name, plane, unit_nm, join_nm, max_entities, &[])
+}
+
+/// The group codes and values of a text DXF file, in order.
+fn parse_pairs(text: &str) -> Result<Vec<(i32, &str)>, CadError> {
     let mut pairs: Vec<(i32, &str)> = Vec::new();
     let mut lines = text.lines();
     while let Some(code_line) = lines.next() {
@@ -359,9 +386,69 @@ pub fn from_dxf(
         })?;
         pairs.push((code, value.trim()));
     }
-    let start = (0..pairs.len().saturating_sub(1))
+    Ok(pairs)
+}
+
+/// Where the records of the section `ENTITIES` begin.
+fn entities_start(pairs: &[(i32, &str)]) -> Result<usize, CadError> {
+    (0..pairs.len().saturating_sub(1))
         .find(|i| pairs[*i] == (0, "SECTION") && pairs[i + 1] == (2, "ENTITIES"))
-        .ok_or_else(|| file_error("the drawing has no section of entities"))?;
+        .map(|i| i + 2)
+        .ok_or_else(|| file_error("the drawing has no section of entities"))
+}
+
+/// The layers of a drawing with how many entities each holds (a polyline with its vertices is one
+/// entity), by name in order. An entity that names no layer is on the layer `0`. Refused with
+/// `PHOENIX-CAD-035` when the text is not a text DXF drawing or has no section of entities.
+pub fn layers(text: &str) -> Result<BTreeMap<String, usize>, CadError> {
+    let pairs = parse_pairs(text)?;
+    let mut i = entities_start(&pairs)?;
+    let mut out: BTreeMap<String, usize> = BTreeMap::new();
+    while i < pairs.len() && pairs[i] != (0, "ENDSEC") {
+        if pairs[i].0 != 0 {
+            i += 1;
+            continue;
+        }
+        let name = pairs[i].1;
+        let mut j = i + 1;
+        while j < pairs.len() && pairs[j].0 != 0 {
+            j += 1;
+        }
+        if name != "VERTEX" && name != "SEQEND" {
+            let layer = pairs[i + 1..j]
+                .iter()
+                .find(|(c, _)| *c == 8)
+                .map_or("0", |(_, v)| *v);
+            *out.entry(layer.to_string()).or_insert(0) += 1;
+        }
+        i = j;
+    }
+    Ok(out)
+}
+
+/// The sketch that a text DXF drawing makes from the entities of some layers only (see
+/// [`from_dxf`] for the rest). `chosen` names the layers, without regard to case; none named
+/// reads them all. The entities of the other layers are counted in `off_layers`. The vertices of
+/// a polyline follow the layer of the polyline.
+pub fn from_dxf_layers(
+    text: &str,
+    name: &str,
+    plane: SketchPlane,
+    unit_nm: i64,
+    join_nm: i64,
+    max_entities: usize,
+    chosen: &[String],
+) -> Result<Import, CadError> {
+    if unit_nm <= 0 {
+        return Err(file_error("the unit of the drawing is not positive"));
+    }
+    let pairs = parse_pairs(text)?;
+    let start = entities_start(&pairs)?;
+    let wanted: Vec<String> = chosen
+        .iter()
+        .map(|l| l.trim().to_lowercase())
+        .filter(|l| !l.is_empty())
+        .collect();
     let mut reader = Reader {
         sketch: Sketch::new(name, plane)?,
         joiner: Joiner {
@@ -374,10 +461,11 @@ pub fn from_dxf(
         circles: 0,
         arcs: 0,
         skipped: BTreeMap::new(),
+        off_layers: 0,
         group: &[],
     };
     let mut poly: Option<Poly> = None;
-    let mut i = start + 2;
+    let mut i = start;
     while i < pairs.len() && pairs[i] != (0, "ENDSEC") {
         if pairs[i].0 != 0 {
             i += 1;
@@ -389,6 +477,14 @@ pub fn from_dxf(
             j += 1;
         }
         reader.group = &pairs[i + 1..j];
+        if !wanted.is_empty() && name != "VERTEX" && name != "SEQEND" {
+            let layer = reader.layer_of_group().to_lowercase();
+            if !wanted.contains(&layer) {
+                reader.off_layers += 1;
+                i = j;
+                continue;
+            }
+        }
         reader.entity(name, &mut poly)?;
         i = j;
     }
@@ -404,7 +500,105 @@ pub fn from_dxf(
         circles: reader.circles,
         arcs: reader.arcs,
         skipped: reader.skipped,
+        off_layers: reader.off_layers,
     })
+}
+
+/// What was read as lines fitted in a pane of `width` x `height` pixels with a `margin` all round,
+/// to be drawn before the import is made: the drawing is scaled to fit with the same scale along
+/// both axes, centred, and turned so that the second axis points up the pane. A line is one line,
+/// an arc is `arc_segments` lines for a full turn (at least two for the part it covers) and a
+/// circle is `arc_segments` lines too, marked `hole` so that it can be drawn in another colour. A
+/// drawing with nothing in it, or a pane too small for the margin, gives no line.
+pub fn preview(
+    import: &Import,
+    width: f64,
+    height: f64,
+    margin: f64,
+    arc_segments: usize,
+) -> Vec<PreviewLine> {
+    let at = |id: ElementId| match import.sketch.element(id) {
+        Some(crate::sketch::Element::Point { x, y }) => Some((x.get() as f64, y.get() as f64)),
+        _ => None,
+    };
+    let steps = arc_segments.max(4);
+    let line_of = |a: (f64, f64), b: (f64, f64), hole: bool| PreviewLine { a, b, hole };
+    // the lines in the coordinates of the drawing, in nanometres, until they are fitted
+    let mut world: Vec<PreviewLine> = Vec::new();
+    for entry in import.sketch.elements() {
+        match &entry.element {
+            crate::sketch::Element::Line { a, b } => {
+                if let (Some(p), Some(q)) = (at(*a), at(*b)) {
+                    world.push(line_of(p, q, false));
+                }
+            }
+            crate::sketch::Element::Circle { center, radius } => {
+                if let Some(c) = at(*center) {
+                    let r = radius.get() as f64;
+                    let ring = |k: usize| {
+                        let t = 2.0 * PI * (k % steps) as f64 / steps as f64;
+                        (c.0 + r * t.cos(), c.1 + r * t.sin())
+                    };
+                    for k in 0..steps {
+                        world.push(line_of(ring(k), ring(k + 1), true));
+                    }
+                }
+            }
+            crate::sketch::Element::Arc { center, start, end } => {
+                if let (Some(c), Some(s), Some(e)) = (at(*center), at(*start), at(*end)) {
+                    let r = (s.0 - c.0).hypot(s.1 - c.1);
+                    let a0 = (s.1 - c.1).atan2(s.0 - c.0);
+                    let mut a1 = (e.1 - c.1).atan2(e.0 - c.0);
+                    if a1 <= a0 {
+                        a1 += 2.0 * PI;
+                    }
+                    let n = (((a1 - a0) / (2.0 * PI) * steps as f64).ceil() as usize).max(2);
+                    let on = |k: usize| {
+                        let t = a0 + (a1 - a0) * k as f64 / n as f64;
+                        (c.0 + r * t.cos(), c.1 + r * t.sin())
+                    };
+                    for k in 0..n {
+                        world.push(line_of(on(k), on(k + 1), false));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(first) = world.first() else {
+        return Vec::new();
+    };
+    let (mut lo, mut hi) = (first.a, first.a);
+    for l in &world {
+        for v in [&l.a, &l.b] {
+            lo = (lo.0.min(v.0), lo.1.min(v.1));
+            hi = (hi.0.max(v.0), hi.1.max(v.1));
+        }
+    }
+    let (room_w, room_h) = (width - 2.0 * margin, height - 2.0 * margin);
+    if !(room_w > 0.0 && room_h > 0.0) {
+        return Vec::new();
+    }
+    let (dx, dy) = (hi.0 - lo.0, hi.1 - lo.1);
+    let scale = match (dx > 0.0, dy > 0.0) {
+        (true, true) => (room_w / dx).min(room_h / dy),
+        (true, false) => room_w / dx,
+        (false, true) => room_h / dy,
+        (false, false) => 1.0,
+    };
+    let (left, top) = (
+        margin + (room_w - dx * scale) / 2.0,
+        margin + (room_h - dy * scale) / 2.0,
+    );
+    let to_pane = |p: (f64, f64)| (left + (p.0 - lo.0) * scale, top + (hi.1 - p.1) * scale);
+    world
+        .iter()
+        .map(|l| PreviewLine {
+            a: to_pane(l.a),
+            b: to_pane(l.b),
+            hole: l.hole,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -644,6 +838,171 @@ mod tests {
         assert_eq!(b.regions.len(), a.regions.len());
         assert_eq!(b.regions[0].holes.len(), 1);
         assert_eq!(b.bounds(), a.bounds());
+    }
+
+    fn on_layer(layer: &str, entities: &str) -> String {
+        entities.replace("8\n0\n", &format!("8\n{layer}\n"))
+    }
+
+    fn two_layers() -> String {
+        dxf(&format!(
+            "{}{}{}",
+            on_layer("CUT", &rectangle()),
+            on_layer("Holes", &circle(20.0, 30.0, 5.0)),
+            "0\nTEXT\n1\nhi\n"
+        ))
+    }
+
+    #[test]
+    fn the_layers_are_listed_with_their_entities_and_a_polyline_counts_once() {
+        let mut poly = String::from("0\nPOLYLINE\n8\nOLD\n66\n1\n70\n1\n");
+        for (x, y) in [(0, 0), (10, 0), (10, 10)] {
+            poly.push_str(&format!("0\nVERTEX\n8\nOTHER\n10\n{x}\n20\n{y}\n"));
+        }
+        poly.push_str("0\nSEQEND\n");
+        let found = layers(&dxf(&format!("{}{poly}", on_layer("CUT", &rectangle())))).unwrap();
+        let listed: Vec<(&str, usize)> = found.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+        assert_eq!(listed, vec![("CUT", 4), ("OLD", 1)]);
+        // an entity with no layer is on the layer 0
+        let bare = layers(&dxf("0\nLINE\n10\n0\n20\n0\n11\n1\n21\n0\n")).unwrap();
+        assert_eq!(bare["0"], 1);
+        assert_eq!(layers("0\nEOF\n").unwrap_err().code(), "PHOENIX-CAD-035");
+        assert_eq!(
+            layers("hello\nworld\n").unwrap_err().code(),
+            "PHOENIX-CAD-035"
+        );
+    }
+
+    #[test]
+    fn only_the_chosen_layers_are_read_and_the_rest_is_counted() {
+        let text = two_layers();
+        let read_of = |chosen: &[&str]| {
+            let chosen: Vec<String> = chosen.iter().map(|c| c.to_string()).collect();
+            from_dxf_layers(
+                &text,
+                "drawn",
+                SketchPlane::on_face(Face::Front),
+                MM,
+                1_000,
+                1000,
+                &chosen,
+            )
+        };
+        let all = read_of(&[]).unwrap();
+        assert_eq!((all.lines, all.circles, all.off_layers), (4, 1, 0));
+        assert_eq!(all, read(&text).unwrap());
+        let cut = read_of(&["cut"]).unwrap();
+        assert_eq!((cut.lines, cut.circles, cut.off_layers), (4, 0, 2));
+        assert_eq!(profile(&cut).regions[0].holes.len(), 0);
+        let holes = read_of(&[" HOLES ", ""]).unwrap();
+        assert_eq!((holes.lines, holes.circles, holes.off_layers), (0, 1, 5));
+        let both = read_of(&["CUT", "Holes"]).unwrap();
+        assert_eq!((both.lines, both.circles, both.off_layers), (4, 1, 1));
+        // a layer that is not in the drawing leaves nothing to read
+        let none = read_of(&["missing"]).unwrap_err();
+        assert_eq!(none.code(), "PHOENIX-CAD-035");
+        // the vertices follow their polyline, whatever layer they name
+        let mut poly = String::from("0\nPOLYLINE\n8\nKEEP\n66\n1\n70\n1\n");
+        for (x, y) in [(0, 0), (10, 0), (10, 10)] {
+            poly.push_str(&format!("0\nVERTEX\n8\nOTHER\n10\n{x}\n20\n{y}\n"));
+        }
+        poly.push_str("0\nSEQEND\n");
+        let kept = from_dxf_layers(
+            &dxf(&poly),
+            "drawn",
+            SketchPlane::on_face(Face::Front),
+            MM,
+            1_000,
+            1000,
+            &["keep".to_string()],
+        )
+        .unwrap();
+        assert_eq!(kept.lines, 3);
+        let dropped = from_dxf_layers(
+            &dxf(&format!("{poly}{}", on_layer("KEEP", &rectangle()))),
+            "drawn",
+            SketchPlane::on_face(Face::Front),
+            MM,
+            1_000,
+            1000,
+            &["other".to_string()],
+        )
+        .unwrap_err();
+        assert_eq!(dropped.code(), "PHOENIX-CAD-035");
+    }
+
+    #[test]
+    fn the_report_tells_how_many_entities_the_layers_left_out() {
+        let chosen = vec!["CUT".to_string()];
+        let i = from_dxf_layers(
+            &two_layers(),
+            "drawn",
+            SketchPlane::on_face(Face::Front),
+            MM,
+            1_000,
+            1000,
+            &chosen,
+        )
+        .unwrap();
+        assert_eq!(
+            report_text(&i, Lang::En),
+            "read: 4 lines, 0 circles, 0 arcs\nleft out by layer: 2 entities"
+        );
+        assert!(report_text(&i, Lang::Pt).contains("camada"));
+    }
+
+    #[test]
+    fn the_preview_fits_the_drawing_in_the_pane_with_the_first_axis_to_the_right() {
+        let i = read(&dxf(&rectangle())).unwrap();
+        // a rectangle of 100 x 60 mm in a pane of 120 x 120 with a margin of 10: 100 mm over 100 px
+        let lines = preview(&i, 120.0, 120.0, 10.0, 16);
+        assert_eq!(lines.len(), 4);
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+        let xs: Vec<f64> = lines.iter().flat_map(|l| [l.a.0, l.b.0]).collect();
+        let ys: Vec<f64> = lines.iter().flat_map(|l| [l.a.1, l.b.1]).collect();
+        let min = |v: &[f64]| v.iter().cloned().fold(f64::MAX, f64::min);
+        let max = |v: &[f64]| v.iter().cloned().fold(f64::MIN, f64::max);
+        assert!(near(min(&xs), 10.0) && near(max(&xs), 110.0));
+        // 60 mm tall: centred in the 100 px of room, from 30 to 90
+        assert!(near(min(&ys), 30.0) && near(max(&ys), 90.0));
+        assert!(lines.iter().all(|l| !l.hole));
+        // the corner at the origin is at the lower left: the largest y of the pane
+        assert!(lines.iter().any(|l| near(l.a.0, 10.0) && near(l.a.1, 90.0)));
+        // a pane too small, and a drawing of nothing
+        assert!(preview(&i, 15.0, 120.0, 10.0, 16).is_empty());
+        let blank = Import {
+            sketch: Sketch::new("blank", SketchPlane::on_face(Face::Front)).unwrap(),
+            lines: 0,
+            circles: 0,
+            arcs: 0,
+            skipped: BTreeMap::new(),
+            off_layers: 0,
+        };
+        assert!(preview(&blank, 120.0, 120.0, 10.0, 16).is_empty());
+    }
+
+    #[test]
+    fn a_circle_and_an_arc_are_drawn_as_short_lines() {
+        let circle_only = read(&dxf(&circle(0.0, 0.0, 10.0))).unwrap();
+        let ring = preview(&circle_only, 100.0, 100.0, 0.0, 12);
+        assert_eq!(ring.len(), 12);
+        assert!(ring.iter().all(|l| l.hole));
+        // the ring fills the pane: 20 mm over 100 px
+        let widest = ring
+            .iter()
+            .flat_map(|l| [l.a.0, l.b.0])
+            .fold(f64::MIN, f64::max);
+        assert!((widest - 100.0).abs() < 1e-6, "{widest}");
+        // a quarter of a circle is a quarter of the lines (rounded up, two at least)
+        let quarter = read(&dxf("0\nARC\n8\n0\n10\n5\n20\n5\n40\n10\n50\n0\n51\n90\n")).unwrap();
+        let arc = preview(&quarter, 100.0, 100.0, 5.0, 16);
+        assert_eq!(arc.len(), 4);
+        assert!(arc.iter().all(|l| !l.hole));
+        // chained: the end of one line is the start of the next
+        for pair in arc.windows(2) {
+            assert!((pair[0].b.0 - pair[1].a.0).abs() < 1e-9);
+            assert!((pair[0].b.1 - pair[1].a.1).abs() < 1e-9);
+        }
     }
 
     #[test]
