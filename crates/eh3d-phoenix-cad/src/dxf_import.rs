@@ -16,6 +16,11 @@
 //! Two ends that are no farther apart than the join distance (on each axis) become one point, so
 //! the lines of a closed outline share their corners and the profile of the sketch is closed. A
 //! line, an arc or a circle that has no length after that, or no radius, is left out and counted.
+//! A circle, an arc or a polyline whose extrusion direction (group codes 210, 220 and 230) points
+//! down the third axis is drawn in a mirrored system of coordinates (the arbitrary axis algorithm
+//! of the format gives its first axis the sign of the first axis reversed), so its first
+//! coordinates change sign, an arc swaps its two angles about the vertical and a bulge changes
+//! sign; one whose direction is neither up nor down is left out and counted as `tilted`.
 //! A binary DXF file is not understood. The number of lines, circles and arcs is limited by the
 //! caller (`drawing.max_entities` in the settings) and the size of the file by the caller too.
 
@@ -133,6 +138,25 @@ struct Vertex {
 struct Poly {
     closed: bool,
     vertices: Vec<Vertex>,
+    /// Whether the polyline looks down the third axis: its first coordinates and bulges change
+    /// sign.
+    mirrored: bool,
+    /// Whether its extrusion direction is neither up nor down: it is left out.
+    tilted: bool,
+}
+
+impl Poly {
+    /// Puts the vertices of a polyline that looks down the third axis in the world's system: the
+    /// first coordinate and the bulge change sign. Done once, when the polyline is complete.
+    fn mirror(&mut self) {
+        if self.mirrored {
+            for v in &mut self.vertices {
+                v.x = -v.x;
+                v.bulge = -v.bulge;
+            }
+            self.mirrored = false;
+        }
+    }
 }
 
 struct Reader<'a> {
@@ -163,6 +187,18 @@ impl Reader<'_> {
             Some((_, v)) => number(v),
             None => Ok(0.0),
         }
+    }
+
+    /// Which way the entity of the current group looks: `Some(false)` up the third axis (the
+    /// default), `Some(true)` down it (its first coordinates are mirrored) and `None` when the
+    /// direction is neither.
+    fn mirrored(&self) -> Result<Option<bool>, CadError> {
+        let has = |code: i32| self.group.iter().any(|(c, _)| *c == code);
+        let nz = if has(230) { self.first(230)? } else { 1.0 };
+        if self.first(210)?.abs() > 1e-6 || self.first(220)?.abs() > 1e-6 || nz.abs() < 0.5 {
+            return Ok(None);
+        }
+        Ok(Some(nz < 0.0))
     }
 
     /// The layer the current group names (`0` when it names none).
@@ -229,6 +265,10 @@ impl Reader<'_> {
     }
 
     fn polyline(&mut self, poly: &Poly) -> Result<(), CadError> {
+        if poly.tilted {
+            self.skip("POLYLINE (tilted)");
+            return Ok(());
+        }
         let n = poly.vertices.len();
         let segments = if poly.closed { n } else { n.saturating_sub(1) };
         for i in 0..segments {
@@ -271,7 +311,12 @@ impl Reader<'_> {
                 self.line(a, b)
             }
             "CIRCLE" => {
-                let (centre, radius) = ((self.first(10)?, self.first(20)?), self.first(40)?);
+                let Some(mirrored) = self.mirrored()? else {
+                    self.skip("CIRCLE (tilted)");
+                    return Ok(());
+                };
+                let sign = if mirrored { -1.0 } else { 1.0 };
+                let (centre, radius) = ((sign * self.first(10)?, self.first(20)?), self.first(40)?);
                 let r = self.nm(radius)?;
                 if r <= 0 {
                     self.skip("degenerate");
@@ -284,7 +329,12 @@ impl Reader<'_> {
                 Ok(())
             }
             "ARC" => {
-                let (centre, radius) = ((self.first(10)?, self.first(20)?), self.first(40)?);
+                let Some(mirrored) = self.mirrored()? else {
+                    self.skip("ARC (tilted)");
+                    return Ok(());
+                };
+                let sign = if mirrored { -1.0 } else { 1.0 };
+                let (centre, radius) = ((sign * self.first(10)?, self.first(20)?), self.first(40)?);
                 if self.nm(radius)? <= 0 {
                     self.skip("degenerate");
                     return Ok(());
@@ -293,15 +343,26 @@ impl Reader<'_> {
                     let a = degrees * PI / 180.0;
                     (centre.0 + radius * a.cos(), centre.1 + radius * a.sin())
                 };
-                let (start, end) = (end_of(self.first(50)?), end_of(self.first(51)?));
+                let (from, to) = (self.first(50)?, self.first(51)?);
+                // seen in a mirror an arc goes the other way round: the angles are taken from the
+                // vertical and swapped, so that it still runs counter-clockwise
+                let (from, to) = if mirrored {
+                    (180.0 - to, 180.0 - from)
+                } else {
+                    (from, to)
+                };
+                let (start, end) = (end_of(from), end_of(to));
                 let a = self.point_at(start.0, start.1)?;
                 let b = self.point_at(end.0, end.1)?;
                 self.arc(centre, a, b)
             }
             "LWPOLYLINE" => {
+                let direction = self.mirrored()?;
                 let mut p = Poly {
                     closed: (self.first(70)? as i64) & 1 == 1,
                     vertices: Vec::new(),
+                    mirrored: direction == Some(true),
+                    tilted: direction.is_none(),
                 };
                 for (code, value) in self.group {
                     match *code {
@@ -322,12 +383,16 @@ impl Reader<'_> {
                         _ => {}
                     }
                 }
+                p.mirror();
                 self.polyline(&p)
             }
             "POLYLINE" => {
+                let direction = self.mirrored()?;
                 *poly = Some(Poly {
                     closed: (self.first(70)? as i64) & 1 == 1,
                     vertices: Vec::new(),
+                    mirrored: direction == Some(true),
+                    tilted: direction.is_none(),
                 });
                 Ok(())
             }
@@ -343,7 +408,10 @@ impl Reader<'_> {
                 Ok(())
             }
             "SEQEND" => match poly.take() {
-                Some(p) => self.polyline(&p),
+                Some(mut p) => {
+                    p.mirror();
+                    self.polyline(&p)
+                }
                 None => Ok(()),
             },
             other => {
@@ -714,6 +782,98 @@ mod tests {
             (hi.0 - 15 * MM).abs() < 6_000 && (hi.1 - 15 * MM).abs() < 6_000,
             "{hi:?}"
         );
+    }
+
+    #[test]
+    fn an_arc_that_looks_down_is_mirrored_and_still_runs_counter_clockwise() {
+        // the quarter of a circle of 10 mm about (5, 5) from 0 to 90 degrees and its two radii,
+        // seen from below: in the world it is about (-5, 5), from 90 to 180 degrees
+        let text = dxf(&[
+            "0\nARC\n8\n0\n10\n5\n20\n5\n40\n10\n50\n0\n51\n90\n210\n0\n220\n0\n230\n-1\n"
+                .to_string(),
+            line(-5.0, 5.0, -15.0, 5.0),
+            line(-5.0, 15.0, -5.0, 5.0),
+        ]
+        .concat());
+        let i = read(&text).unwrap();
+        assert_eq!((i.lines, i.arcs), (2, 1));
+        let p = profile(&i);
+        assert_eq!(
+            p.regions.len(),
+            1,
+            "the arc closes the outline of the two radii"
+        );
+        let (lo, hi) = p.bounds();
+        assert!(
+            (lo.0 + 15 * MM).abs() < 6_000 && (hi.0 + 5 * MM).abs() < 6_000,
+            "{lo:?} {hi:?}"
+        );
+        assert!(
+            lo.1 == 5 * MM && (hi.1 - 15 * MM).abs() < 6_000,
+            "{lo:?} {hi:?}"
+        );
+        // looking up, written out, gives the original arc
+        let up = read(&dxf(
+            "0\nARC\n8\n0\n10\n5\n20\n5\n40\n10\n50\n0\n51\n90\n230\n1\n",
+        ));
+        assert_eq!(up.unwrap().arcs, 1);
+    }
+
+    #[test]
+    fn a_circle_and_a_polyline_that_look_down_are_mirrored_too() {
+        let circle = read(&dxf("0\nCIRCLE\n8\n0\n10\n20\n20\n3\n40\n2\n230\n-1\n")).unwrap();
+        assert_eq!(circle.circles, 1);
+        let centre = circle
+            .sketch
+            .elements()
+            .iter()
+            .find_map(|e| match e.element {
+                crate::sketch::Element::Point { x, y } => Some((x.get(), y.get())),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(centre, (-20 * MM, 3 * MM));
+        // a half disc below the chord from (0, 0) to (10, 0) turned over the vertical axis: the
+        // chord runs from (0, 0) to (-10, 0) and the bulge, now clockwise in the file, still
+        // bulges below
+        let half = read(&dxf(
+            "0\nLWPOLYLINE\n8\n0\n90\n2\n70\n1\n10\n0\n20\n0\n42\n1\n10\n10\n20\n0\n230\n-1\n",
+        ))
+        .unwrap();
+        assert_eq!((half.lines, half.arcs), (1, 1));
+        let (lo, hi) = profile(&half).bounds();
+        assert!((lo.1 + 5 * MM).abs() < 6_000, "{lo:?}");
+        assert_eq!((lo.0, hi.0, hi.1), (-10 * MM, 0, 0));
+        // the old polyline has the direction in its own record, and its vertices follow it
+        let mut text = String::from("0\nPOLYLINE\n8\n0\n66\n1\n70\n1\n230\n-1\n");
+        for (x, y) in [(0, 0), (10, 0), (10, 10), (0, 10)] {
+            text.push_str(&format!("0\nVERTEX\n8\n0\n10\n{x}\n20\n{y}\n"));
+        }
+        text.push_str("0\nSEQEND\n");
+        let old = read(&dxf(&text)).unwrap();
+        assert_eq!(profile(&old).bounds(), ((-10 * MM, 0), (0, 10 * MM)));
+    }
+
+    #[test]
+    fn what_looks_neither_up_nor_down_is_left_out_and_counted() {
+        let text = dxf(&format!(
+            "{}{}{}{}",
+            line(0.0, 0.0, 5.0, 0.0),
+            "0\nCIRCLE\n8\n0\n10\n0\n20\n0\n40\n2\n210\n1\n220\n0\n230\n0\n",
+            "0\nARC\n8\n0\n10\n0\n20\n0\n40\n2\n50\n0\n51\n90\n210\n0.5\n230\n0.8\n",
+            "0\nLWPOLYLINE\n8\n0\n90\n2\n70\n0\n10\n0\n20\n0\n10\n1\n20\n1\n220\n1\n230\n0\n"
+        ));
+        let i = read(&text).unwrap();
+        assert_eq!((i.lines, i.circles, i.arcs), (1, 0, 0));
+        assert_eq!(i.skipped.get("CIRCLE (tilted)"), Some(&1));
+        assert_eq!(i.skipped.get("ARC (tilted)"), Some(&1));
+        assert_eq!(i.skipped.get("POLYLINE (tilted)"), Some(&1));
+        // a direction that is up with a rounding error is still up
+        let near = read(&dxf(
+            "0\nCIRCLE\n8\n0\n10\n0\n20\n0\n40\n2\n210\n0.0000001\n220\n0\n230\n1\n",
+        ))
+        .unwrap();
+        assert_eq!(near.circles, 1);
     }
 
     #[test]
