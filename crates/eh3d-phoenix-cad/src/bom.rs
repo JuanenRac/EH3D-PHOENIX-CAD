@@ -751,6 +751,126 @@ total,3,5,14000.000,39.100,0.796,EUR\n"
     }
 
     #[test]
+    fn an_empty_bill_has_no_lines_and_every_total_is_zero() {
+        let bom = from_list(&list(Vec::new()), &cost(100, 10)).unwrap();
+        assert!(bom.lines.is_empty());
+        assert_eq!(
+            (bom.pieces, bom.volume_nm3, bom.mass_ug, bom.unpriced),
+            (0, 0, 0, 0)
+        );
+        assert_eq!(
+            (bom.subtotal_milli, bom.markup_milli, bom.total_milli),
+            (0, 0, 0)
+        );
+        // the values have the header and the three rows of the totals
+        let text = csv(&bom);
+        let rows: Vec<&str> = text.lines().collect();
+        assert_eq!(rows.len(), 4, "{text}");
+        for r in &rows {
+            assert_eq!(r.split(',').count(), COLUMNS, "{r}");
+        }
+        assert!(rows[1].starts_with("subtotal,"), "{text}");
+        // no group and only the row of the whole in the totals by group
+        for by in [GroupBy::Material, GroupBy::Kind, GroupBy::Name] {
+            assert!(groups(&bom, by, None).is_empty());
+            let by_group = groups_csv(&bom, by);
+            assert_eq!(by_group.lines().count(), 2, "{by_group}");
+            assert!(
+                by_group.ends_with("total,0,0,0.000,0.000,0.000,EUR\n"),
+                "{by_group}"
+            );
+        }
+        // the text says nothing about prices when there is no line to price
+        for lang in Lang::ALL {
+            let t = text_in(&bom, lang);
+            assert_eq!(t.lines().count(), 2, "{t}");
+            assert!(!t.contains('{'), "{t}");
+        }
+    }
+
+    #[test]
+    fn the_markup_rounds_half_up_and_a_price_of_zero_is_a_price() {
+        let free = |per_piece: u32, markup: u32| {
+            let mut c = cost(per_piece, markup);
+            c.prices_milli_per_kg.insert("steel".to_owned(), 0);
+            from_list(&list(vec![row("a", "cube", "steel", 8000, 8_000_000)]), &c).unwrap()
+        };
+        // 5 thousandths with 10 % is half a thousandth: it goes up
+        let half = free(5, 10);
+        assert_eq!(
+            (half.subtotal_milli, half.markup_milli, half.total_milli),
+            (5, 1, 6)
+        );
+        // 4 thousandths with 10 % is 0.4: it goes down
+        let below = free(4, 10);
+        assert_eq!((below.markup_milli, below.total_milli), (0, 4));
+        // a price of zero is a price: the line is priced and costs only its piece
+        assert_eq!(half.unpriced, 0);
+        assert_eq!(half.lines[0].price_milli_per_kg, Some(0));
+        assert_eq!(half.lines[0].unit_cost_milli, 5);
+        assert!(csv(&half).contains(",0.000,0.005,0.005,EUR,yes\n"));
+        // a markup of 100 % doubles the subtotal and one of 0 % leaves it
+        assert_eq!(free(7, 100).total_milli, 14);
+        assert_eq!(free(7, 0).total_milli, 7);
+    }
+
+    #[test]
+    fn the_same_part_in_another_size_or_kind_is_a_line_of_its_own() {
+        let mut rows = vec![
+            row("a", "bar", "steel", 8000, 8_000_000),
+            row("b", "bar", "steel", 8000, 8_000_000),
+            row("c", "bar", "steel", 8000, 16_000_000),
+            row("d", "bar", "steel", 8000, 8_000_000),
+        ];
+        rows[2].size = [20_000_000, 10_000_000, 10_000_000];
+        rows[3].kind = Kind::Screw;
+        let bom = from_list(&list(rows), &cost(0, 0)).unwrap();
+        let seen: Vec<(Kind, u32, i64)> = bom
+            .lines
+            .iter()
+            .map(|l| (l.kind, l.quantity, l.size[0]))
+            .collect();
+        assert_eq!(bom.lines.len(), 3, "{seen:?}");
+        assert_eq!(bom.pieces, 4);
+        assert_eq!(bom.lines.iter().map(|l| l.quantity).sum::<u32>(), 4);
+        // the numbers of the lines run from 1 without a gap
+        assert_eq!(
+            bom.lines.iter().map(|l| l.item).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        // a turned body and a part of the same name are not the same line
+        let mut mixed = list(vec![
+            row("ring", "ring", "PLA", 1240, 1_000_000),
+            body("ring", "PLA", 1240, 1_000_000),
+        ]);
+        mixed.rows[1].size = mixed.rows[0].size;
+        assert_eq!(from_list(&mixed, &cost(0, 0)).unwrap().lines.len(), 2);
+    }
+
+    #[test]
+    fn money_and_cells_hold_at_the_edges_of_their_ranges() {
+        assert_eq!(money_text(-5), "-0.005");
+        assert_eq!(money_text(999), "0.999");
+        assert_eq!(money_text(1_000), "1.000");
+        // the most negative figure does not panic and keeps its sign
+        assert!(money_text(i128::MIN).starts_with("-170141183460469231731687303715884105"));
+        assert!(money_text(i128::MAX).starts_with("170141183460469231731687303715884105"));
+        // nothing to cost and the dearest price in the settings
+        assert_eq!(material_cost_milli(0, u32::MAX).unwrap(), 0);
+        assert_eq!(
+            material_cost_milli(1_000_000_000, u32::MAX).unwrap(),
+            i128::from(u32::MAX)
+        );
+        // cells: empty, a tab or a carriage return in front, a name with only a quote
+        assert_eq!(cell(""), "");
+        assert_eq!(cell("\tcmd"), "'\tcmd");
+        assert_eq!(cell("\rcmd"), "\"'\rcmd\"");
+        assert_eq!(cell("\""), "\"\"\"\"");
+        assert_eq!(cell("tube \u{00d8}20"), "tube \u{00d8}20");
+        assert_eq!(cell("x-y+z@w"), "x-y+z@w");
+    }
+
+    #[test]
     fn money_is_written_with_three_decimals() {
         assert_eq!(money_text(0), "0.000");
         assert_eq!(money_text(5), "0.005");
