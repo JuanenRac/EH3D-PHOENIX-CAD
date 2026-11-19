@@ -421,8 +421,23 @@ pub fn mesh_from_triangles(triangles: &[[f64; 9]]) -> Mesh {
 }
 
 /// The solids of a file of an interchange format, by its extension: `stl` (one solid, called
-/// `solid`), `obj` or `3mf`.
+/// `solid`), `obj`, `3mf` or `step` (`stp`), with the limits of the shipped settings for a STEP
+/// file.
 pub fn read_file_bytes(name: &str, bytes: &[u8]) -> Result<Vec<Body>, String> {
+    read_file_bytes_limited(
+        name,
+        bytes,
+        &crate::step_import::StepLimits::from_settings(&crate::config::Settings::defaults().mesh),
+    )
+}
+
+/// The solids of a file of an interchange format, by its extension, with the limits of the
+/// settings for a STEP file (see [`crate::step_import`]).
+pub fn read_file_bytes_limited(
+    name: &str,
+    bytes: &[u8],
+    step_limits: &crate::step_import::StepLimits,
+) -> Result<Vec<Body>, String> {
     let extension = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
     match extension.as_str() {
         "stl" => {
@@ -433,7 +448,11 @@ pub fn read_file_bytes(name: &str, bytes: &[u8]) -> Result<Vec<Body>, String> {
             std::str::from_utf8(bytes).map_err(|_| "the file is not UTF-8 text".to_owned())?,
         ),
         "3mf" => read_three_mf(bytes),
-        _ => Err("the file must end in .stl, .obj or .3mf".to_owned()),
+        "step" | "stp" => crate::step_import::read_step(
+            std::str::from_utf8(bytes).map_err(|_| "the file is not UTF-8 text".to_owned())?,
+            step_limits,
+        ),
+        _ => Err("the file must end in .stl, .obj, .3mf, .step or .stp".to_owned()),
     }
 }
 
@@ -653,10 +672,35 @@ mod tests {
         let three = three_mf(&[("box", &a)]);
         assert_eq!(read_file_bytes("a.obj", &obj_text).unwrap()[0].1, a);
         assert_eq!(read_file_bytes("dir.v2/A.3MF", &three).unwrap()[0].1, a);
-        assert!(read_file_bytes("a.step", &obj_text).is_err());
+        assert!(read_file_bytes("a.step", &obj_text)
+            .unwrap_err()
+            .contains("not a STEP file"));
+        assert!(read_file_bytes("a.dxf", &obj_text).is_err());
         assert!(read_file_bytes("a", &obj_text).is_err());
         assert!(read_file_bytes("a.obj", &[0xFF, 0xFE]).is_err());
         assert!(read_file_bytes("a.stl", b"short").is_err());
+    }
+
+    #[test]
+    fn a_step_file_is_picked_by_its_extension_in_any_case_and_keeps_the_limits_it_is_given() {
+        let step = "ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\n#1=CARTESIAN_POINT('',(0.,0.,0.));\n#2=CARTESIAN_POINT('',(10.,0.,0.));\n#3=CARTESIAN_POINT('',(0.,10.,0.));\n#4=CARTESIAN_POINT('',(0.,0.,10.));\n#5=POLY_LOOP('',(#1,#3,#2));\n#6=POLY_LOOP('',(#1,#2,#4));\n#7=POLY_LOOP('',(#2,#3,#4));\n#8=POLY_LOOP('',(#3,#1,#4));\n#9=FACE_OUTER_BOUND('',#5,.T.);\n#10=FACE_OUTER_BOUND('',#6,.T.);\n#11=FACE_OUTER_BOUND('',#7,.T.);\n#12=FACE_OUTER_BOUND('',#8,.T.);\n#13=FACE('',(#9));\n#14=FACE('',(#10));\n#15=FACE('',(#11));\n#16=FACE('',(#12));\n#17=CLOSED_SHELL('',(#13,#14,#15,#16));\n#18=FACETED_BREP('corner',#17);\nENDSEC;\nEND-ISO-10303-21;\n";
+        // a tetrahedron with three right angles at the origin: a sixth of a cube of 10 mm
+        for name in ["t.step", "T.STEP", "dir.v2/t.Stp", "t.stp"] {
+            let bodies = read_file_bytes(name, step.as_bytes()).unwrap();
+            assert_eq!(bodies.len(), 1, "{name}");
+            assert_eq!(bodies[0].0, "corner");
+            assert!(bodies[0].1.check_closed().is_ok(), "{name}");
+            assert!((bodies[0].1.volume_nm3() / (1.0e21 / 6.0) - 1.0).abs() < 1e-12);
+        }
+        let mut limits = crate::step_import::StepLimits::from_settings(
+            &crate::config::Settings::defaults().mesh,
+        );
+        limits.max_faces = 3;
+        let error = read_file_bytes_limited("t.step", step.as_bytes(), &limits).unwrap_err();
+        assert!(error.contains("3 faces"), "{error}");
+        // bytes that are not text are refused, and a name with no extension is none of the formats
+        assert!(read_file_bytes("t.step", &[0xFF, 0xFE]).is_err());
+        assert!(read_file_bytes("t", step.as_bytes()).is_err());
     }
 
     /// The next number of a fixed sequence (xorshift), so that a failure can be repeated.

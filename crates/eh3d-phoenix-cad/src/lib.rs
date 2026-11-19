@@ -7,6 +7,7 @@
 //! * [`scad`]: the model as an OpenSCAD-style script, the same text for the same model;
 //! * [`step`]: the model as a STEP file (a boundary representation with the inner space as a void),
 //!   the same text for the same model, checked for its structure only;
+//! * [`step_import`]: STEP files of solids made of flat faces read into triangles (a prism of a sketch is written by `step::prism_to_step`), with the unit of the file, limits from the settings and what cannot be read refused by the entity and its name;
 //! * [`units`]: angles, counts and ratios in integers, exact rounding, and lengths read and shown in mm, um, in and mil;
 //! * [`names`]: stable names of the faces, the edges and the walls of the holes, which do not depend on the order of anything;
 //! * [`body`]: the recipe of an enclosure (base parameters and ordered steps) with a tip, suppressed steps, the state of each step and an undo and redo history in named transactions;
@@ -134,6 +135,7 @@ pub mod sketch_export;
 pub mod sketch_ui;
 pub mod solid;
 pub mod step;
+pub mod step_import;
 pub mod store;
 pub mod sweep;
 pub mod swept;

@@ -37,6 +37,21 @@ fn dot(a: P3, b: P3) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
+/// A solid that is a prism along one axis (see [`Mesh::as_prism`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Prism {
+    /// The axis it is raised along: 0 for x, 1 for y, 2 for z.
+    pub axis: usize,
+    /// Where the floor lies on that axis, in nanometres.
+    pub low: f64,
+    /// How high it is, in nanometres.
+    pub height: f64,
+    /// The area of the floor (the material, holes taken out), in square nanometres.
+    pub area_nm2: f64,
+    /// The closed outlines of the floor as corners in the other two axes, in order of the axes.
+    pub outlines: Vec<Vec<[f64; 2]>>,
+}
+
 /// The surface of a solid.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Mesh {
@@ -88,6 +103,146 @@ impl Mesh {
             return None;
         }
         Some(moment.map(|m| m / (4.0 * six_volumes)))
+    }
+
+    /// The tensor of inertia of the solid the closed surface bounds, about its centre of mass and
+    /// for a density of one, in nanometres to the fifth power (a density in kilograms per cubic
+    /// metre makes it `density * 1e-45` kilogram square metres): the sums of the signed
+    /// tetrahedra of the triangles with a corner of the mesh, moved from that corner to the
+    /// centre of mass. `None` when the surface holds no volume. A mesh turned inside out gives
+    /// the same tensor as the one turned right.
+    pub fn inertia_nm5(&self) -> Option<[[f64; 3]; 3]> {
+        let origin = *self.vertices.first()?;
+        let mut six_volumes = 0.0f64;
+        let mut first = [0.0f64; 3];
+        let mut second = [[0.0f64; 3]; 3];
+        for t in &self.triangles {
+            let [a, b, c] = self.corners(t);
+            let (a, b, c) = (sub(a, origin), sub(b, origin), sub(c, origin));
+            let det = dot(a, cross(b, c));
+            let sum = [a[0] + b[0] + c[0], a[1] + b[1] + c[1], a[2] + b[2] + c[2]];
+            six_volumes += det;
+            for (i, f) in first.iter_mut().enumerate() {
+                *f += det * sum[i];
+                for (j, cell) in second[i].iter_mut().enumerate() {
+                    *cell += det * (a[i] * a[j] + b[i] * b[j] + c[i] * c[j] + sum[i] * sum[j]);
+                }
+            }
+        }
+        if six_volumes.abs() < 6.0 {
+            return None;
+        }
+        let sign = six_volumes.signum();
+        let volume = six_volumes.abs() / 6.0;
+        let centre = first.map(|f| sign * f / (24.0 * volume));
+        let m = |i: usize, j: usize| sign * second[i][j] / 120.0;
+        let trace = m(0, 0) + m(1, 1) + m(2, 2);
+        let norm2 = dot(centre, centre);
+        let mut out = [[0.0f64; 3]; 3];
+        for (i, row) in out.iter_mut().enumerate() {
+            for (j, cell) in row.iter_mut().enumerate() {
+                let about_corner = if i == j { trace } else { 0.0 } - m(i, j);
+                let shift = volume * (if i == j { norm2 } else { 0.0 } - centre[i] * centre[j]);
+                *cell = about_corner - shift;
+            }
+        }
+        Some(out)
+    }
+
+    /// Whether the solid is a prism along one of the axes: every vertex lies in one of two planes
+    /// across the axis, the triangles between the planes are vertical walls, and the volume is
+    /// the area of the floor times the height. The outlines of the floor come back as closed
+    /// chains of corners (an outer outline and the holes of the section, in no fixed order).
+    pub fn as_prism(&self) -> Result<Prism, String> {
+        use std::collections::HashMap;
+        let (lo, hi) = self.bounds().ok_or("the solid has no vertices")?;
+        let mut reason =
+            "the solid has no two parallel planes that hold all its vertices".to_owned();
+        for axis in 0..3 {
+            if lo[axis] == hi[axis]
+                || self
+                    .vertices
+                    .iter()
+                    .any(|v| v[axis] != lo[axis] && v[axis] != hi[axis])
+            {
+                continue;
+            }
+            let mut floor: Vec<[u32; 3]> = Vec::new();
+            let mut walls_ok = true;
+            for t in &self.triangles {
+                let corners = self.corners(t);
+                let low = corners.iter().filter(|c| c[axis] == lo[axis]).count();
+                if low == 3 {
+                    floor.push(*t);
+                } else if low != 0 {
+                    let n = cross(sub(corners[1], corners[0]), sub(corners[2], corners[0]));
+                    if n[axis] != 0.0 {
+                        walls_ok = false;
+                        break;
+                    }
+                }
+            }
+            if !walls_ok {
+                reason = "a triangle between the two planes is not a vertical wall".to_owned();
+                continue;
+            }
+            let (ia, ib) = ((axis + 1) % 3, (axis + 2) % 3);
+            let mut directed: HashMap<(u32, u32), usize> = HashMap::new();
+            for t in &floor {
+                for k in 0..3 {
+                    *directed.entry((t[k], t[(k + 1) % 3])).or_insert(0) += 1;
+                }
+            }
+            let mut next: HashMap<u32, u32> = HashMap::new();
+            for &(a, b) in directed.keys() {
+                if !directed.contains_key(&(b, a)) && next.insert(a, b).is_some() {
+                    return Err("two outlines of the floor touch at a corner".to_owned());
+                }
+            }
+            let mut starts: Vec<u32> = next.keys().copied().collect();
+            starts.sort_unstable();
+            let mut seen = std::collections::HashSet::new();
+            let mut outlines: Vec<Vec<[f64; 2]>> = Vec::new();
+            for start in starts {
+                if seen.contains(&start) {
+                    continue;
+                }
+                let mut chain = Vec::new();
+                let mut at = start;
+                loop {
+                    if !seen.insert(at) {
+                        break;
+                    }
+                    let v = self.vertices[at as usize];
+                    chain.push([v[ia], v[ib]]);
+                    match next.get(&at) {
+                        Some(&to) => at = to,
+                        None => return Err("an outline of the floor is not closed".to_owned()),
+                    }
+                }
+                if at != start {
+                    return Err("an outline of the floor is not closed".to_owned());
+                }
+                outlines.push(chain);
+            }
+            let area: f64 = floor.iter().map(|t| self.area_nm2(t)).sum();
+            let height = hi[axis] - lo[axis];
+            let volume = self.volume_nm3();
+            if outlines.is_empty()
+                || (volume - area * height).abs() > 1.0e-9 * volume.abs().max(1.0)
+            {
+                reason = "the volume is not the area of the floor times the height".to_owned();
+                continue;
+            }
+            return Ok(Prism {
+                axis,
+                low: lo[axis],
+                height,
+                area_nm2: area,
+                outlines,
+            });
+        }
+        Err(reason)
     }
 
     /// The unit normal of a triangle (zero for a triangle with no area).

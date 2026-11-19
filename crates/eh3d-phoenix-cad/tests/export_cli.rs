@@ -357,11 +357,11 @@ fn mesh_info_refuses_what_it_cannot_read_and_exits_with_one_for_an_open_surface(
     let (code, _, err) = run(&["mesh-info", &dir.file("missing.obj")]);
     assert_eq!(code, 1);
     assert!(err.contains("missing.obj"), "{err}");
-    let step = dir.file("a.step");
+    let step = dir.file("a.dxf");
     fs::write(&step, "x").unwrap();
     let (code, _, err) = run(&["mesh-info", &step]);
     assert_eq!(code, 1);
-    assert!(err.contains(".stl, .obj or .3mf"), "{err}");
+    assert!(err.contains(".stl, .obj, .3mf, .step or .stp"), "{err}");
     let (code, _, err) = run(&["mesh-info"]);
     assert_eq!(code, 1);
     assert!(err.contains("mesh file"), "{err}");
@@ -372,4 +372,66 @@ fn mesh_info_refuses_what_it_cannot_read_and_exits_with_one_for_an_open_surface(
     assert_eq!(code, 1);
     assert!(text.contains("not closed"), "{text}");
     assert!(text.contains("t: 3 vertices, 1 triangles"), "{text}");
+}
+
+/// The corners, across and up, of the first four lines on the layer of the border of a DXF file.
+fn first_border(dxf: &str) -> (f64, f64) {
+    let lines: Vec<&str> = dxf.lines().collect();
+    let (mut xs, mut ys) = (Vec::new(), Vec::new());
+    let mut found = 0;
+    for i in 0..lines.len().saturating_sub(15) {
+        if lines[i] == "LINE" && lines[i + 2] == "MARCO" {
+            let number = |k: usize| lines[i + k].parse::<f64>().unwrap();
+            xs.extend([number(4), number(10)]);
+            ys.extend([number(6), number(12)]);
+            found += 1;
+            if found == 4 {
+                break;
+            }
+        }
+    }
+    assert_eq!(found, 4, "four lines of the border");
+    let span = |v: &[f64]| {
+        v.iter().copied().fold(f64::MIN, f64::max) - v.iter().copied().fold(f64::MAX, f64::min)
+    };
+    (span(&xs), span(&ys))
+}
+
+#[test]
+fn a_dxf_drawing_on_paper_carries_the_sheet_and_the_scale_in_its_title_block() {
+    let dir = Scratch::new("dxfpaper");
+    let plain = dir.file("plain.dxf");
+    let (code, _, err) = run(&["export", EXAMPLE, "--format", "dxf", "--out", &plain]);
+    assert_eq!(code, 0, "{err}");
+    assert!(!fs::read_to_string(&plain).unwrap().contains("MARCO"));
+    let config = dir.file("paper.cfg");
+    fs::write(
+        &config,
+        "[drawing]\npaper = 4\npaper_margin = 10 mm\n[title_block]\nenabled = 1\n",
+    )
+    .unwrap();
+    let sheet = dir.file("sheet.dxf");
+    let (code, _, err) = run(&[
+        "export", EXAMPLE, "--format", "dxf", "--config", &config, "--out", &sheet,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let text = fs::read_to_string(&sheet).unwrap();
+    let (w, h) = first_border(&text);
+    // the paper is an A4 across, and the drawing is full size at a standard scale
+    let scale = 297.0 / w;
+    assert!((210.0 / h - scale).abs() < 1e-9, "{w} x {h}");
+    let label = eh3d_phoenix_cad::drawing::scale_label(scale, true);
+    assert!(
+        text.contains(&format!("\n1\n{label}\n")),
+        "the scale {label} is in the title block"
+    );
+    // the same drawing without the title block has the sheet too, and one on upright paper has it upright
+    fs::write(&config, "[drawing]\npaper = 4\npaper_portrait = 1\n").unwrap();
+    let upright = dir.file("upright.dxf");
+    let (code, _, err) = run(&[
+        "export", EXAMPLE, "--format", "dxf", "--config", &config, "--out", &upright,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let (w, h) = first_border(&fs::read_to_string(&upright).unwrap());
+    assert!(h > w && (210.0 / w - 297.0 / h).abs() < 1e-9, "{w} x {h}");
 }

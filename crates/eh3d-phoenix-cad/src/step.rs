@@ -40,6 +40,37 @@ fn real2(twice: i128) -> String {
     format!("{sign}{whole}.{digits}")
 }
 
+/// A real number of the file with nine decimals at most and no trailing zeros (`1.`, `0.5`).
+fn real_f(v: f64) -> String {
+    let text = format!("{:.9}", v + 0.0);
+    let trimmed = text.trim_end_matches('0');
+    if trimmed == "-0." {
+        "0.".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+/// A name that fits between the quotes of a STEP text: printable ASCII without quotes and
+/// backslashes, `prism` when nothing is left.
+fn step_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_graphic() && c != '\'' && c != '\\' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if cleaned.trim_matches('_').is_empty() {
+        "prism".to_owned()
+    } else {
+        cleaned
+    }
+}
+
 fn unit(v: i8) -> &'static str {
     match v {
         -1 => "-1.",
@@ -75,6 +106,39 @@ impl Builder {
             unit(d.1),
             unit(d.2)
         ))
+    }
+
+    fn direction_f(&mut self, d: (f64, f64, f64)) -> usize {
+        self.add(format!(
+            "DIRECTION('',({},{},{}))",
+            real_f(d.0),
+            real_f(d.1),
+            real_f(d.2)
+        ))
+    }
+
+    fn axis_f(&mut self, origin: P, axis: (f64, f64, f64), refdir: (f64, f64, f64)) -> usize {
+        let (p, a, r) = (
+            self.point(origin),
+            self.direction_f(axis),
+            self.direction_f(refdir),
+        );
+        self.add(format!("AXIS2_PLACEMENT_3D('',#{p},#{a},#{r})"))
+    }
+
+    /// A straight edge between two vertices that lie at `from` and `to` (twice the nanometres).
+    fn line_edge(&mut self, va: usize, vb: usize, from: P, to: P) -> usize {
+        let d = (
+            (to.0 - from.0) as f64,
+            (to.1 - from.1) as f64,
+            (to.2 - from.2) as f64,
+        );
+        let length = (d.0 * d.0 + d.1 * d.1 + d.2 * d.2).sqrt();
+        let start = self.point(from);
+        let dir = self.direction_f((d.0 / length, d.1 / length, d.2 / length));
+        let vector = self.add(format!("VECTOR('',#{dir},{})", real_f(length / 2.0e6)));
+        let line = self.add(format!("LINE('',#{start},#{vector})"));
+        self.add(format!("EDGE_CURVE('',#{va},#{vb},#{line},.T.)"))
     }
 
     fn axis(&mut self, origin: P, axis: (i8, i8, i8), refdir: (i8, i8, i8)) -> usize {
@@ -373,7 +437,12 @@ pub fn to_step(enclosure: &Enclosure) -> String {
         "BREP_WITH_VOIDS('enclosure',#{shell},(#{oriented_void}))"
     ));
 
-    // the product structure and the units
+    finish_file(b, &[brep], "enclosure")
+}
+
+/// The product structure, the units and the header around a solid: the text of the file.
+fn finish_file(mut b: Builder, breps: &[usize], name: &str) -> String {
+    let solids: String = breps.iter().map(|i| format!(",#{i}")).collect();
     let origin = b.axis((0, 0, 0), (0, 0, 1), (1, 0, 0));
     let unc_unit = b.add("(LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.))".to_owned());
     let angle = b.add("(NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.))".to_owned());
@@ -382,10 +451,10 @@ pub fn to_step(enclosure: &Enclosure) -> String {
         "UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-06),#{unc_unit},'distance_accuracy_value','')"
     ));
     let context = b.add(format!(
-        "(GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#{uncertainty})) GLOBAL_UNIT_ASSIGNED_CONTEXT((#{unc_unit},#{angle},#{solid})) REPRESENTATION_CONTEXT('enclosure','3D'))"
+        "(GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#{uncertainty})) GLOBAL_UNIT_ASSIGNED_CONTEXT((#{unc_unit},#{angle},#{solid})) REPRESENTATION_CONTEXT('{name}','3D'))"
     ));
     let representation = b.add(format!(
-        "ADVANCED_BREP_SHAPE_REPRESENTATION('enclosure',(#{origin},#{brep}),#{context})"
+        "ADVANCED_BREP_SHAPE_REPRESENTATION('{name}',(#{origin}{solids}),#{context})"
     ));
     let app = b.add(
         "APPLICATION_CONTEXT('core data for automotive mechanical design processes')".to_owned(),
@@ -395,7 +464,7 @@ pub fn to_step(enclosure: &Enclosure) -> String {
     ));
     let product_context = b.add(format!("PRODUCT_CONTEXT('',#{app},'mechanical')"));
     let product = b.add(format!(
-        "PRODUCT('enclosure','enclosure','',(#{product_context}))"
+        "PRODUCT('{name}','{name}','',(#{product_context}))"
     ));
     b.add(format!(
         "PRODUCT_RELATED_PRODUCT_CATEGORY('part','',(#{product}))"
@@ -414,8 +483,11 @@ pub fn to_step(enclosure: &Enclosure) -> String {
 
     let mut out = String::new();
     out.push_str("ISO-10303-21;\nHEADER;\n");
-    out.push_str("FILE_DESCRIPTION(('EH3D-PHOENIX-CAD enclosure'),'2;1');\n");
-    out.push_str("FILE_NAME('enclosure.step','',(''),(''),'EH3D-PHOENIX-CAD','','');\n");
+    let _ = writeln!(out, "FILE_DESCRIPTION(('EH3D-PHOENIX-CAD {name}'),'2;1');");
+    let _ = writeln!(
+        out,
+        "FILE_NAME('{name}.step','',(''),(''),'EH3D-PHOENIX-CAD','','');"
+    );
     out.push_str("FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));\n");
     out.push_str("ENDSEC;\nDATA;\n");
     for (i, body) in b.lines.iter().enumerate() {
@@ -470,6 +542,128 @@ pub fn export_step(enclosure: &Enclosure) -> Result<String, CadError> {
         return Err(CadError::NotExported("the centring lip of the lid".into()));
     }
     Ok(to_step(enclosure))
+}
+
+/// A prism as STEP text: the profile of a sketch raised from the plane `z0` by `height` (both in
+/// nanometres) along the third axis. Every region of the profile is a solid of its own, with its
+/// holes through it; the outlines are the straight lines that stand for them (a circle or an arc
+/// is the polygon the profile draws), so every face is flat and the file can be read back by
+/// [`crate::step_import::read_step`] to the volume of the polygons.
+pub fn prism_to_step(
+    name: &str,
+    profile: &crate::profile::Profile,
+    z0: i64,
+    height: i64,
+) -> Result<String, CadError> {
+    if height <= 0 {
+        return Err(CadError::NotPositive("the height of the prism"));
+    }
+    let z1 = z0
+        .checked_add(height)
+        .filter(|z| z.abs() < crate::LENGTH_LIMIT_NM)
+        .ok_or(CadError::LengthOutOfRange(i64::MAX))?;
+    let name = step_name(name);
+    let mut b = Builder::default();
+    let mut solids = Vec::new();
+    for region in &profile.regions {
+        let rings: Vec<&[crate::profile::Pt]> = std::iter::once(&region.outer)
+            .chain(region.holes.iter())
+            .map(|o| o.polygon())
+            .collect();
+        let at = |p: crate::profile::Pt, z: i64| -> P {
+            (2 * i128::from(p.0), 2 * i128::from(p.1), 2 * i128::from(z))
+        };
+        // for each ring: the edges along the bottom, along the top and the rising ones
+        let mut faces: Vec<usize> = Vec::new();
+        let mut bottoms: Vec<(Vec<usize>, bool)> = Vec::new();
+        let mut tops: Vec<(Vec<usize>, bool)> = Vec::new();
+        let mut sides: Vec<usize> = Vec::new();
+        for (k, ring) in rings.iter().enumerate() {
+            let n = ring.len();
+            if n < 3 {
+                return Err(CadError::NotExported(
+                    "an outline with fewer than three corners".into(),
+                ));
+            }
+            let vb: Vec<usize> = ring.iter().map(|p| b.vertex(at(*p, z0))).collect();
+            let vt: Vec<usize> = ring.iter().map(|p| b.vertex(at(*p, z1))).collect();
+            let mut edge_bottom = Vec::new();
+            let mut edge_top = Vec::new();
+            let mut edge_up = Vec::new();
+            for i in 0..n {
+                let j = (i + 1) % n;
+                if ring[i] == ring[j] {
+                    return Err(CadError::NotExported(
+                        "an outline with a side of no length".into(),
+                    ));
+                }
+                edge_bottom.push(b.line_edge(vb[i], vb[j], at(ring[i], z0), at(ring[j], z0)));
+                edge_top.push(b.line_edge(vt[i], vt[j], at(ring[i], z1), at(ring[j], z1)));
+                edge_up.push(b.line_edge(vb[i], vt[i], at(ring[i], z0), at(ring[i], z1)));
+            }
+            for i in 0..n {
+                let j = (i + 1) % n;
+                let loop_id = b.loop_of(&[
+                    (edge_bottom[i], true),
+                    (edge_up[j], true),
+                    (edge_top[i], false),
+                    (edge_up[i], false),
+                ]);
+                let bound = b.add(format!("FACE_OUTER_BOUND('',#{loop_id},.T.)"));
+                let (dx, dy) = (
+                    (ring[j].0 - ring[i].0) as f64,
+                    (ring[j].1 - ring[i].1) as f64,
+                );
+                let length = (dx * dx + dy * dy).sqrt();
+                let (ux, uy) = (dx / length, dy / length);
+                let placement = b.axis_f(at(ring[i], z0), (uy, -ux, 0.0), (ux, uy, 0.0));
+                let plane = b.add(format!("PLANE('',#{placement})"));
+                sides.push(b.add(format!("ADVANCED_FACE('',(#{bound}),#{plane},.T.)")));
+            }
+            bottoms.push((edge_bottom, k == 0));
+            tops.push((edge_top, k == 0));
+        }
+        // the floor looks down and walks every ring backwards; the roof looks up and walks them as they are
+        for (rings_edges, up) in [(&bottoms, false), (&tops, true)] {
+            let mut bounds = Vec::new();
+            for (edges, outer) in rings_edges {
+                let walk: Vec<(usize, bool)> = if up {
+                    edges.iter().map(|e| (*e, true)).collect()
+                } else {
+                    edges.iter().rev().map(|e| (*e, false)).collect()
+                };
+                let loop_id = b.loop_of(&walk);
+                bounds.push(b.add(format!(
+                    "{}('',#{loop_id},.T.)",
+                    if *outer {
+                        "FACE_OUTER_BOUND"
+                    } else {
+                        "FACE_BOUND"
+                    }
+                )));
+            }
+            let z = if up { z1 } else { z0 };
+            let placement = b.axis(
+                at(rings[0][0], z),
+                (0, 0, if up { 1 } else { -1 }),
+                (1, 0, 0),
+            );
+            let plane = b.add(format!("PLANE('',#{placement})"));
+            let list: Vec<String> = bounds.iter().map(|i| format!("#{i}")).collect();
+            faces.push(b.add(format!(
+                "ADVANCED_FACE('',({}),#{plane},.T.)",
+                list.join(",")
+            )));
+        }
+        faces.extend(sides);
+        let list: Vec<String> = faces.iter().map(|i| format!("#{i}")).collect();
+        let shell = b.add(format!("CLOSED_SHELL('',({}))", list.join(",")));
+        solids.push(b.add(format!("MANIFOLD_SOLID_BREP('{name}',#{shell})")));
+    }
+    if solids.is_empty() {
+        return Err(CadError::NotExported("a profile with no outline".into()));
+    }
+    Ok(finish_file(b, &solids, &name))
 }
 
 #[cfg(test)]

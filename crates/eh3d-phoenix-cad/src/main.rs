@@ -31,14 +31,14 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad bom PROJECT.phoenixproj [--text] [--group material|kind|name] [--lang CODE] [--config FILE]                  the bill of materials with cost: the parts and bodies grouped into lines with quantity, material, mass, the price of the material (price_per_kg of the settings) and the cost, with the subtotal, the markup and the total, as comma separated values for a spreadsheet; --text prints lines for a person in the language of --lang (any of the eight)
   eh3d-phoenix-cad partlist PROJECT.phoenixproj [--text] [--lang CODE] [--config FILE]           the placed parts with their properties (name, kind, part, material, density, volume, mass, corner and size of the box) and the totals, as comma separated values; --text prints lines for a person in the language of --lang (any of the eight)
   eh3d-phoenix-cad holes PROJECT.phoenixproj [--tools] [--text] [--lang CODE] [--config FILE]            the schedule of the holes of the box for the person who drills (a tag, the face, the position, the diameter and the shape of each) as comma separated values, or with --tools the drills and cutters they need grouped by diameter and shape
-  eh3d-phoenix-cad sketch-export PROJECT.phoenixproj|SKETCH.phoenixsketch --format dxf|svg [--sketch NAME] [--out FILE] [--overwrite] [--lang CODE] [--config FILE]   writes a sketch (the only one of the project, or the one named) as a flat drawing of its closed outlines for a laser or a router; never over a file that exists unless --overwrite is given
+  eh3d-phoenix-cad sketch-export PROJECT.phoenixproj|SKETCH.phoenixsketch --format dxf|svg|step [--height LENGTH] [--sketch NAME] [--out FILE] [--overwrite] [--lang CODE] [--config FILE]   writes a sketch (the only one of the project, or the one named) as a flat drawing of its closed outlines for a laser or a router, or with --format step (which needs --height) as a STEP file of the prism that its outlines make when raised by that height, with the holes through it and a circle or an arc as the polygon of the profile; never over a file that exists unless --overwrite is given
   eh3d-phoenix-cad balance PROJECT.phoenixproj [--lang CODE] [--config FILE]                     the mass of the placed parts and where their centre of mass is (exact for profiles, an estimate for screws and brackets, and the number of estimated parts is said)
   eh3d-phoenix-cad revolve PROJECT.phoenixproj|SKETCH.phoenixsketch --axis x|y [--angle DEGREES] [--sketch NAME] [--material NAME] [--out FILE.stl|.obj|.3mf [--overwrite]] [--lang CODE] [--config FILE]   turns a sketch (the only one of the project, or the one named) about its first or second axis, by a full turn unless --angle says less, and prints the volume, the surface and the distances from the axis of the solid made and, with a material of the settings, its mass; the profile must not cross the axis; with --out the triangles of the solid are written to a file of the format its extension says (never over a file that exists unless --overwrite is given)
   eh3d-phoenix-cad sweep PROFILE --path PATH [--profile-sketch NAME] [--path-sketch NAME] [--material NAME] [--out FILE.stl|.obj|.3mf [--overwrite]] [--lang CODE] [--config FILE]   sweeps the profile (a project or a sketch file, and the sketch of it) along the path (the lines and arcs of another sketch, or one circle) and prints the length of the path, the volume and the surface of the solid made and, with a material of the settings, its mass; the profile starts on the path, its first axis to the left of the way the path is walked from the free end of its first element; with --out the triangles of the solid are written as for revolve
   eh3d-phoenix-cad sketch-import DRAWING.dxf [--out FILE.phoenixsketch] [--name NAME] [--face NAME] [--unit mm|cm|m|in|auto] [--layers NAME,NAME] [--list-layers] [--overwrite] [--lang CODE] [--config FILE]   reads the lines, circles, arcs and polylines of a text DXF drawing into a new sketch (the ends that meet become one point, so closed outlines can be raised from a face or cut into it) and writes it as a sketch file; what is not read (text, dimensions, splines, ...) is counted and told; --layers reads only the entities of the layers named and counts the others, --list-layers prints the layers of the drawing with their entities and writes nothing; the unit is that of the drawing (mm without --unit; auto reads it from the header of the drawing and tells where it came from), the sketch lies on the face given (front without --face), and its name is the one of the file without --name
   eh3d-phoenix-cad section PROJECT.phoenixproj --axis x|y|z --at LENGTH [--format dxf|svg] [--out FILE] [--overwrite] [--lang CODE] [--config FILE]   cuts the solids of a project (the box, the parts and the turned and swept bodies) with the plane across an axis at a position (a length: 15, 15 mm, 0.5 in) and prints the outlines and the area of the material; with --out the section is written as a DXF or SVG drawing (the format is --format or the extension of the file; never over a file that exists unless --overwrite is given)
   eh3d-phoenix-cad library FILE.phoenixlib [--config FILE]                        reads a library of parts, checks it and lists its parts
-  eh3d-phoenix-cad mesh-info FILE.stl|.obj|.3mf                                   reads a file of triangles (the ones this program writes or another program's stored 3MF) and prints, for each solid in it, its vertices, triangles, whether its surface is closed, its volume, its surface and its size; it exits with 0 when every solid is closed and with 1 when one is not
+  eh3d-phoenix-cad mesh-info FILE.stl|.obj|.3mf|.step|.stp [--density KG_M3 | --material NAME] [--config FILE]   reads a file of triangles (the ones this program writes or another program's stored 3MF) or a STEP file of solids made of flat faces (the limits are mesh.step_max_kib, mesh.step_max_entities and mesh.step_max_faces; a face on a cylinder, a surface of revolution or a curved edge is refused with the entity and its name) and prints, for each solid in it, its vertices, triangles, whether its surface is closed, its volume, its surface and its size, and, for a prism along an axis, its height and outlines; with a density (or a material of the settings) also its mass, centre of mass and tensor of inertia; it exits with 0 when every solid is closed and with 1 when one is not
   eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill|order [--view top|front|side|sheet] [--out FILE] [--overwrite] [--ascii|--binary] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), as a Wavefront file (obj) or as a 3MF package (3mf), the plan, front or side, or all three on one sheet, as a drawing (dxf, svg), the STEP file, the OpenSCAD-style script, the fit report, the bill of materials or the order sheet (an HTML page with the bars to buy, the holes to drill and the parts with their cost, in the language of --lang)
   eh3d-phoenix-cad faces PROJECT.phoenixproj --from FACE[:inner|:outer] --to FACE[:inner|:outer] [--lang CODE] [--config FILE]   measures between two faces of the box (front, back, left, right, top or bottom, the outer face of the wall unless :inner is given): the distance in millimetres between parallel faces (a wall, the inner height, the outer width) and the angle, 0 for parallel faces and 90 for faces that meet; the same face on the same side is refused
   eh3d-phoenix-cad sketch-edit SKETCH.phoenixsketch --op chamfer|trim|extend|linear|circular|offset [--out FILE] [--overwrite] [--config FILE] ...   edits a sketch file the way the buttons of the sketch window do (elements are named as in the file, like e5; lengths are in mm or with a unit): chamfer --lines e5,e6 --distance 3; trim --line e5 --cutter e6 [--drop e1]; extend --line e5 --to e6; linear --items e1,e2 --step DX,DY --count N; circular --items e1 --center e3 --count N [--step DEGREES]; offset --items e5,e6,e7,e8 --distance D (negative goes inwards); the edited sketch is written to --out, or over the file itself with --overwrite, and a refused edit writes nothing
@@ -630,6 +630,7 @@ fn run_sketch_export(args: &[String]) -> Result<bool, String> {
     let mut out: Option<PathBuf> = None;
     let mut word: Option<String> = None;
     let mut name: Option<String> = None;
+    let mut height: Option<String> = None;
     let mut overwrite = false;
     let mut lang = Lang::En;
     let mut iter = args.iter();
@@ -640,7 +641,14 @@ fn run_sketch_export(args: &[String]) -> Result<bool, String> {
                     iter.next().ok_or("--config needs a settings file")?,
                 ));
             }
-            "--format" => word = Some(iter.next().ok_or("--format needs dxf or svg")?.clone()),
+            "--format" => {
+                word = Some(
+                    iter.next()
+                        .ok_or("--format needs dxf, svg or step")?
+                        .clone(),
+                );
+            }
+            "--height" => height = Some(iter.next().ok_or("--height needs a length")?.clone()),
             "--sketch" => name = Some(iter.next().ok_or("--sketch needs a name")?.clone()),
             "--out" => out = Some(PathBuf::from(iter.next().ok_or("--out needs a file")?)),
             "--overwrite" => overwrite = true,
@@ -658,27 +666,51 @@ fn run_sketch_export(args: &[String]) -> Result<bool, String> {
         }
     }
     let file = file.ok_or("sketch-export needs a project or a sketch file")?;
-    let dxf = match word.as_deref().ok_or("sketch-export needs --format")? {
-        "dxf" => true,
-        "svg" => false,
-        other => return Err(format!("{other}: unknown format (dxf or svg)")),
+    let (dxf, step) = match word.as_deref().ok_or("sketch-export needs --format")? {
+        "dxf" => (true, false),
+        "svg" => (false, false),
+        "step" => (false, true),
+        other => return Err(format!("{other}: unknown format (dxf, svg or step)")),
     };
+    if height.is_some() && !step {
+        return Err("--height is for --format step".to_owned());
+    }
     let (sketch, project, settings, ui, solver) =
         read_sketch(&file, name.as_deref(), config.as_deref(), lang)?;
-    let text = eh3d_phoenix_cad::sketch_export::render_titled(
-        &sketch,
-        &solver,
-        &settings.drawing,
-        dxf,
-        &settings.title_block,
-        lang,
-    )
-    .map_err(|e| error_text(&e, lang))?;
+    let text = if step {
+        let raised = eh3d_phoenix_cad::units::parse_length(
+            height.as_deref().ok_or("--format step needs --height")?,
+        )
+        .map_err(|e| error_text(&e, lang))?;
+        let profile = eh3d_phoenix_cad::profile::Profile::from_sketch(
+            &sketch,
+            &eh3d_phoenix_cad::profile::ProfileLimits::from_settings(&solver),
+        )
+        .map_err(|e| error_text(&e, lang))?;
+        eh3d_phoenix_cad::step::prism_to_step(sketch.name(), &profile, 0, raised.get())
+            .map_err(|e| error_text(&e, lang))?
+    } else {
+        eh3d_phoenix_cad::sketch_export::render_titled(
+            &sketch,
+            &solver,
+            &settings.drawing,
+            dxf,
+            &settings.title_block,
+            lang,
+        )
+        .map_err(|e| error_text(&e, lang))?
+    };
     let target = out.unwrap_or_else(|| {
         PathBuf::from(format!(
             "{}.{}",
             sketch.name(),
-            if dxf { "dxf" } else { "svg" }
+            if step {
+                "step"
+            } else if dxf {
+                "dxf"
+            } else {
+                "svg"
+            }
         ))
     });
     let written = eh3d_phoenix_cad::export::write_file(
@@ -975,14 +1007,52 @@ fn run_library(args: &[String]) -> Result<bool, String> {
     Ok(true)
 }
 
-/// `mesh-info`: reads an STL, OBJ or 3MF file and, for each solid in it, prints the number of
-/// vertices and triangles, whether the surface is closed, the volume, the surface and the size.
-/// The answer is whether every solid is closed.
+/// `mesh-info`: reads an STL, OBJ, 3MF or STEP file and, for each solid in it, prints the number
+/// of vertices and triangles, whether the surface is closed, the volume, the surface and the size
+/// and, when the solid is a prism, its axis, height and outlines; with a density (`--density` or
+/// a `--material` of the settings) also its mass, centre of mass and tensor of inertia. The answer
+/// is whether every solid is closed.
 fn run_mesh_info(args: &[String]) -> Result<bool, String> {
-    let (file, _) = file_and_config(args, "mesh file")?;
+    let mut rest: Vec<String> = Vec::new();
+    let mut density_text: Option<String> = None;
+    let mut material: Option<String> = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--density" => {
+                density_text = Some(iter.next().ok_or("--density needs kg/m3")?.clone());
+            }
+            "--material" => {
+                material = Some(iter.next().ok_or("--material needs a name")?.clone());
+            }
+            other => rest.push(other.to_owned()),
+        }
+    }
+    let (file, config) = file_and_config(&rest, "mesh file")?;
+    let (settings, _) = load_settings(config.as_deref())?;
+    let density: Option<f64> = match (density_text, material) {
+        (Some(_), Some(_)) => {
+            return Err("--density and --material cannot be given together".to_owned());
+        }
+        (Some(text), None) => match text.parse::<u32>() {
+            Ok(d) if (1..=100_000).contains(&d) => Some(f64::from(d)),
+            _ => {
+                return Err(format!(
+                    "{text}: --density must be a whole number of kilograms per cubic metre from 1 to 100000"
+                ));
+            }
+        },
+        (None, Some(name)) => {
+            Some(f64::from(*settings.materials.get(&name).ok_or_else(
+                || format!("{name}: not a material of the settings"),
+            )?))
+        }
+        (None, None) => None,
+    };
     let bytes = std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
     let name = file.to_string_lossy();
-    let bodies = eh3d_phoenix_cad::interchange::read_file_bytes(&name, &bytes)
+    let limits = eh3d_phoenix_cad::step_import::StepLimits::from_settings(&settings.mesh);
+    let bodies = eh3d_phoenix_cad::interchange::read_file_bytes_limited(&name, &bytes, &limits)
         .map_err(|e| format!("{}: {e}", file.display()))?;
     println!("{}: {} solids", file.display(), bodies.len());
     let mut all_closed = true;
@@ -1012,6 +1082,44 @@ fn run_mesh_info(args: &[String]) -> Result<bool, String> {
             mesh.volume_nm3() / 1.0e18,
             area / 1.0e12
         );
+        if let Ok(prism) = mesh.as_prism() {
+            let corners: usize = prism.outlines.iter().map(Vec::len).sum();
+            println!(
+                "    prism along {}: {:.3} mm high from {} = {:.3} mm, {} outlines with {corners} corners, floor {:.3} mm2",
+                ["x", "y", "z"][prism.axis],
+                prism.height / 1.0e6,
+                ["x", "y", "z"][prism.axis],
+                prism.low / 1.0e6,
+                prism.outlines.len(),
+                prism.area_nm2 / 1.0e12
+            );
+        }
+        if let Some(rho) = density {
+            match (mesh.centroid_nm(), mesh.inertia_nm5()) {
+                (Some(c), Some(t)) => {
+                    let volume = mesh.volume_nm3().abs() / 1.0e18;
+                    // grams: a cubic millimetre of a material of rho kg/m3 weighs rho * 1e-6 g
+                    let grams = volume * rho * 1.0e-6;
+                    let k = rho * 1.0e-36;
+                    println!(
+                        "    mass {grams:.3} g at {rho} kg/m3, centre of mass {:.3} {:.3} {:.3} mm",
+                        c[0] / 1.0e6,
+                        c[1] / 1.0e6,
+                        c[2] / 1.0e6
+                    );
+                    println!(
+                        "    inertia about the centre of mass (g mm2): xx {:.3} yy {:.3} zz {:.3} xy {:.3} xz {:.3} yz {:.3}",
+                        t[0][0] * k,
+                        t[1][1] * k,
+                        t[2][2] * k,
+                        t[0][1] * k,
+                        t[0][2] * k,
+                        t[1][2] * k
+                    );
+                }
+                _ => println!("    no mass: the solid holds no volume"),
+            }
+        }
     }
     Ok(all_closed)
 }

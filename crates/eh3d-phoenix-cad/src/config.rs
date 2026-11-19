@@ -293,9 +293,21 @@ pub struct MeshSettings {
     /// How far, in parts per million of the volume of the model, the volume of the triangles may
     /// be from the exact volume.
     pub volume_tolerance_ppm: u32,
+    /// The largest STEP file that is read, in kibibytes.
+    pub step_max_kib: u32,
+    /// The most entities (lines of the data section) of a STEP file that is read.
+    pub step_max_entities: u32,
+    /// The most faces of a STEP file that is read.
+    pub step_max_faces: u32,
 }
 
 impl MeshSettings {
+    /// The most kibibytes of a STEP file that can be asked for.
+    pub const STEP_KIB_CAP: u32 = 1_048_576;
+    /// The most entities of a STEP file that can be asked for.
+    pub const STEP_ENTITIES_CAP: u32 = 50_000_000;
+    /// The most faces of a STEP file that can be asked for.
+    pub const STEP_FACES_CAP: u32 = 10_000_000;
     /// The least sides of a circle.
     pub const MIN_SEGMENTS: u32 = 8;
     /// The most sides of a circle.
@@ -335,11 +347,35 @@ impl MeshSettings {
                 Self::TOLERANCE_CAP_PPM
             )));
         }
+        let step_max_kib = c.number("mesh.step_max_kib")?;
+        if !(1..=Self::STEP_KIB_CAP).contains(&step_max_kib) {
+            return Err(CadError::Config(format!(
+                "mesh.step_max_kib must be from 1 to {}",
+                Self::STEP_KIB_CAP
+            )));
+        }
+        let step_max_entities = c.number("mesh.step_max_entities")?;
+        if !(10..=Self::STEP_ENTITIES_CAP).contains(&step_max_entities) {
+            return Err(CadError::Config(format!(
+                "mesh.step_max_entities must be from 10 to {}",
+                Self::STEP_ENTITIES_CAP
+            )));
+        }
+        let step_max_faces = c.number("mesh.step_max_faces")?;
+        if !(6..=Self::STEP_FACES_CAP).contains(&step_max_faces) {
+            return Err(CadError::Config(format!(
+                "mesh.step_max_faces must be from 6 to {}",
+                Self::STEP_FACES_CAP
+            )));
+        }
         Ok(MeshSettings {
             circle_segments,
             max_triangles,
             binary,
             volume_tolerance_ppm,
+            step_max_kib,
+            step_max_entities,
+            step_max_faces,
         })
     }
 }
@@ -1614,6 +1650,9 @@ markup_percent = 1000
                 max_triangles: 400_000,
                 binary: true,
                 volume_tolerance_ppm: 2000,
+                step_max_kib: 65_536,
+                step_max_entities: 1_000_000,
+                step_max_faces: 100_000,
             }
         );
         assert_eq!(
