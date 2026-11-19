@@ -698,3 +698,100 @@ fn the_layers_of_a_dxf_drawing_are_listed_and_chosen_when_it_is_read() {
     assert_ne!(code, 0);
     assert!(err.contains("--layers needs"), "{err}");
 }
+
+#[test]
+fn the_unit_of_a_dxf_drawing_can_be_read_from_its_header() {
+    let dir = Scratch::new("sketch-import-auto");
+    let body =
+        "0\nLINE\n8\n0\n10\n0\n20\n0\n11\n2\n21\n0\n0\nLINE\n8\n0\n10\n2\n20\n0\n11\n2\n21\n2\n\
+0\nLINE\n8\n0\n10\n2\n20\n2\n11\n0\n21\n2\n0\nLINE\n8\n0\n10\n0\n20\n2\n11\n0\n21\n0\n";
+    let with = |unit: &str| {
+        format!(
+            "0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n{unit}\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n{body}0\nENDSEC\n0\nEOF\n"
+        )
+    };
+    let inches = dir.file("inches.dxf");
+    fs::write(&inches, with("1")).unwrap();
+    let unitless = dir.file("unitless.dxf");
+    fs::write(&unitless, with("0")).unwrap();
+    // a header that says inches makes the square of two units 50.8 mm across
+    let sketch = dir.file("inches.phoenixsketch");
+    let (code, out, err) = run(&["sketch-import", &inches, "--unit", "auto", "--out", &sketch]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.starts_with("read: 4 lines, 0 circles, 0 arcs\n"),
+        "{out}"
+    );
+    assert!(out.contains("unit read from the drawing: in\n"), "{out}");
+    let svg = dir.file("inches.svg");
+    let (code, _, err) = run(&["sketch-export", &sketch, "--format", "svg", "--out", &svg]);
+    assert_eq!(code, 0, "{err}");
+    // the sheet is the square plus its margin of 14 mm on each side: 50.8 + 28 = 78.8
+    let drawn = fs::read_to_string(&svg).unwrap();
+    assert!(drawn.contains("viewBox=\"0 0 78.8 78.8\""), "{drawn}");
+    // the words follow --lang, and a header without a unit is read in millimetres and says so
+    let plain = dir.file("unitless.phoenixsketch");
+    let (code, out, err) = run(&[
+        "sketch-import",
+        &unitless,
+        "--unit",
+        "auto",
+        "--lang",
+        "es",
+        "--out",
+        &plain,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.contains("el dibujo no dice su unidad, así que se usa mm\n"),
+        "{out}"
+    );
+    // without --unit nothing is said about it and the header is not read
+    let quiet = dir.file("quiet.phoenixsketch");
+    let (code, out, err) = run(&["sketch-import", &inches, "--out", &quiet]);
+    assert_eq!(code, 0, "{err}");
+    assert!(!out.contains("unit"), "{out}");
+    // --unit still needs a value and refuses a word that is no unit
+    let (code, _, err) = run(&["sketch-import", &inches, "--unit"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("--unit needs"), "{err}");
+}
+
+#[test]
+fn the_bill_can_be_added_up_by_part_name() {
+    let (code, csv, err) = run(&["bom", FRAME, "--group", "name"]);
+    assert_eq!(code, 0, "{err}");
+    let rows: Vec<Vec<&str>> = csv.lines().map(|l| l.split(',').collect()).collect();
+    assert_eq!(
+        rows[0],
+        [
+            "name",
+            "lines",
+            "pieces",
+            "volume_mm3",
+            "mass_g",
+            "cost",
+            "currency"
+        ]
+    );
+    let n = rows.len();
+    assert_eq!(rows[n - 1][0], "total");
+    assert_eq!(rows[n - 1][2], "18");
+    let pieces: u32 = rows[1..n - 1]
+        .iter()
+        .map(|r| r[2].parse::<u32>().unwrap())
+        .sum();
+    assert_eq!(pieces, 18, "{csv}");
+    // the names come in order and none is repeated
+    let names: Vec<&str> = rows[1..n - 1].iter().map(|r| r[0]).collect();
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(names, sorted);
+    let (code, text, _) = run(&["bom", FRAME, "--group", "name", "--text", "--lang", "de"]);
+    assert_eq!(code, 0);
+    assert!(text.starts_with("Summen nach Teilename\n"), "{text}");
+    let (code, _, err) = run(&["bom", FRAME, "--group", "size"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("not material, kind or name"), "{err}");
+}
