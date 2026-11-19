@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.0.9] - STEP reading and writing of flat solids, sheets with paper sizes and scales, sketch tools and mass properties
+
 - **STEP files of solids made of flat faces are read:** `step_import::read_step` reads the solids a STEP file names (`MANIFOLD_SOLID_BREP`, `BREP_WITH_VOIDS` with its voids and `FACETED_BREP`) when their faces lie on planes and are bounded by loops of straight edges (or a `POLY_LOOP`), with holes as further bounds, and gives each one as a closed surface of triangles in nanometres with its normals out of the material (a void turned inward, whichever way the file walked the faces); the file this program writes for a box without holes is read back to the exact volume of its walls. A corner more than a micron off the plane of its face, a face with no area, a loop that does not close, a plane that does not agree with its corners and a coordinate more than a thousand kilometres from the origin are refused with the number of the entity. 5 tests.
 
 - **The unit of a STEP file that is read:** the length unit the file names (millimetre, centimetre, metre, micron, kilometre, inch or foot, as `SI_UNIT` or a conversion-based unit) scales every coordinate to whole nanometres, a file that names none is in millimetres, and a unit that is not one of those is refused. 1 test.
