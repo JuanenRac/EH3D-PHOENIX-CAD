@@ -259,6 +259,19 @@ pub enum Constraint {
     Collinear(ElementId, ElementId),
     /// Two circles or arcs have the same centre.
     Concentric(ElementId, ElementId),
+    /// Three points lie on one line.
+    CollinearPoints(ElementId, ElementId, ElementId),
+    /// The distance from `a` to `b` is the distance from `c` to `d`.
+    EqualDistance {
+        /// The first point of the first pair.
+        a: ElementId,
+        /// The second point of the first pair.
+        b: ElementId,
+        /// The first point of the second pair.
+        c: ElementId,
+        /// The second point of the second pair.
+        d: ElementId,
+    },
     /// Two points are mirror images across a line.
     SymmetricLine {
         /// The first point.
@@ -410,6 +423,8 @@ impl Constraint {
             Constraint::Equal(..) => "equal",
             Constraint::Collinear(..) => "collinear",
             Constraint::Concentric(..) => "concentric",
+            Constraint::CollinearPoints(..) => "collinear_points",
+            Constraint::EqualDistance { .. } => "equal_distance",
             Constraint::SymmetricLine { .. } => "symmetric_line",
             Constraint::SymmetricLines { .. } => "symmetric_lines",
             Constraint::SymmetricCircles { .. } => "symmetric_circles",
@@ -445,6 +460,8 @@ impl Constraint {
             | Constraint::DistanceY { a, b, .. }
             | Constraint::AngleBetween { a, b, .. } => vec![*a, *b],
             Constraint::PointOnObject { point, object } => vec![*point, *object],
+            Constraint::CollinearPoints(a, b, c) => vec![*a, *b, *c],
+            Constraint::EqualDistance { a, b, c, d } => vec![*a, *b, *c, *d],
             Constraint::Horizontal(l) | Constraint::Vertical(l) => vec![*l],
             Constraint::SymmetricLine { a, b, axis }
             | Constraint::SymmetricLines { a, b, axis }
@@ -1226,6 +1243,26 @@ impl Sketch {
                 Self::check_distinct(*a, *b)?;
                 self.need(*a, &[Circle, Arc], "a circle or an arc")?;
                 self.need(*b, &[Circle, Arc], "a circle or an arc")?;
+            }
+            Constraint::CollinearPoints(a, b, c) => {
+                Self::check_distinct(*a, *b)?;
+                Self::check_distinct(*a, *c)?;
+                Self::check_distinct(*b, *c)?;
+                for id in [a, b, c] {
+                    self.need(*id, &[Point], "a point")?;
+                }
+            }
+            Constraint::EqualDistance { a, b, c, d } => {
+                Self::check_distinct(*a, *b)?;
+                Self::check_distinct(*c, *d)?;
+                if (a, b) == (c, d) || (a, b) == (d, c) {
+                    return Err(bad_constraint(
+                        "the two pairs of points are the same pair".to_string(),
+                    ));
+                }
+                for id in [a, b, c, d] {
+                    self.need(*id, &[Point], "a point")?;
+                }
             }
             Constraint::SymmetricLine { a, b, axis } => {
                 Self::check_distinct(*a, *b)?;
@@ -2172,6 +2209,54 @@ mod tests {
         // without the constraints nothing was tied
         assert!(s.constraints().is_empty());
         s.validate().unwrap();
+    }
+
+    #[test]
+    fn collinear_points_and_equal_distances_are_checked_when_they_are_added() {
+        let mut s = sketch();
+        let a = s.add_point(mm(0), mm(0)).unwrap();
+        let b = s.add_point(mm(5), mm(0)).unwrap();
+        let c = s.add_point(mm(5), mm(5)).unwrap();
+        let d = s.add_point(mm(9), mm(9)).unwrap();
+        let line = s.add_line(a, b).unwrap();
+        for bad in [
+            Constraint::CollinearPoints(a, a, c),
+            Constraint::CollinearPoints(a, c, a),
+            Constraint::CollinearPoints(c, b, b),
+            Constraint::CollinearPoints(a, b, line),
+            Constraint::EqualDistance { a, b: a, c, d },
+            Constraint::EqualDistance { a, b, c, d: c },
+            Constraint::EqualDistance { a, b, c: a, d: b },
+            Constraint::EqualDistance { a, b, c: b, d: a },
+            Constraint::EqualDistance { a, b, c, d: line },
+        ] {
+            let err = s.add_constraint(bad.clone()).unwrap_err();
+            assert_eq!(err.code(), "PHOENIX-CAD-032", "{bad:?}");
+        }
+        assert!(s.constraints().is_empty());
+        let on = s
+            .add_constraint(Constraint::CollinearPoints(a, b, d))
+            .unwrap();
+        let equal = s
+            .add_constraint(Constraint::EqualDistance { a, b, c, d })
+            .unwrap();
+        let kinds: Vec<_> = s
+            .constraints()
+            .iter()
+            .map(|c| {
+                (
+                    c.id,
+                    c.constraint.kind_name(),
+                    c.constraint.elements().len(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![(on, "collinear_points", 3), (equal, "equal_distance", 4)]
+        );
+        assert!(!s.constraints()[0].constraint.is_dimension());
+        assert!(!s.constraints()[1].constraint.is_dimension());
     }
 
     #[test]

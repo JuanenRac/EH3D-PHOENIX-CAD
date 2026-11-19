@@ -36,6 +36,8 @@ Geometric:
 | Equal | two lines have the same length, or two circles or arcs the same radius | 1 |
 | Collinear | two lines lie on one and the same line | 2 |
 | Concentric | two circles or arcs have the same centre | 2 |
+| Collinear points | three points lie on one line | 1 |
+| Equal distance | the distance from the first point to the second is the one from the third to the fourth | 1 |
 | Symmetric about a line | two points are mirror images across a line | 2 |
 | Symmetric about a point | two points are mirror images through a point | 2 |
 | Symmetric lines | two lines are mirror images across a line (start to start, end to end) | 4 |
@@ -152,7 +154,8 @@ The window has a **Sketch** part beside the **Box** part (the switch in the top 
 | lines | horizontal, vertical (each line), parallel, perpendicular, collinear (two lines) and equal (two or more: each one is made equal to the first) |
 | a point and a line, circle or arc | point on object; with a line also midpoint |
 | a line and a circle or arc, or two of those | tangent; for two circles or arcs also concentric, and equal for two or more |
-| three points, or two points and a line | symmetric about a point, or about the line |
+| three points, or two points and a line | symmetric about a point, or about the line; for three points also collinear |
+| four points | equal distance (the first pair of points as far apart as the second) |
 | three lines, or two circles or arcs and a line | symmetric lines, or symmetric circles, across the line picked last |
 | points | fixed (each one where it is) |
 

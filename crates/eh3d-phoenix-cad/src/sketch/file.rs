@@ -108,6 +108,8 @@ fn constraint_text(c: &Constraint) -> String {
         | Constraint::Concentric(a, b)
         | Constraint::Equal(a, b) => format!("{name} {a} {b}"),
         Constraint::PointOnObject { point, object } => format!("{name} {point} {object}"),
+        Constraint::CollinearPoints(a, b, c) => format!("{name} {a} {b} {c}"),
+        Constraint::EqualDistance { a, b, c, d } => format!("{name} {a} {b} {c} {d}"),
         Constraint::Horizontal(l) | Constraint::Vertical(l) => format!("{name} {l}"),
         Constraint::SymmetricLine { a, b, axis }
         | Constraint::SymmetricLines { a, b, axis }
@@ -269,6 +271,19 @@ fn parse_constraint(
                 Constraint::Horizontal(id(0)?)
             } else {
                 Constraint::Vertical(id(0)?)
+            }
+        }
+        "collinear_points" => {
+            exactly(line, kind, words, 3)?;
+            Constraint::CollinearPoints(id(0)?, id(1)?, id(2)?)
+        }
+        "equal_distance" => {
+            exactly(line, kind, words, 4)?;
+            Constraint::EqualDistance {
+                a: id(0)?,
+                b: id(1)?,
+                c: id(2)?,
+                d: id(3)?,
             }
         }
         "symmetric_line" => {
@@ -781,6 +796,45 @@ mod tests {
             "PHOENIX-CAD-012"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn collinear_points_and_equal_distances_are_written_and_read_back() {
+        let mut k = sketch();
+        let a = k.add_point(mm(0), mm(0)).unwrap();
+        let b = k.add_point(mm(10), mm(0)).unwrap();
+        let c = k.add_point(mm(20), mm(0)).unwrap();
+        let d = k.add_point(mm(30), mm(1)).unwrap();
+        k.add_constraint(Constraint::CollinearPoints(a, b, c))
+            .unwrap();
+        k.add_constraint(Constraint::EqualDistance { a, b, c, d })
+            .unwrap();
+        let text = to_text(&k);
+        assert!(text.contains("c1 on collinear_points e1 e2 e3\n"), "{text}");
+        assert!(
+            text.contains("c2 on equal_distance e1 e2 e3 e4\n"),
+            "{text}"
+        );
+        let back = from_text(&text).unwrap();
+        assert_eq!(back, k);
+        assert_eq!(to_text(&back), text);
+        // the number of values is checked for each kind
+        for bad in [
+            "c1 on collinear_points e1 e2\n",
+            "c1 on collinear_points e1 e2 e3 e4\n",
+            "c1 on equal_distance e1 e2 e3\n",
+            "c1 on equal_distance e1 e2 e3 e4 e1\n",
+            "c1 on equal_distance e1 e2 e3 x\n",
+        ] {
+            let broken = text
+                .lines()
+                .take_while(|l| !l.starts_with("c1 "))
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n"
+                + bad;
+            assert!(from_text(&broken).is_err(), "{bad}");
+        }
     }
 
     #[test]

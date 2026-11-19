@@ -402,6 +402,14 @@ impl<'a> Model<'a> {
                 let sin = dim.value.sin() as f64 / 1e9;
                 out.push((cross * cos - dot * sin) / norm(d2));
             }
+            Constraint::CollinearPoints(a, b, c) => {
+                out.push(side(self.pt(x, *c), self.pt(x, *a), self.pt(x, *b)));
+            }
+            Constraint::EqualDistance { a, b, c, d } => {
+                out.push(
+                    dist(self.pt(x, *a), self.pt(x, *b)) - dist(self.pt(x, *c), self.pt(x, *d)),
+                );
+            }
             Constraint::Concentric(a, b) => {
                 let (p, q) = (self.center(x, *a), self.center(x, *b));
                 out.push(p.0 - q.0);
@@ -1252,6 +1260,75 @@ mod tests {
         m.add_constraint(Constraint::VerticalPoints(c, q)).unwrap();
         assert_eq!(solved(&mut m), 0);
         assert_eq!(m.point(q).unwrap(), (mm(0), mm(5)));
+    }
+
+    #[test]
+    fn three_points_are_put_on_one_line() {
+        let mut k = sketch();
+        let a = k.add_point(mm(0), mm(0)).unwrap();
+        let b = k.add_point(mm(10), mm(5)).unwrap();
+        let c = k.add_point(mm(20), mm(3)).unwrap();
+        k.fix_point(a).unwrap();
+        k.fix_point(b).unwrap();
+        k.add_constraint(Constraint::CollinearPoints(a, b, c))
+            .unwrap();
+        // the third point is free along the line and off it: one row, so one degree less
+        assert_eq!(solved(&mut k), 1);
+        let (cx, cy) = k.point(c).unwrap();
+        // it lies on the line y = x / 2 through the other two, within a nanometre
+        let off = (cy.get() * 2 - cx.get()).abs();
+        assert!(off <= 4, "{off}");
+        // a point that already is on the line stays where it is
+        let mut m = sketch();
+        let p = m.add_point(mm(0), mm(0)).unwrap();
+        let q = m.add_point(mm(4), mm(4)).unwrap();
+        let r = m.add_point(mm(9), mm(9)).unwrap();
+        m.add_constraint(Constraint::CollinearPoints(p, q, r))
+            .unwrap();
+        solved(&mut m);
+        assert_eq!(m.point(r).unwrap(), (mm(9), mm(9)));
+    }
+
+    #[test]
+    fn two_pairs_of_points_are_the_same_distance_apart() {
+        let mut k = sketch();
+        let a = k.add_point(mm(0), mm(0)).unwrap();
+        let b = k.add_point(mm(3), mm(4)).unwrap();
+        let c = k.add_point(mm(10), mm(0)).unwrap();
+        let d = k.add_point(mm(10), mm(2)).unwrap();
+        for p in [a, b, c] {
+            k.fix_point(p).unwrap();
+        }
+        k.add_constraint(Constraint::EqualDistance { a, b, c, d })
+            .unwrap();
+        assert_eq!(solved(&mut k), 1);
+        let (dx, dy) = k.point(d).unwrap();
+        let (cx, cy) = k.point(c).unwrap();
+        let (ex, ey) = ((dx.get() - cx.get()) as f64, (dy.get() - cy.get()) as f64);
+        let span = (ex * ex + ey * ey).sqrt();
+        assert!((span - 5e6).abs() < 50.0, "{span}");
+        // with a dimension on the second pair the first one follows it
+        let mut m = sketch();
+        let a = m.add_point(mm(0), mm(0)).unwrap();
+        let b = m.add_point(mm(7), mm(0)).unwrap();
+        let c = m.add_point(mm(0), mm(5)).unwrap();
+        let d = m.add_point(mm(3), mm(5)).unwrap();
+        m.fix_point(a).unwrap();
+        m.fix_point(c).unwrap();
+        m.add_constraint(Constraint::HorizontalPoints(a, b))
+            .unwrap();
+        m.add_constraint(Constraint::HorizontalPoints(c, d))
+            .unwrap();
+        m.add_constraint(Constraint::Distance {
+            a: c,
+            b: d,
+            dim: Dim::fixed(mm(4)),
+        })
+        .unwrap();
+        m.add_constraint(Constraint::EqualDistance { a, b, c, d })
+            .unwrap();
+        assert_eq!(solved(&mut m), 0);
+        assert_eq!(m.point(b).unwrap(), (mm(4), mm(0)));
     }
 
     #[test]

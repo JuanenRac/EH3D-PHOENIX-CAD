@@ -794,8 +794,8 @@ fn constraint_msg(c: &Constraint) -> Msg {
         Constraint::Parallel(..) => Msg::CoParallel,
         Constraint::Perpendicular(..) => Msg::CoPerpendicular,
         Constraint::Tangent(..) => Msg::CoTangent,
-        Constraint::Equal(..) => Msg::CoEqual,
-        Constraint::Collinear(..) => Msg::CoCollinear,
+        Constraint::Equal(..) | Constraint::EqualDistance { .. } => Msg::CoEqual,
+        Constraint::Collinear(..) | Constraint::CollinearPoints(..) => Msg::CoCollinear,
         Constraint::Concentric(..) => Msg::CoConcentric,
         Constraint::SymmetricLine { .. } | Constraint::SymmetricPoint { .. } => Msg::CoSymmetric,
         Constraint::SymmetricLines { .. } => Msg::CoSymmetricLines,
@@ -831,8 +831,8 @@ fn marker_of(c: &Constraint) -> Option<&'static str> {
         Constraint::Parallel(..) => Some("//"),
         Constraint::Perpendicular(..) => Some("+"),
         Constraint::Tangent(..) => Some("T"),
-        Constraint::Equal(..) => Some("="),
-        Constraint::Collinear(..) => Some("CL"),
+        Constraint::Equal(..) | Constraint::EqualDistance { .. } => Some("="),
+        Constraint::Collinear(..) | Constraint::CollinearPoints(..) => Some("CL"),
         Constraint::Concentric(..) => Some("CN"),
         Constraint::Coincident(..) => Some("C"),
         Constraint::PointOnObject { .. } => Some("O"),
@@ -1711,6 +1711,17 @@ impl SketchEditor {
                     .iter()
                     .map(|other| Constraint::Equal(all[0], *other))
                     .collect()
+            }
+            ConstraintTool::Collinear if all.len() == 3 && points.len() == 3 => {
+                vec![Constraint::CollinearPoints(points[0], points[1], points[2])]
+            }
+            ConstraintTool::Equal if all.len() == 4 && points.len() == 4 => {
+                vec![Constraint::EqualDistance {
+                    a: points[0],
+                    b: points[1],
+                    c: points[2],
+                    d: points[3],
+                }]
             }
             ConstraintTool::Concentric if all.len() == 2 && rounds.len() == 2 => {
                 vec![Constraint::Concentric(rounds[0], rounds[1])]
@@ -4333,6 +4344,53 @@ mod tests {
         // a circle, a line and a point do not fit
         pick(&mut e, &[r1.0, axis.0, a.0]);
         assert!(!e.available().contains(&ConstraintTool::Symmetric));
+    }
+
+    #[test]
+    fn three_points_can_be_made_collinear_and_four_points_two_equal_distances() {
+        let mut e = editor();
+        let mut ids = Vec::new();
+        for (x, y) in [(0.0, 0.0), (10.0, 0.0), (20.0, 5.0), (30.0, 5.0)] {
+            ids.push(e.sketch.add_point(mm(x), mm(y)).unwrap());
+        }
+        let n: Vec<u32> = ids.iter().map(|i| i.0).collect();
+        pick(&mut e, &n[..3]);
+        assert!(e.available().contains(&ConstraintTool::Collinear));
+        assert!(e.available().contains(&ConstraintTool::Symmetric));
+        assert!(!e.available().contains(&ConstraintTool::Equal));
+        pick(&mut e, &n);
+        assert!(e.available().contains(&ConstraintTool::Equal));
+        assert!(!e.available().contains(&ConstraintTool::Collinear));
+        // two points are not enough for either
+        pick(&mut e, &n[..2]);
+        assert!(!e.available().contains(&ConstraintTool::Collinear));
+        assert!(!e.available().contains(&ConstraintTool::Equal));
+        pick(&mut e, &n[..3]);
+        e.add_constraint(ConstraintTool::Collinear);
+        pick(&mut e, &n);
+        e.add_constraint(ConstraintTool::Equal);
+        let kinds: Vec<_> = e
+            .sketch
+            .constraints()
+            .iter()
+            .map(|c| c.constraint.clone())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                Constraint::CollinearPoints(ids[0], ids[1], ids[2]),
+                Constraint::EqualDistance {
+                    a: ids[0],
+                    b: ids[1],
+                    c: ids[2],
+                    d: ids[3],
+                },
+            ]
+        );
+        assert_eq!(constraint_msg(&kinds[0]), Msg::CoCollinear);
+        assert_eq!(constraint_msg(&kinds[1]), Msg::CoEqual);
+        assert_eq!(marker_of(&kinds[0]), Some("CL"));
+        assert_eq!(marker_of(&kinds[1]), Some("="));
     }
 
     #[test]
