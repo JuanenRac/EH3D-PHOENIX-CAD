@@ -38,6 +38,8 @@ Geometric:
 | Concentric | two circles or arcs have the same centre | 2 |
 | Collinear points | three points lie on one line | 1 |
 | Equal distance | the distance from the first point to the second is the one from the third to the fourth | 1 |
+| Equidistant | a point is as far from a second point as it is from a third (it lies on the perpendicular bisector of the two) | 1 |
+| Equal angle | the angle from the first line to the second is the angle from the third line to the fourth (a pair is read in its order, so the same two lines in the other order make the opposite angle) | 1 |
 | Symmetric about a line | two points are mirror images across a line | 2 |
 | Symmetric about a point | two points are mirror images through a point | 2 |
 | Symmetric lines | two lines are mirror images across a line (start to start, end to end) | 4 |

@@ -410,6 +410,23 @@ impl<'a> Model<'a> {
                     dist(self.pt(x, *a), self.pt(x, *b)) - dist(self.pt(x, *c), self.pt(x, *d)),
                 );
             }
+            Constraint::Equidistant { point, a, b } => {
+                let p = self.pt(x, *point);
+                out.push(dist(p, self.pt(x, *a)) - dist(p, self.pt(x, *b)));
+            }
+            Constraint::EqualAngle { a, b, c, d } => {
+                let ((p1, q1), (p2, q2)) = (self.line_ends(x, *a), self.line_ends(x, *b));
+                let ((p3, q3), (p4, q4)) = (self.line_ends(x, *c), self.line_ends(x, *d));
+                let (d1, d2) = ((q1.0 - p1.0, q1.1 - p1.1), (q2.0 - p2.0, q2.1 - p2.1));
+                let (d3, d4) = ((q3.0 - p3.0, q3.1 - p3.1), (q4.0 - p4.0, q4.1 - p4.1));
+                let (cross1, dot1) = (d1.0 * d2.1 - d1.1 * d2.0, d1.0 * d2.0 + d1.1 * d2.1);
+                let (cross2, dot2) = (d3.0 * d4.1 - d3.1 * d4.0, d3.0 * d4.0 + d3.1 * d4.1);
+                // the sine of the difference of the two angles, times the mean length of the
+                // second lines of the pairs so that the row is a length like the others
+                let sine =
+                    (cross1 * dot2 - dot1 * cross2) / (norm(d1) * norm(d2) * norm(d3) * norm(d4));
+                out.push(sine * (norm(d2) + norm(d4)) / 2.0);
+            }
             Constraint::Concentric(a, b) => {
                 let (p, q) = (self.center(x, *a), self.center(x, *b));
                 out.push(p.0 - q.0);
@@ -1329,6 +1346,92 @@ mod tests {
             .unwrap();
         assert_eq!(solved(&mut m), 0);
         assert_eq!(m.point(b).unwrap(), (mm(4), mm(0)));
+    }
+
+    #[test]
+    fn a_point_is_put_as_far_from_two_points_as_from_the_other() {
+        let mut k = sketch();
+        let a = k.add_point(mm(0), mm(0)).unwrap();
+        let b = k.add_point(mm(10), mm(0)).unwrap();
+        let p = k.add_point(mm(3), mm(4)).unwrap();
+        k.fix_point(a).unwrap();
+        k.fix_point(b).unwrap();
+        k.add_constraint(Constraint::Equidistant { point: p, a, b })
+            .unwrap();
+        // the point may slide along the perpendicular bisector: one degree of freedom left
+        assert_eq!(solved(&mut k), 1);
+        let (px, _) = k.point(p).unwrap();
+        assert!((px.get() - 5_000_000).abs() <= 4, "{}", px.get());
+        // with a height given it is the apex of an isosceles triangle
+        let mut m = sketch();
+        let a = m.add_point(mm(0), mm(0)).unwrap();
+        let b = m.add_point(mm(8), mm(0)).unwrap();
+        let p = m.add_point(mm(3), mm(2)).unwrap();
+        m.fix_point(a).unwrap();
+        m.fix_point(b).unwrap();
+        m.add_constraint(Constraint::Equidistant { point: p, a, b })
+            .unwrap();
+        m.add_constraint(Constraint::Distance {
+            a: p,
+            b: a,
+            dim: Dim::fixed(mm(5)),
+        })
+        .unwrap();
+        assert_eq!(solved(&mut m), 0);
+        let (px, py) = m.point(p).unwrap();
+        assert!((px.get() - 4_000_000).abs() <= 4, "{}", px.get());
+        assert!((py.get() - 3_000_000).abs() <= 4, "{}", py.get());
+    }
+
+    #[test]
+    fn two_pairs_of_lines_make_the_same_angle() {
+        let mut k = sketch();
+        let p0 = k.add_point(mm(0), mm(0)).unwrap();
+        let p1 = k.add_point(mm(10), mm(0)).unwrap();
+        let p2 = k.add_point(mm(10), mm(10)).unwrap();
+        let p3 = k.add_point(mm(0), mm(20)).unwrap();
+        let p4 = k.add_point(mm(10), mm(20)).unwrap();
+        let p5 = k.add_point(mm(12), mm(29)).unwrap();
+        for p in [p0, p1, p2, p3, p4] {
+            k.fix_point(p).unwrap();
+        }
+        let l1 = k.add_line(p0, p1).unwrap();
+        let l2 = k.add_line(p0, p2).unwrap();
+        let l3 = k.add_line(p3, p4).unwrap();
+        let l4 = k.add_line(p3, p5).unwrap();
+        k.add_constraint(Constraint::EqualAngle {
+            a: l1,
+            b: l2,
+            c: l3,
+            d: l4,
+        })
+        .unwrap();
+        // the end of the last line slides along a ray at 45 degrees: one degree of freedom
+        assert_eq!(solved(&mut k), 1);
+        let (x, y) = k.point(p5).unwrap();
+        let off = (y.get() - 20_000_000 - x.get()).abs();
+        assert!(off <= 20, "{off}");
+        assert!(x.get() > 0);
+        // a pair of equal angles that already are equal changes nothing
+        let mut m = sketch();
+        let a = m.add_point(mm(0), mm(0)).unwrap();
+        let b = m.add_point(mm(4), mm(0)).unwrap();
+        let c = m.add_point(mm(0), mm(3)).unwrap();
+        let e = m.add_point(mm(10), mm(0)).unwrap();
+        let f = m.add_point(mm(14), mm(0)).unwrap();
+        let g = m.add_point(mm(10), mm(3)).unwrap();
+        let (la, lb) = (m.add_line(a, b).unwrap(), m.add_line(a, c).unwrap());
+        let (lc, ld) = (m.add_line(e, f).unwrap(), m.add_line(e, g).unwrap());
+        m.add_constraint(Constraint::EqualAngle {
+            a: la,
+            b: lb,
+            c: lc,
+            d: ld,
+        })
+        .unwrap();
+        solved(&mut m);
+        assert_eq!(m.point(g).unwrap(), (mm(10), mm(3)));
+        assert_eq!(m.point(c).unwrap(), (mm(0), mm(3)));
     }
 
     #[test]

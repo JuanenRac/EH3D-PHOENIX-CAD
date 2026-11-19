@@ -794,7 +794,10 @@ fn constraint_msg(c: &Constraint) -> Msg {
         Constraint::Parallel(..) => Msg::CoParallel,
         Constraint::Perpendicular(..) => Msg::CoPerpendicular,
         Constraint::Tangent(..) => Msg::CoTangent,
-        Constraint::Equal(..) | Constraint::EqualDistance { .. } => Msg::CoEqual,
+        Constraint::Equal(..)
+        | Constraint::EqualDistance { .. }
+        | Constraint::EqualAngle { .. }
+        | Constraint::Equidistant { .. } => Msg::CoEqual,
         Constraint::Collinear(..) | Constraint::CollinearPoints(..) => Msg::CoCollinear,
         Constraint::Concentric(..) => Msg::CoConcentric,
         Constraint::SymmetricLine { .. } | Constraint::SymmetricPoint { .. } => Msg::CoSymmetric,
@@ -831,7 +834,10 @@ fn marker_of(c: &Constraint) -> Option<&'static str> {
         Constraint::Parallel(..) => Some("//"),
         Constraint::Perpendicular(..) => Some("+"),
         Constraint::Tangent(..) => Some("T"),
-        Constraint::Equal(..) | Constraint::EqualDistance { .. } => Some("="),
+        Constraint::Equal(..)
+        | Constraint::EqualDistance { .. }
+        | Constraint::EqualAngle { .. }
+        | Constraint::Equidistant { .. } => Some("="),
         Constraint::Collinear(..) | Constraint::CollinearPoints(..) => Some("CL"),
         Constraint::Concentric(..) => Some("CN"),
         Constraint::Coincident(..) => Some("C"),
