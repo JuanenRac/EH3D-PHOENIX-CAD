@@ -500,6 +500,15 @@ pub struct Rectangle {
     pub lines: [ElementId; 4],
 }
 
+/// What [`Sketch::round_corner`] made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoundedCorner {
+    /// The arc that rounds the corner.
+    pub arc: ElementId,
+    /// The radius dimension of the arc.
+    pub radius: ConstraintId,
+}
+
 /// A sketch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sketch {
@@ -841,6 +850,169 @@ impl Sketch {
         }
         self.elements.retain(|e| e.id != id);
         Ok(())
+    }
+
+    /// The two points of a line.
+    fn line_points(&self, id: ElementId) -> Result<(ElementId, ElementId), CadError> {
+        match self.element(id) {
+            Some(Element::Line { a, b }) => Ok((*a, *b)),
+            Some(_) => Err(bad_element(format!("{id} is not a line"))),
+            None => Err(CadError::UnknownName(id.to_string())),
+        }
+    }
+
+    /// Rounds the corner where two lines meet with an arc of `radius`: the lines are shortened to
+    /// the points where the arc touches them, and a new arc joins those points with a radius
+    /// dimension of its own, so the radius can be edited later (the arc starts and ends on the
+    /// lines, so it is tangent to them as it is made, but no tangent constraint is added: the
+    /// solver finds one at the end of a line redundant). The lines must share exactly one
+    /// point, the corner; that point must belong to nothing else and no constraint may be about
+    /// it. A line that has a constraint other than horizontal, vertical, parallel, perpendicular
+    /// or collinear is refused (shortening it would break the others), and so are two lines that
+    /// are collinear and a radius that needs more of a line than it has (a millimetre is always
+    /// left). The sketch is left as it was when the corner is refused.
+    pub fn round_corner(
+        &mut self,
+        a: ElementId,
+        b: ElementId,
+        radius: Length,
+    ) -> Result<RoundedCorner, CadError> {
+        let saved = self.clone();
+        let result = self.round_corner_inner(a, b, radius);
+        if result.is_err() {
+            *self = saved;
+        }
+        result
+    }
+
+    fn round_corner_inner(
+        &mut self,
+        a: ElementId,
+        b: ElementId,
+        radius: Length,
+    ) -> Result<RoundedCorner, CadError> {
+        if a == b {
+            return Err(bad_element("a corner is made of two different lines"));
+        }
+        if radius <= Length::ZERO {
+            return Err(bad_element("the radius of a corner is positive"));
+        }
+        let (a0, a1) = self.line_points(a)?;
+        let (b0, b1) = self.line_points(b)?;
+        let shared: Vec<ElementId> = [a0, a1]
+            .into_iter()
+            .filter(|p| *p == b0 || *p == b1)
+            .collect();
+        let [corner] = shared[..] else {
+            return Err(bad_element("the two lines must share one point, the corner"));
+        };
+        let far_a = if a0 == corner { a1 } else { a0 };
+        let far_b = if b0 == corner { b1 } else { b0 };
+        if self
+            .elements
+            .iter()
+            .any(|e| e.id != a && e.id != b && e.element.parts().contains(&corner))
+        {
+            return Err(bad_element("the corner point belongs to something else"));
+        }
+        for c in &self.constraints {
+            let about = c.constraint.elements();
+            let on_corner = about.contains(&corner);
+            let on_lines = about.contains(&a) || about.contains(&b);
+            let keeps = matches!(
+                c.constraint,
+                Constraint::Horizontal(_)
+                    | Constraint::Vertical(_)
+                    | Constraint::Parallel(..)
+                    | Constraint::Perpendicular(..)
+                    | Constraint::Collinear(..)
+            );
+            if on_corner || (on_lines && !keeps) {
+                return Err(bad_constraint(
+                    "a constraint is about the corner or about the length of a line",
+                ));
+            }
+        }
+        let at = |id: ElementId| -> Result<(f64, f64), CadError> {
+            let (x, y) = self.point(id)?;
+            Ok((x.get() as f64, y.get() as f64))
+        };
+        let (p, pa, pb) = (at(corner)?, at(far_a)?, at(far_b)?);
+        let (da, db) = ((pa.0 - p.0, pa.1 - p.1), (pb.0 - p.0, pb.1 - p.1));
+        let (la, lb) = (da.0.hypot(da.1), db.0.hypot(db.1));
+        let (u, v) = ((da.0 / la, da.1 / la), (db.0 / lb, db.1 / lb));
+        let cross = u.0 * v.1 - u.1 * v.0;
+        if cross.abs() < 1e-9 {
+            return Err(bad_element("the two lines are on one line: there is no corner"));
+        }
+        let half = (u.0 * v.0 + u.1 * v.1).clamp(-1.0, 1.0).acos() / 2.0;
+        let r = radius.get() as f64;
+        // how far from the corner the arc touches each line, and how far its centre is
+        let touch = r / half.tan();
+        let to_centre = r / half.sin();
+        let room = 1_000_000.0;
+        if touch + room > la || touch + room > lb {
+            return Err(bad_element(
+                "the lines are too short for this radius (a millimetre of each must be left)",
+            ));
+        }
+        let bis = (u.0 + v.0, u.1 + v.1);
+        let bl = bis.0.hypot(bis.1);
+        let place = |x: f64, y: f64| -> Result<(Length, Length), CadError> {
+            Ok((Length::new(x.round() as i64)?, Length::new(y.round() as i64)?))
+        };
+        let t1 = place(p.0 + u.0 * touch, p.1 + u.1 * touch)?;
+        let t2 = place(p.0 + v.0 * touch, p.1 + v.1 * touch)?;
+        let centre = (
+            p.0 + bis.0 / bl * to_centre,
+            p.1 + bis.1 / bl * to_centre,
+        );
+        let c = place(centre.0, centre.1)?;
+        let (t1_id, t2_id, c_id) = (
+            self.add_point(t1.0, t1.1)?,
+            self.add_point(t2.0, t2.1)?,
+            self.add_point(c.0, c.1)?,
+        );
+        // a line comes after its points in the list: the new points go before the first of the two
+        let first_line = self
+            .elements
+            .iter()
+            .position(|e| e.id == a || e.id == b)
+            .unwrap_or(0);
+        let new_points = self.elements.split_off(self.elements.len() - 3);
+        self.elements.splice(first_line..first_line, new_points);
+        for (line, new) in [(a, t1_id), (b, t2_id)] {
+            if let Some(Entry {
+                element: Element::Line { a, b },
+                ..
+            }) = self.elements.iter_mut().find(|e| e.id == line)
+            {
+                if *a == corner {
+                    *a = new;
+                } else {
+                    *b = new;
+                }
+            }
+        }
+        // the arc runs counter-clockwise: from the touch point whose turn about the centre is
+        // the earlier one
+        let turn = (t1.0.get() as f64 - c.0.get() as f64) * (t2.1.get() as f64 - c.1.get() as f64)
+            - (t1.1.get() as f64 - c.1.get() as f64) * (t2.0.get() as f64 - c.0.get() as f64);
+        let (start, end) = if turn > 0.0 {
+            (t1_id, t2_id)
+        } else {
+            (t2_id, t1_id)
+        };
+        let arc = self.add_arc(c_id, start, end)?;
+        self.elements.retain(|e| e.id != corner);
+        let dimension = self.add_constraint(Constraint::Radius {
+            round: arc,
+            dim: Dim::fixed(radius),
+        })?;
+        Ok(RoundedCorner {
+            arc,
+            radius: dimension,
+        })
     }
 
     fn check_distinct(a: ElementId, b: ElementId) -> Result<(), CadError> {
@@ -1638,5 +1810,172 @@ mod tests {
                 ("line_angle", true, 1)
             ]
         );
+    }
+
+    #[test]
+    fn a_right_angle_is_rounded_with_an_arc_that_touches_both_lines() {
+        let mut s = sketch();
+        let p = s.add_point(mm(0), mm(0)).unwrap();
+        let pa = s.add_point(mm(10), mm(0)).unwrap();
+        let pb = s.add_point(mm(0), mm(10)).unwrap();
+        let a = s.add_line(p, pa).unwrap();
+        let b = s.add_line(p, pb).unwrap();
+        let corner = s.round_corner(a, b, mm(2)).unwrap();
+        // the corner point is gone, and the lines end where the arc touches them
+        assert!(s.element(p).is_none());
+        let ends = |s: &Sketch, line: ElementId| match s.element(line) {
+            Some(Element::Line { a, b }) => (s.point(*a).unwrap(), s.point(*b).unwrap()),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(ends(&s, a), ((mm(2), mm(0)), (mm(10), mm(0))));
+        assert_eq!(ends(&s, b), ((mm(0), mm(2)), (mm(0), mm(10))));
+        // the arc has its centre 2 mm from both lines and runs counter-clockwise from the touch
+        // point on the vertical line to the touch point on the horizontal one
+        let Some(Element::Arc { center, start, end }) = s.element(corner.arc).copied() else {
+            panic!("not an arc");
+        };
+        assert_eq!(s.point(center).unwrap(), (mm(2), mm(2)));
+        assert_eq!(s.point(start).unwrap(), (mm(0), mm(2)));
+        assert_eq!(s.point(end).unwrap(), (mm(2), mm(0)));
+        // the radius is kept with the arc as a dimension that can be edited
+        assert_eq!(
+            s.constraint(corner.radius).unwrap().constraint,
+            Constraint::Radius {
+                round: corner.arc,
+                dim: Dim::fixed(mm(2))
+            }
+        );
+        s.validate().unwrap();
+        // and the solver agrees: nothing moves and the sketch is solved
+        let before = s.clone();
+        let outcome = s
+            .solve(&crate::sketch::settings::SketchSettings::defaults())
+            .unwrap();
+        assert!(
+            matches!(outcome, crate::sketch::solver::Outcome::Solved { .. }),
+            "{outcome:?}"
+        );
+        assert_eq!(s.point(center).unwrap(), before.point(center).unwrap());
+    }
+
+    #[test]
+    fn an_acute_and_an_obtuse_corner_are_rounded_with_the_arc_inside_them() {
+        for (x, y) in [(10, 10), (-10, 10), (10, -10), (-10, -10), (40, 6), (-6, 40)] {
+            let mut s = sketch();
+            let p = s.add_point(mm(0), mm(0)).unwrap();
+            let pa = s.add_point(mm(40), mm(0)).unwrap();
+            let pb = s.add_point(mm(x), mm(y)).unwrap();
+            let a = s.add_line(pa, p).unwrap();
+            let b = s.add_line(p, pb).unwrap();
+            let corner = s.round_corner(a, b, mm(1)).unwrap();
+            let Some(Element::Arc { center, start, end }) = s.element(corner.arc).copied() else {
+                panic!("not an arc");
+            };
+            let dist = |p: ElementId, q: ElementId| {
+                let (a, b) = (s.point(p).unwrap(), s.point(q).unwrap());
+                let (dx, dy) = ((a.0.get() - b.0.get()) as f64, (a.1.get() - b.1.get()) as f64);
+                dx.hypot(dy)
+            };
+            // the radius is the 1 mm that was asked for, to the rounding of a nanometre
+            assert!((dist(center, start) - 1e6).abs() < 2.0, "{x},{y}");
+            assert!((dist(center, end) - 1e6).abs() < 2.0, "{x},{y}");
+            // the sketch still holds together and the solver takes it as it is
+            s.validate().unwrap();
+            let outcome = s
+                .solve(&crate::sketch::settings::SketchSettings::defaults())
+                .unwrap();
+            assert!(
+                matches!(outcome, crate::sketch::solver::Outcome::Solved { .. }),
+                "{x},{y}: {outcome:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_corner_that_cannot_be_rounded_leaves_the_sketch_as_it_was() {
+        let mut s = sketch();
+        let p = s.add_point(mm(0), mm(0)).unwrap();
+        let pa = s.add_point(mm(10), mm(0)).unwrap();
+        let pb = s.add_point(mm(0), mm(10)).unwrap();
+        let pc = s.add_point(mm(30), mm(30)).unwrap();
+        let a = s.add_line(p, pa).unwrap();
+        let b = s.add_line(p, pb).unwrap();
+        let far = s.add_line(pa, pc).unwrap();
+        let line_pa_pb = s.add_line(pa, pb).unwrap();
+        let before = s.clone();
+        // a radius that needs more of a line than it has, or none at all
+        assert!(s.round_corner(a, b, mm(10)).is_err());
+        assert!(s.round_corner(a, b, mm(0)).is_err());
+        // lines that do not meet, the same line twice, something that is not a line
+        assert!(s.round_corner(b, far, mm(1)).is_err());
+        assert!(s.round_corner(a, a, mm(1)).is_err());
+        assert!(s.round_corner(a, p, mm(1)).is_err());
+        // lines that share two points
+        let again = s.add_line(pb, pa).unwrap();
+        let before2 = s.clone();
+        assert!(s.round_corner(line_pa_pb, again, mm(1)).is_err());
+        assert_eq!(s, before2);
+        // and nothing was left behind by the refusals before
+        assert_eq!(before.elements().len() + 1, s.elements().len());
+    }
+
+    #[test]
+    fn the_corner_of_a_polyline_is_rounded_and_the_other_corners_are_kept() {
+        let mut s = sketch();
+        let lines = s
+            .add_polyline(
+                &[(mm(0), mm(0)), (mm(20), mm(0)), (mm(20), mm(20)), (mm(0), mm(20))],
+                true,
+            )
+            .unwrap();
+        let corner = s.round_corner(lines[0], lines[1], mm(3)).unwrap();
+        // the rounded corner left a point less and an arc more; the rest of the square is whole
+        assert_eq!(s.elements().len(), 4 + 4 - 1 + 3 + 1);
+        s.validate().unwrap();
+        // a second corner of the same square can be rounded too
+        s.round_corner(lines[1], lines[2], mm(3)).unwrap();
+        assert_eq!(
+            s.elements()
+                .iter()
+                .filter(|e| e.element.kind() == Kind::Arc)
+                .count(),
+            2
+        );
+        let _ = corner;
+    }
+
+    #[test]
+    fn a_constraint_about_the_corner_or_the_length_of_a_line_refuses_the_rounding() {
+        let build = |extra: fn(&mut Sketch, ElementId, ElementId, ElementId, ElementId)| {
+            let mut s = sketch();
+            let p = s.add_point(mm(0), mm(0)).unwrap();
+            let pa = s.add_point(mm(10), mm(0)).unwrap();
+            let pb = s.add_point(mm(0), mm(10)).unwrap();
+            let a = s.add_line(p, pa).unwrap();
+            let b = s.add_line(p, pb).unwrap();
+            extra(&mut s, p, pa, a, b);
+            let r = s.round_corner(a, b, mm(1));
+            (s, r)
+        };
+        // horizontal, vertical and perpendicular stay true when the lines are shortened
+        let (_, ok) = build(|s, _, _, a, b| {
+            s.add_constraint(Constraint::Horizontal(a)).unwrap();
+            s.add_constraint(Constraint::Perpendicular(a, b)).unwrap();
+        });
+        assert!(ok.is_ok());
+        // a constraint about the corner point does not
+        let (_, no) = build(|s, p, _, _, _| {
+            s.fix_point(p).unwrap();
+        });
+        assert!(no.is_err());
+        // nor does one about the length of a line
+        let (_, no) = build(|s, _, _, a, _| {
+            s.add_constraint(Constraint::LineLength {
+                line: a,
+                dim: Dim::fixed(mm(10)),
+            })
+            .unwrap();
+        });
+        assert!(no.is_err());
     }
 }

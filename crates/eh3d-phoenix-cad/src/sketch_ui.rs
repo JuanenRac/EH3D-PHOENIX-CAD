@@ -81,6 +81,9 @@ pub struct SketchUiSettings {
     pub label_offset: f64,
     /// The pixels left empty around the drawing when it is fitted to the canvas.
     pub margin: f64,
+    /// The radius, in millimetres, that rounding a corner takes when no number is typed in the
+    /// box of the dimensions.
+    pub fillet_radius: f64,
 }
 
 fn missing(key: &str) -> CadError {
@@ -148,6 +151,7 @@ impl SketchUiSettings {
             min_grid_px: real(c, "sketch_ui.min_grid_px", 2.0, 200.0)?,
             label_offset: real(c, "sketch_ui.label_offset", 0.0, 200.0)?,
             margin: real(c, "sketch_ui.margin", 0.0, 400.0)?,
+            fillet_radius: real(c, "sketch_ui.fillet_radius", 0.001, 1000.0)?,
         };
         if s.scale_min >= s.scale_max || !(s.scale_min..=s.scale_max).contains(&s.scale) {
             return Err(CadError::Config(
@@ -1762,6 +1766,56 @@ impl SketchEditor {
             self.sketch.check_constraint(c)?;
         }
         Ok(built)
+    }
+
+    /// Whether the selection is two lines, which is what rounding a corner takes.
+    pub fn can_round_corner(&self) -> bool {
+        self.picked.constraints.is_empty()
+            && self.picked.elements.len() == 2
+            && self.picked_of(&[Kind::Line]).len() == 2
+    }
+
+    /// Rounds the corner where the two selected lines meet with an arc. The radius is the number
+    /// typed in the box of the dimensions (in the unit of the project) or, when the box is empty,
+    /// `sketch_ui.fillet_radius`; the arc keeps a radius dimension that can be edited. A refused
+    /// corner (the lines do not meet, are too short for the radius, or have constraints that the
+    /// shortening would break) leaves the sketch as it was, and the status says why. One change
+    /// of the history.
+    pub fn round_corner(&mut self) {
+        if !self.can_round_corner() {
+            self.status = Status::Problem(Msg::RoundCornerHint, Vec::new());
+            return;
+        }
+        let lines = self.picked_of(&[Kind::Line]);
+        let text = self.dim_input.trim().replace(',', ".");
+        let default = self.ui.fillet_radius;
+        let name = Msg::RoundCorner.tr(self.lang);
+        let done = self.edit(name, |s, ctx| {
+            let mm = if text.is_empty() {
+                default
+            } else {
+                text.parse::<f64>()
+                    .ok()
+                    .filter(|v| v.is_finite() && *v > 0.0)
+                    .map(|v| v * ctx.library.unit.nanometres() as f64 / NM_PER_MM)
+                    .ok_or_else(|| {
+                        CadError::SketchElement("the radius of a corner is a number".into())
+                    })?
+            };
+            let nm = i64::try_from((mm * NM_PER_MM).round() as i128).map_err(|_| {
+                CadError::SketchElement("the radius of a corner is out of range".into())
+            })?;
+            let corner = s.round_corner(lines[0], lines[1], Length::new(nm)?)?;
+            Ok((corner.arc, nm))
+        });
+        if let Some((arc, nm)) = done {
+            self.picked = Picked {
+                elements: vec![arc],
+                constraints: Vec::new(),
+            };
+            self.dim_input.clear();
+            self.status = Status::Done(Msg::CornerRounded, vec![mm_text(nm)]);
+        }
     }
 
     /// The constraints that can be added to the selection.
@@ -4284,5 +4338,96 @@ mod tests {
             Msg::CoConcentric
         );
         assert_eq!(marker_of(&Constraint::Concentric(r1, r2)), Some("CN"));
+    }
+
+    #[test]
+    fn two_lines_that_meet_are_rounded_with_the_radius_of_the_settings_or_the_one_typed() {
+        let mut e = editor();
+        rectangle(&mut e);
+        // nothing selected, one line, a point and a line: not a corner
+        assert!(!e.can_round_corner());
+        e.round_corner();
+        assert!(matches!(e.status, Status::Problem(Msg::RoundCornerHint, _)));
+        pick(&mut e, &[5]);
+        assert!(!e.can_round_corner());
+        pick(&mut e, &[1, 5]);
+        assert!(!e.can_round_corner());
+        // two sides that meet at a corner of the rectangle: 40 by 25 mm, 2 mm by default
+        pick(&mut e, &[5, 6]);
+        assert!(e.can_round_corner());
+        e.round_corner();
+        assert!(
+            matches!(&e.status, Status::Done(Msg::CornerRounded, v) if v == &vec!["2".to_owned()]),
+            "{:?}",
+            e.status
+        );
+        let arcs: Vec<_> = e
+            .sketch
+            .elements()
+            .iter()
+            .filter(|x| x.element.kind() == Kind::Arc)
+            .collect();
+        assert_eq!(arcs.len(), 1);
+        // the arc is selected, the corner is one change of the history and one undo brings it back
+        assert_eq!(e.picked.elements, vec![arcs[0].id]);
+        let lines_before = e.sketch.elements().len();
+        e.undo();
+        assert!(e.sketch.elements().iter().all(|x| x.element.kind() != Kind::Arc));
+        assert!(e.sketch.elements().len() < lines_before);
+        e.redo();
+        assert_eq!(e.sketch.elements().len(), lines_before);
+        // a typed number is the radius, in the unit of the project, and is used up
+        e.undo();
+        pick(&mut e, &[6, 7]);
+        e.dim_input = "3,5".to_owned();
+        e.round_corner();
+        assert!(
+            matches!(&e.status, Status::Done(Msg::CornerRounded, v) if v == &vec!["3.5".to_owned()]),
+            "{:?}",
+            e.status
+        );
+        assert!(e.dim_input.is_empty());
+    }
+
+    #[test]
+    fn a_corner_that_is_refused_leaves_the_sketch_and_the_history_as_they_were() {
+        let mut e = editor();
+        rectangle(&mut e);
+        let before = e.sketch.clone();
+        let can_undo = e.can_undo();
+        // a radius too large for a side of 25 mm
+        pick(&mut e, &[5, 6]);
+        e.dim_input = "30".to_owned();
+        e.round_corner();
+        assert!(matches!(e.status, Status::Error(_)), "{:?}", e.status);
+        assert_eq!(e.sketch, before);
+        assert_eq!(e.can_undo(), can_undo);
+        // not a number, or not positive
+        for text in ["abc", "0", "-2", "width / 2"] {
+            e.dim_input = text.to_owned();
+            e.round_corner();
+            assert!(matches!(e.status, Status::Error(_)), "{text}: {:?}", e.status);
+            assert_eq!(e.sketch, before, "{text}");
+        }
+        // two sides of the rectangle that do not meet
+        pick(&mut e, &[5, 7]);
+        e.dim_input.clear();
+        e.round_corner();
+        assert!(matches!(e.status, Status::Error(_)));
+        assert_eq!(e.sketch, before);
+    }
+
+    #[test]
+    fn the_radius_of_a_corner_has_a_setting_with_limits() {
+        assert_eq!(SketchUiSettings::defaults().fillet_radius, 2.0);
+        let own = SketchUiSettings::with_user_config("[sketch_ui]\nfillet_radius = 0.5\n").unwrap();
+        assert_eq!(own.fillet_radius, 0.5);
+        for bad in ["0", "-1", "1001", "x"] {
+            assert!(
+                SketchUiSettings::with_user_config(&format!("[sketch_ui]\nfillet_radius = {bad}\n"))
+                    .is_err(),
+                "{bad}"
+            );
+        }
     }
 }

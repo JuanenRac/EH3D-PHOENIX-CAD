@@ -2216,6 +2216,14 @@ impl App {
                 if let Some(tool) = add {
                     self.sketch.add_dimension(tool);
                 }
+                let can_round = self.sketch.can_round_corner();
+                if ui
+                    .add_enabled(can_round, egui::Button::new(Msg::RoundCorner.tr(lang)))
+                    .on_hover_text(Msg::RoundCornerHint.tr(lang))
+                    .clicked()
+                {
+                    self.sketch.round_corner();
+                }
                 let extend = ui.input(|i| i.modifiers.command);
                 let rows: Vec<_> = self
                     .sketch
