@@ -662,6 +662,45 @@ const TEXTS: &[Row] = &[
             "Exportação acima dos limites",
         ],
     ),
+    (
+        "PHOENIX-CAD-051",
+        [
+            "History of features not valid",
+            "Historial de operaciones no válido",
+            "Verlauf der Operationen ungültig",
+            "Historique des opérations non valide",
+            "Cronologia delle operazioni non valida",
+            "操作履歴が正しくありません",
+            "操作历史无效",
+            "Histórico de operações inválido",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-052",
+        [
+            "Feature could not be built",
+            "No se pudo construir la operación",
+            "Die Operation konnte nicht aufgebaut werden",
+            "L'opération n'a pas pu être construite",
+            "Impossibile costruire l'operazione",
+            "操作を構築できませんでした",
+            "无法构建该操作",
+            "Não foi possível construir a operação",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-053",
+        [
+            "Solid of prisms beyond the limits",
+            "Sólido de prismas por encima de los límites",
+            "Körper aus Quadern über den Grenzen",
+            "Solide de prismes au-delà des limites",
+            "Solido di prismi oltre i limiti",
+            "角柱ソリッドが上限を超えています",
+            "棱柱实体超出限制",
+            "Sólido de prismas acima dos limites",
+        ],
+    ),
 ];
 
 /// The text of a diagnostic in a language (`en`, `es`, `de`, `fr`, `it`, `ja`, `zh` or `pt`), or

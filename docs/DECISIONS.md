@@ -16,9 +16,9 @@ The design tool stores everything in its own project format, with one folder per
 
 ## Geometry kernel for mechanical work
 
-State: **proposed**.
+State: **accepted** (records 0013 and 0014).
 
-No geometry kernel has been chosen. The constraint solver of the 2D sketch is written in this repository (damped least squares over the residuals of the constraints, with no dependency) and the box, its holes, posts, lid and the extrusions and pockets of sketches are computed in integers and rounded areas without a kernel. Candidates for a kernel are compared on the same fixtures, checking robustness with degenerate input, licence compatibility with GPL-3.0-or-later and the ability to export STEP.
+No outside geometry kernel is linked. The constraint solver of the 2D sketch is written in this repository, as the crate `eh3d-phoenix-cad-solver` with no dependency. Until a CAD program has opened the plain STEP file this repository writes, the solid operations are the exact booleans between prisms aligned with the axes (`prism.rs`); a mesh evaluation may serve analysis but never the model. A general kernel is decided later, with a record of its own that states its licence, and the geometry that depends on it is limited by a setting until then.
 
 ## Stable diagnostic codes
 
