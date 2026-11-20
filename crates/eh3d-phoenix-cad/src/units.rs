@@ -631,4 +631,108 @@ mod tests {
         let shown = format_length(l(1_587_500), Unit::Millimetre, 6);
         assert_eq!(parse_length(&shown).unwrap(), l(1_587_500));
     }
+
+    /// A small generator of numbers with a fixed seed (xorshift), so that the tests below do the
+    /// same every time.
+    struct Seed(u64);
+
+    impl Seed {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn pick(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+    }
+
+    #[test]
+    fn a_length_written_with_enough_decimals_is_read_back_exactly_in_every_unit_with_a_fixed_seed()
+    {
+        let mut seed = Seed(0x2545_f491_4f6c_dd1d);
+        let span = 2_000_000_000_001u64;
+        for _ in 0..4000 {
+            let nm = (seed.next() % span) as i64 - 1_000_000_000_000;
+            let length = Length::new(nm).unwrap();
+            // a nanometre is a millionth of a millimetre and so on: these decimals hold it
+            for (unit, decimals) in [
+                (Unit::Nanometre, 0),
+                (Unit::Micrometre, 3),
+                (Unit::Millimetre, 6),
+                (Unit::Centimetre, 7),
+                (Unit::Metre, 9),
+            ] {
+                let text = format_length(length, unit, decimals);
+                assert_eq!(parse_length(&text).unwrap(), length, "{text}");
+            }
+            // an inch is 25 400 000 nm and a mil 25 400: the lengths that are whole multiples of
+            // 127 nm have 6 decimals of an inch and 3 of a mil
+            let k = (seed.next() % 15_000_000_000) as i64 - 7_500_000_000;
+            let on_127 = Length::new(k * 127).unwrap();
+            for (unit, decimals) in [(Unit::Inch, 6), (Unit::Mil, 3)] {
+                let text = format_length(on_127, unit, decimals);
+                assert_eq!(parse_length(&text).unwrap(), on_127, "{text}");
+            }
+        }
+    }
+
+    #[test]
+    fn random_texts_are_read_or_refused_and_what_is_read_can_be_written_and_read_again() {
+        const PIECES: [&str; 22] = [
+            "0",
+            "1",
+            "7",
+            "9",
+            " ",
+            ".",
+            ",",
+            "-",
+            "+",
+            "mm",
+            "um",
+            "in",
+            "mil",
+            "cm",
+            "e",
+            "x",
+            "\u{b5}",
+            "\t",
+            "1e3",
+            "00000000000000000000",
+            "m",
+            "deg",
+        ];
+        let mut seed = Seed(0x9e37_79b9_7f4a_7c15);
+        let (mut read, mut refused, mut angles) = (0, 0, 0);
+        for _ in 0..6000 {
+            let mut text = String::new();
+            for _ in 0..1 + seed.pick(9) {
+                text.push_str(PIECES[seed.pick(PIECES.len())]);
+            }
+            match parse_length(&text) {
+                Ok(length) => {
+                    read += 1;
+                    let again = format_length(length, Unit::Nanometre, 0);
+                    assert_eq!(parse_length(&again).unwrap(), length, "{text:?}");
+                }
+                Err(_) => refused += 1,
+            }
+            if let Ok(angle) = parse_angle(&text) {
+                angles += 1;
+                assert_eq!(
+                    parse_angle(&format_angle(angle)).unwrap(),
+                    angle,
+                    "{text:?}"
+                );
+            }
+        }
+        // the pieces make both kinds of text, so the test looks at both sides
+        assert!(
+            read > 30 && refused > 1000 && angles > 50,
+            "{read} {refused} {angles}"
+        );
+    }
 }

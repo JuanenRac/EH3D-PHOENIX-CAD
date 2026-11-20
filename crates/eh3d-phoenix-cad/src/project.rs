@@ -910,4 +910,62 @@ param edge_margin expr if(length > 80 mm, screw_M3_clearance, 2.5 mm)\n";
         doc.set(UNITS_DOMAIN, false, b"garbage".to_vec()).unwrap();
         assert!(doc.project_units().is_err());
     }
+
+    /// A small generator of numbers with a fixed seed (xorshift), so that the tests below do the
+    /// same every time.
+    struct Seed(u64);
+
+    impl Seed {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn pick(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+    }
+
+    #[test]
+    fn random_projects_are_written_and_read_back_equal_and_cut_ones_never_panic_with_a_fixed_seed()
+    {
+        const NAME_CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789_-";
+        let mut seed = Seed(0xd1b5_4a32_d192_ed03);
+        for _ in 0..300 {
+            let mut doc = Document::new();
+            for _ in 0..seed.pick(6) {
+                let name: String = (0..1 + seed.pick(12))
+                    .map(|_| NAME_CHARS[seed.pick(NAME_CHARS.len())] as char)
+                    .collect();
+                // any bytes at all, line ends and domain lines among them
+                let data: Vec<u8> = (0..seed.pick(60))
+                    .map(|_| match seed.pick(6) {
+                        0 => b'\n',
+                        1 => 0xff,
+                        2 => 0,
+                        _ => b'a' + seed.pick(26) as u8,
+                    })
+                    .collect();
+                doc.set(&name, seed.pick(2) == 0, data).unwrap();
+            }
+            let bytes = doc.to_bytes();
+            let back = Document::from_bytes(&bytes, bytes.len()).unwrap();
+            assert_eq!(back, doc);
+            assert_eq!(back.to_bytes(), bytes);
+            // a limit one byte short refuses the file
+            assert!(Document::from_bytes(&bytes, bytes.len() - 1).is_err());
+            // every cut of the file is read or refused, never a panic, and a cut file that is read
+            // is a document that writes back to what was read
+            for end in 0..bytes.len() {
+                if let Ok(part) = Document::from_bytes(&bytes[..end], bytes.len()) {
+                    assert_eq!(
+                        Document::from_bytes(&part.to_bytes(), bytes.len()).unwrap(),
+                        part
+                    );
+                }
+            }
+        }
+    }
 }

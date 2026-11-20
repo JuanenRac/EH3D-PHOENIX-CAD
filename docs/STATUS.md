@@ -12,6 +12,10 @@ The program has a window (egui, built with `--features gui`): a tree of the mode
 
 Besides the reports, the Reports menu has panels that work on the project. The **History of changes** panel (`Window::history_text`) lists the changes that can be undone, numbered from the oldest one kept (`undo.depth` of the settings says how many are kept), marks where the project is now and lists the changes that were undone and can be redone; **Undo**, **Redo** and **Go to step** move through them, the last one in a single move to the state after the change with the number typed (0 is the state before the oldest change kept). `panels.history_shown` of the window settings limits how many changes the list shows on each side of the present. The **Mates** panel lists the mates and the conflicts they leave and tries a new mate before it is added (see `docs/ASSEMBLY.md`), and the **Section** panel cuts several planes at once (see `docs/EXPORT.md`).
 
+## The link to the EH3D server
+
+The program can keep a project on the EH3D server and send it reports (`docs/SERVER.md`): the section `[server]` of the settings holds the seven keys of the client of the suite, the commands `server-status`, `server-list`, `server-save`, `server-load` and `server-report` save a project as a new version of its file (with the tag of the version it is made from, so nothing is overwritten without knowing), read it back and write the reports of a project into its folder `reports/`, and with no address nothing is sent anywhere. It has only been tried against a store in memory that follows the rules of the store of the server, in memory and behind a socket of the computer where the tests run; it has never talked to a real server, the window has no place for it yet, and the server has no plugin `cad` (the sheet of one is in `docs/SERVER.md`).
+
 ## Capabilities
 
 The official state of each capability is in REQUIREMENTS.md: 8 requirements: 7 `prototype` (FCAD-001, FCAD-003, FCAD-004, FCAD-005, FCAD-006, FCAD-007, FCAD-008) and 1 `planned` (FCAD-002). This page never states a state that REQUIREMENTS.md does not.
