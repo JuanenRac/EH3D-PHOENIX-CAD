@@ -634,7 +634,7 @@ fn a_dxf_drawing_is_read_into_a_sketch_that_can_be_drawn_again() {
     let other = dir.file("empty.dxf");
     fs::write(&other, "0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n").unwrap();
     for (args, why) in [
-        (vec!["sketch-import"], "needs a DXF drawing"),
+        (vec!["sketch-import"], "needs a DXF or SVG drawing"),
         (vec!["sketch-import", &other], "PHOENIX-CAD-035"),
         (
             vec!["sketch-import", &drawing, "--unit", "yard"],

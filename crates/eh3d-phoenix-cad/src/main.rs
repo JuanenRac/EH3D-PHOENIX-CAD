@@ -35,10 +35,10 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad balance PROJECT.phoenixproj [--lang CODE] [--config FILE]                     the mass of the placed parts and where their centre of mass is (exact for profiles, an estimate for screws and brackets, and the number of estimated parts is said)
   eh3d-phoenix-cad revolve PROJECT.phoenixproj|SKETCH.phoenixsketch --axis x|y [--angle DEGREES] [--sketch NAME] [--material NAME] [--out FILE.stl|.obj|.3mf [--overwrite]] [--lang CODE] [--config FILE]   turns a sketch (the only one of the project, or the one named) about its first or second axis, by a full turn unless --angle says less, and prints the volume, the surface and the distances from the axis of the solid made and, with a material of the settings, its mass; the profile must not cross the axis; with --out the triangles of the solid are written to a file of the format its extension says (never over a file that exists unless --overwrite is given)
   eh3d-phoenix-cad sweep PROFILE --path PATH [--profile-sketch NAME] [--path-sketch NAME] [--material NAME] [--out FILE.stl|.obj|.3mf [--overwrite]] [--lang CODE] [--config FILE]   sweeps the profile (a project or a sketch file, and the sketch of it) along the path (the lines and arcs of another sketch, or one circle) and prints the length of the path, the volume and the surface of the solid made and, with a material of the settings, its mass; the profile starts on the path, its first axis to the left of the way the path is walked from the free end of its first element; with --out the triangles of the solid are written as for revolve
-  eh3d-phoenix-cad sketch-import DRAWING.dxf [--out FILE.phoenixsketch] [--name NAME] [--face NAME] [--unit mm|cm|m|in|auto] [--layers NAME,NAME] [--list-layers] [--overwrite] [--lang CODE] [--config FILE]   reads the lines, circles, arcs and polylines of a text DXF drawing into a new sketch (the ends that meet become one point, so closed outlines can be raised from a face or cut into it) and writes it as a sketch file; what is not read (text, dimensions, splines, ...) is counted and told; --layers reads only the entities of the layers named and counts the others, --list-layers prints the layers of the drawing with their entities and writes nothing; the unit is that of the drawing (mm without --unit; auto reads it from the header of the drawing and tells where it came from), the sketch lies on the face given (front without --face), and its name is the one of the file without --name
+  eh3d-phoenix-cad sketch-import DRAWING.dxf|.svg [--out FILE.phoenixsketch] [--name NAME] [--face NAME] [--unit mm|cm|m|in|auto] [--layers NAME,NAME] [--list-layers] [--overwrite] [--lang CODE] [--config FILE]   reads the lines, circles, arcs and polylines of a text DXF drawing into a new sketch (the ends that meet become one point, so closed outlines can be raised from a face or cut into it) and writes it as a sketch file; what is not read (text, dimensions, splines, ...) is counted and told; --layers reads only the entities of the layers named and counts the others, --list-layers prints the layers of the drawing with their entities and writes nothing; the unit is that of the drawing (mm without --unit; auto reads it from the header of the drawing and tells where it came from), the sketch lies on the face given (front without --face), and its name is the one of the file without --name
   eh3d-phoenix-cad section PROJECT.phoenixproj --axis x|y|z --at LENGTH [--format dxf|svg] [--out FILE] [--overwrite] [--lang CODE] [--config FILE]   cuts the solids of a project (the box, the parts and the turned and swept bodies) with the plane across an axis at a position (a length: 15, 15 mm, 0.5 in) and prints the outlines and the area of the material; with --out the section is written as a DXF or SVG drawing (the format is --format or the extension of the file; never over a file that exists unless --overwrite is given)
   eh3d-phoenix-cad library FILE.phoenixlib [--config FILE]                        reads a library of parts, checks it and lists its parts
-  eh3d-phoenix-cad mesh-info FILE.stl|.obj|.3mf|.step|.stp [--density KG_M3 | --material NAME] [--config FILE]   reads a file of triangles (the ones this program writes or another program's stored 3MF) or a STEP file of solids made of flat faces (the limits are mesh.step_max_kib, mesh.step_max_entities and mesh.step_max_faces; a face on a cylinder, a surface of revolution or a curved edge is refused with the entity and its name) and prints, for each solid in it, its vertices, triangles, whether its surface is closed, its volume, its surface and its size, and, for a prism along an axis, its height and outlines; with a density (or a material of the settings) also its mass, centre of mass and tensor of inertia; it exits with 0 when every solid is closed and with 1 when one is not
+  eh3d-phoenix-cad mesh-info FILE.stl|.obj|.3mf|.step|.stp|.ply|.off|.dxf [--density KG_M3 | --material NAME] [--config FILE]   reads a file of triangles (the ones this program writes or another program's stored 3MF) or a STEP file of solids made of flat faces (the limits are mesh.step_max_kib, mesh.step_max_entities and mesh.step_max_faces; a face on a cylinder, a surface of revolution or a curved edge is refused with the entity and its name) and prints, for each solid in it, its vertices, triangles, whether its surface is closed, its volume, its surface and its size, and, for a prism along an axis, its height and outlines; with a density (or a material of the settings) also its mass, centre of mass and tensor of inertia; it exits with 0 when every solid is closed and with 1 when one is not
   eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|pdf|step|script|report|bill|order [--view top|front|side|sheet] [--out FILE] [--overwrite] [--ascii|--binary] [--title-field KEY=TEXT]... [--cut-line AXIS=POSITION[:LETTERS]] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), as a Wavefront file (obj) or as a 3MF package (3mf), the plan, front or side, or all three on one sheet, as a drawing (dxf, svg), all three on one sheet as a PDF file of one page (pdf, which is always the sheet), the STEP file, the OpenSCAD-style script, the fit report, the bill of materials or the order sheet (an HTML page with the bars to buy, the holes to drill and the parts with their cost, in the language of --lang)
   eh3d-phoenix-cad faces PROJECT.phoenixproj --from FACE[:inner|:outer] --to FACE[:inner|:outer] [--lang CODE] [--config FILE]   measures between two faces of the box (front, back, left, right, top or bottom, the outer face of the wall unless :inner is given): the distance in millimetres between parallel faces (a wall, the inner height, the outer width) and the angle, 0 for parallel faces and 90 for faces that meet; the same face on the same side is refused
   eh3d-phoenix-cad sketch-edit SKETCH.phoenixsketch --op chamfer|trim|extend|linear|circular|offset [--out FILE] [--overwrite] [--config FILE] ...   edits a sketch file the way the buttons of the sketch window do (elements are named as in the file, like e5; lengths are in mm or with a unit): chamfer --lines e5,e6 --distance 3; trim --line e5 --cutter e6 [--drop e1]; extend --line e5 --to e6; linear --items e1,e2 --step DX,DY --count N; circular --items e1 --center e3 --count N [--step DEGREES]; offset --items e5,e6,e7,e8 --distance D (negative goes inwards); the edited sketch is written to --out, or over the file itself with --overwrite, and a refused edit writes nothing
@@ -51,7 +51,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad server-contract PROJECT [--name NAME] [--config FILE]   prints the project as the station cad of the server reads it (the project.json that server-save writes: sketches, features and parts, and with the section [contract] of the settings the holes, posts, fins, patterns, edging and lid of the enclosure and the title block), without asking anything of the network, so it works with no address and no server
   eh3d-phoenix-cad project-units PROJECT.phoenixproj [--unit nm|um|mm|cm|m|in|mil] [--decimals N] [--clear] [--out FILE] [--overwrite] [--lang CODE] [--config FILE]   tells the unit and the decimals the project keeps (in its own domain, so a project of inches stays in inches whoever opens it; a project without them follows the settings); with --unit and --decimals (0 to 12) it sets them, with --clear it takes them away, and writes the project to --out or over the file itself, never over a file that exists unless --overwrite is given
   eh3d-phoenix-cad compare BEFORE.phoenixproj AFTER.phoenixproj [--text] [--lang CODE] [--config FILE]   what changed between two versions of an assembly: the parts added, taken away, replaced, cut again, moved or turned (the positions after the mates) and the mates added, taken away or changed, as comma separated values (change,part,from,to) or, with --text, as lines in the language of --lang; it exits with 0 when the two versions are the same and with 1 when they differ
-  eh3d-phoenix-cad mesh-check FILE.stl|.obj|.3mf|.step|.stp [--repair OUT.stl|.obj|.3mf [--overwrite]] [--lang CODE] [--config FILE]   checks each solid of a file of triangles for a slicer: the shells, the Euler characteristic and the genus, the open and the shared edges, the triangles with no area, the repeated vertices, a surface turned inside out, the shortest and the longest edge, the worst triangle and the radii of gyration about the principal axes (exit 1 when a solid has a problem); --repair turns the solids that are inside out and writes them all to the file
+  eh3d-phoenix-cad mesh-check FILE.stl|.obj|.3mf|.step|.stp|.ply|.off|.dxf [--repair OUT.stl|.obj|.3mf [--overwrite]] [--lang CODE] [--config FILE]   checks each solid of a file of triangles for a slicer: the shells, the Euler characteristic and the genus, the open and the shared edges, the triangles with no area, the repeated vertices, a surface turned inside out, the shortest and the longest edge, the worst triangle and the radii of gyration about the principal axes (exit 1 when a solid has a problem); --repair turns the solids that are inside out and writes them all to the file
   eh3d-phoenix-cad convert VALUE [--to nm|um|mm|cm|m|in|mil|deg|dms] [--decimals N] [--fraction N] [--lang CODE]   reads a length (1 1/2 in, 25.4 mm) or an angle (12.5, 12d30m15s or 12 degrees 30 minutes 15 seconds written with the signs of degrees, minutes and seconds) and writes it in another unit; --fraction N writes inches as a mixed number of N-ths (1, 2, 4 ... 128); dms writes degrees, minutes and seconds
   eh3d-phoenix-cad bolt-circle --count N --diameter LENGTH [--start DEGREES] [--center X:Y] [--text] [--lang CODE]   the holes of a bolt circle for the drill: the angle and the place of each hole as comma separated values, or with --text the angle and the distance between neighbours too
   eh3d-phoenix-cad bom-costs PROJECT.phoenixproj [--tax PERCENT] [--top N] [--text] [--lang CODE] [--config FILE]   where the money of the bill of materials goes: the lines from the dearest to the cheapest with their share of the subtotal and of the running sum, the first N of them, and with --tax the tax on the total
@@ -60,6 +60,12 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad measure distance|angle POINT... [--lang CODE]                  measures between points written X:Y:Z (a length with its unit or bare millimetres): the distance between two points, from a point to an edge (three points) or between two edges (four), the angle at a vertex between three points or between two edges
   eh3d-phoenix-cad config-diff FILE [--text] [--lang CODE]                       puts every key of a settings file next to its default (changed, same or extra) as comma separated values or text; exit 1 when a key is not one of the defaults
   eh3d-phoenix-cad sketch-info SKETCH.phoenixsketch [--lang CODE] [--config FILE]   what a sketch holds: the points, lines, circles and arcs, the construction geometry, the constraints and the size and drawn length of what is drawn
+  eh3d-phoenix-cad mesh-convert FILE OUT [--ascii] [--schema ap203|ap214] [--overwrite] [--lang CODE] [--config FILE]   reads an STL, OBJ, 3MF (also compressed ones made by other programs), STEP, PLY, OFF or DXF (3DFACE) file and writes its solids as .stl, .obj, .3mf, .ply, .off, .dxf or .step/.stp (a faceted solid for each body); every warning of the reader is printed with its name
+  eh3d-phoenix-cad mesh-transform FILE OUT [--scale F|FX:FY:FZ] [--rotate AXIS:DEGREES] [--about X:Y:Z] [--mirror AXIS[:POSITION]] [--move X:Y:Z] [--overwrite] [--lang CODE]   scales, turns, mirrors and moves the solids of a file, in this order, and writes them (a mirror keeps the solid outside in)
+  eh3d-phoenix-cad mesh-pattern FILE OUT --linear COUNT --step X:Y:Z | --circular COUNT --axis x|y|z [--center X:Y:Z] [--angle DEGREES] [--overwrite] [--lang CODE]   repeats every solid of a file in a line or round an axis and writes the result
+  eh3d-phoenix-cad mesh-slice FILE --axis x|y|z --at LENGTH [--svg OUT.svg] [--csv] [--overwrite] [--lang CODE]   the section a plane makes in each solid: the outlines, the holes, the area and the length (exit 1 when a section does not close); --svg draws it
+  eh3d-phoenix-cad mesh-clip FILE OUT --axis x|y|z --at LENGTH [--keep above|below] | --box LOW..HIGH [--overwrite] [--lang CODE]   cuts each solid by a plane or keeps what is inside a box, closing the cut with a cap so that the part left is a solid again
+  eh3d-phoenix-cad iso-fit SIZE CLASS|HOLE/SHAFT [--table FILE] [--csv] [--lang CODE]   the limits of a class of tolerance (H7, g6) or of a fit (H7/g6) at a nominal size up to 500 mm, from a table of data that says whether it is verified (the shipped one is not)
   eh3d-phoenix-cad config                                                         every setting of the library, of the window and of the sketch with its default value, as a file for --config
 
 --open FILE is the same as giving the file by itself; a sketch file opens the window on the sketch. --lang takes en, es, de, fr, it, ja, zh or pt; without it the language of the system is used (the reports cutplan, clearance, placements, holes and balance and the answer of sketch-export are in English unless --lang is given; with --text the first four are lines for a person in that language instead of comma separated values).
@@ -958,13 +964,38 @@ fn run_sketch_import(args: &[String]) -> Result<bool, String> {
             }
         }
     }
-    let file = file.ok_or("sketch-import needs a DXF drawing")?;
+    let file = file.ok_or("sketch-import needs a DXF or SVG drawing")?;
     let (settings, ui) = load_settings(config.as_deref())?;
     let solver = load_solver_settings(config.as_deref())?;
     let bytes = eh3d_phoenix_cad::store::load_limited(&file, u64::from(ui.export.max_kib) * 1024)
         .map_err(|e| format!("{}: {}", file.display(), error_text(&e, lang)))?;
     let text = String::from_utf8(bytes)
         .map_err(|_| format!("{}: the drawing is not text", file.display()))?;
+    // an SVG drawing is turned into lines and circles in millimetres first
+    let is_svg = file
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("svg"));
+    let text = if is_svg {
+        let chord_mm = eh3d_phoenix_cad::profile::ProfileLimits::from_settings(&solver).chord_nm
+            as f64
+            / 1.0e6;
+        let (dxf, report) = eh3d_phoenix_cad::svg_import::to_dxf(
+            &text,
+            chord_mm,
+            settings.drawing.max_entities as usize,
+        )
+        .map_err(|e| format!("{}: {e}", file.display()))?;
+        unit_nm = Some(1_000_000);
+        for (what, count) in &report.skipped {
+            println!(
+                "{}",
+                eh3d_phoenix_cad::lang::fill(Msg::DxfSkipped.tr(lang), &[what, &count.to_string()])
+            );
+        }
+        dxf
+    } else {
+        text
+    };
     if list_layers {
         let found = eh3d_phoenix_cad::dxf_import::layers(&text)
             .map_err(|e| format!("{}: {}", file.display(), error_text(&e, lang)))?;
@@ -1669,6 +1700,11 @@ fn run(args: &[String]) -> Result<bool, String> {
         "export" => run_export(rest),
         c if eh3d_phoenix_cad::tools_cli::COMMANDS.contains(&c) => {
             let (out, ok) = eh3d_phoenix_cad::tools_cli::run(c, rest)?;
+            print!("{out}");
+            Ok(ok)
+        }
+        c if eh3d_phoenix_cad::mesh_cli::COMMANDS.contains(&c) => {
+            let (out, ok) = eh3d_phoenix_cad::mesh_cli::run(c, rest)?;
             print!("{out}");
             Ok(ok)
         }

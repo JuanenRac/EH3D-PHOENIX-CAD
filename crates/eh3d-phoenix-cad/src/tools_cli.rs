@@ -47,15 +47,19 @@ pub const COMMANDS: [&str; 9] = [
 
 /// The arguments of a command: the words that are not options, the options with a value and the
 /// switches that were given.
-struct Args {
-    words: Vec<String>,
+pub(crate) struct Args {
+    pub(crate) words: Vec<String>,
     values: BTreeMap<String, String>,
     switches: Vec<String>,
-    lang: Lang,
+    pub(crate) lang: Lang,
 }
 
 impl Args {
-    fn parse(args: &[String], with_value: &[&str], switches: &[&str]) -> Result<Args, String> {
+    pub(crate) fn parse(
+        args: &[String],
+        with_value: &[&str],
+        switches: &[&str],
+    ) -> Result<Args, String> {
         let mut out = Args {
             words: Vec::new(),
             values: BTreeMap::new(),
@@ -83,16 +87,16 @@ impl Args {
         Ok(out)
     }
 
-    fn value(&self, name: &str) -> Option<&str> {
+    pub(crate) fn value(&self, name: &str) -> Option<&str> {
         self.values.get(name).map(String::as_str)
     }
 
-    fn has(&self, name: &str) -> bool {
+    pub(crate) fn has(&self, name: &str) -> bool {
         self.switches.iter().any(|s| s == name)
     }
 
     /// The only word, which is what the command works on.
-    fn only_word(&self, what: &str) -> Result<&str, String> {
+    pub(crate) fn only_word(&self, what: &str) -> Result<&str, String> {
         match self.words.as_slice() {
             [one] => Ok(one),
             [] => Err(format!("this command needs a {what}")),
@@ -102,7 +106,7 @@ impl Args {
 }
 
 /// The settings of the library and of the window with the keys of a user file over the defaults.
-fn load_settings(config: Option<&str>) -> Result<(Settings, UiSettings), String> {
+pub(crate) fn load_settings(config: Option<&str>) -> Result<(Settings, UiSettings), String> {
     let Some(path) = config else {
         return Ok((Settings::defaults(), UiSettings::defaults()));
     };
