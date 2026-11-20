@@ -186,6 +186,9 @@ impl Window {
     /// history: the server is one more place to keep it, not a save. False, and the status says
     /// why, when there is no name, the link refuses or the project cannot be written.
     pub fn server_save_with(&mut self, store: &mut Store, typed: &str, comment: &str) -> bool {
+        store.set_contract(crate::servercad::ContractOptions::from_settings(
+            &self.settings,
+        ));
         let Some(name) = self.server_name_for(typed) else {
             return self.server_problem(Msg::ServerBadName.tr(self.lang).replace("{0}", ""));
         };
@@ -244,7 +247,8 @@ impl Window {
         let mut document = self.document.clone();
         document.set_mechanical(&self.mech, &self.settings.mechanical)?;
         document.set_sketches(&self.mech.sketches, &self.sketch_settings)?;
-        crate::servercad::project_json(&document, name)
+        let options = crate::servercad::ContractOptions::from_settings(&self.settings);
+        crate::servercad::project_json_with(&document, name, &options)
     }
 
     /// Asks the station of the server for a `check` or a `report` of the project and tells the
@@ -750,5 +754,49 @@ mod tests {
             "{told}"
         );
         assert!(matches!(w.status, Status::Done(Msg::ServerCheckHead, _)));
+    }
+
+    #[test]
+    fn the_window_sends_the_features_and_the_title_block_its_settings_ask_for() {
+        let station = |w: &mut Window, mem: &MemoryStore, name: &str| {
+            let mut store = store_over(mem, Lang::En);
+            assert!(w.server_save_with(&mut store, name, ""), "{:?}", w.status);
+            mem.file(name, "project.json").unwrap()
+        };
+        let mem = MemoryStore::new(TOKEN);
+        let mut w = fresh(Lang::En);
+        assert!(
+            w.open(&PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/examples/box.phoenixproj"
+            ))),
+            "{:?}",
+            w.status
+        );
+        // the settings as shipped: the structure the station reads today
+        let plain = station(&mut w, &mem, "plain");
+        assert!(!plain.contains("titleblock") && !plain.contains("\"kind\":\"face_hole\""));
+        // the features of the enclosure
+        w.settings.contract.enclosure_features = true;
+        w.settings.title_block.number = "W-1".into();
+        let features = station(&mut w, &mem, "features");
+        assert!(!features.contains("titleblock"));
+        assert_eq!(features.matches("\"kind\":\"face_hole\"").count(), 2);
+        assert_eq!(features, w.station_project_text("features").unwrap());
+        // the title block of the window, as it is now
+        w.settings.contract.title_block = true;
+        let titled = station(&mut w, &mem, "titled");
+        assert!(titled.contains("\"number\":\"W-1\"") && titled.contains("\"title\":\"titled\""));
+        assert_eq!(titled, w.station_project_text("titled").unwrap());
+        // a change of the title block in the window is in the next save: a new version of project.json
+        w.settings.title_block.revision = "C".into();
+        let again = station(&mut w, &mem, "titled");
+        assert!(again.contains("\"revision\":\"C\"") && again != titled);
+        assert_eq!(mem.versions("titled", "project.json"), 2);
+        // the file of the program is the same whatever the contract carries
+        assert_eq!(
+            mem.file("plain", "project.phoenixproj"),
+            mem.file("titled", "project.phoenixproj")
+        );
     }
 }

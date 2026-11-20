@@ -151,6 +151,7 @@ pub struct Store {
     client: sc::Client,
     lang: Lang,
     max_bytes: usize,
+    contract: servercad::ContractOptions,
 }
 
 impl Store {
@@ -160,7 +161,20 @@ impl Store {
             client,
             lang,
             max_bytes,
+            contract: servercad::ContractOptions::default(),
         }
+    }
+
+    /// What the project saved for the station carries besides the structure it reads today (the features of the enclosure, the title block); nothing
+    /// until this is called.
+    pub fn set_contract(&mut self, options: servercad::ContractOptions) {
+        self.contract = options;
+    }
+
+    /// What the link has done so far, as `key = value` lines (requests, tries, retries, answers, losses and the latency of the answers); it holds no
+    /// token, no address and no body.
+    pub fn link_metrics(&self) -> String {
+        self.client.metrics().to_text()
     }
 
     /// A store over plain HTTP to the address of the settings; refused with a sentence in the language of the person while there is no address.
@@ -443,7 +457,7 @@ impl Store {
         // the project as the station of the server reads it, next to the file of the program
         let doc = Document::from_bytes(bytes, self.max_bytes)
             .map_err(|e| self.own(Msg::ServerBadFile, &[name, &e.to_string()]))?;
-        let contract = servercad::project_json(&doc, name)
+        let contract = servercad::project_json_with(&doc, name, &self.contract)
             .map_err(|e| self.own(Msg::ServerBadFile, &[name, &e.to_string()]))?;
         self.write_in_project(name, CONTRACT_FILE, &contract, comment)?;
         Ok(written)

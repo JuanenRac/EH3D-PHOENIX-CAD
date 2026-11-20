@@ -661,3 +661,186 @@ fn answer(mut stream: TcpStream, store: &MemoryStore) -> std::io::Result<()> {
     stream.write_all(reply.as_bytes())?;
     stream.flush()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eh3d_serverclient as sc;
+
+    fn link(address: &str, token: &str) -> sc::Settings {
+        let mut link = sc::Settings::default();
+        link.set("server_address", address).unwrap();
+        link.set("server_token", token).unwrap();
+        link.set("server_retries", "0").unwrap();
+        link
+    }
+
+    fn note(seen: &mut Vec<String>, what: &str, r: Result<sc::Written, sc::StoreError>) {
+        match r {
+            Ok(w) => seen.push(format!(
+                "{what}: {} v{} unchanged={} tag={}",
+                w.status,
+                w.version.unwrap_or(0),
+                w.unchanged,
+                w.etag.is_some()
+            )),
+            Err(e) => seen.push(format!("{what}: {}", e.code().unwrap_or("other"))),
+        }
+    }
+
+    /// What a client sees of one run of writes and reads of a file of the store, one line for each step, with the status, the number of the version
+    /// and whether the tag was there (the tags themselves differ from one store to another).
+    fn script(client: &mut sc::Client, project: &str) -> Vec<String> {
+        let path = sc::project_file_path("phoenix-cad", project, "dir/a.txt").unwrap();
+        let ty = Some("application/octet-stream");
+        let mut seen = Vec::new();
+        note(
+            &mut seen,
+            "first",
+            client.put_if_match(&path, None, b"one", ty),
+        );
+        let tag1 = client.get_with_etag(&path).unwrap().etag.unwrap();
+        note(
+            &mut seen,
+            "again with no tag",
+            client.put_if_match(&path, None, b"one", ty),
+        );
+        note(
+            &mut seen,
+            "second",
+            client.put_if_match(&path, Some(&tag1), b"two", ty),
+        );
+        note(
+            &mut seen,
+            "stale tag",
+            client.put_if_match(&path, Some(&tag1), b"three", ty),
+        );
+        let read = client.get_with_etag(&path).unwrap();
+        seen.push(format!(
+            "read: {} {:?} tag={}",
+            read.status,
+            read.text(),
+            read.etag.is_some()
+        ));
+        let tag2 = read.etag.unwrap();
+        assert_ne!(tag1, tag2);
+        note(
+            &mut seen,
+            "same bytes",
+            client.put_if_match(&path, Some(&tag2), b"two", ty),
+        );
+        // an older version is read with no tag, and a file that is not there is an error with its code
+        let old = client.get_with_etag(&format!("{path}&version=1")).unwrap();
+        seen.push(format!(
+            "old: {} {:?} tag={}",
+            old.status,
+            old.text(),
+            old.etag.is_some()
+        ));
+        let missing = sc::project_file_path("phoenix-cad", project, "nothing.txt").unwrap();
+        let e = client.get_with_etag(&missing).unwrap_err();
+        seen.push(format!("missing: {}", e.code().unwrap_or("other")));
+        seen
+    }
+
+    #[test]
+    fn the_store_in_memory_and_behind_a_socket_answer_the_writes_of_the_shared_client_as_its_simulator_does(
+    ) {
+        // the simulator of the shared client, and the store in memory with a project made as the program makes it
+        let sim = sc::sim::SimServer::new();
+        let mut on_sim = sc::Client::new(link("sim:1", "program-token"), Box::new(sim));
+        let want = script(&mut on_sim, "p-0001");
+        let mem = MemoryStore::new("tok");
+        let mut direct = sc::Client::new(link("memory:1", "tok"), Box::new(mem.clone()));
+        let made = direct
+            .request(
+                "POST",
+                "/api/v1/apps/phoenix-cad/projects",
+                Some("{\"name\":\"p\"}"),
+            )
+            .unwrap();
+        assert_eq!(made.status, 201);
+        assert_eq!(script(&mut direct, "p-0001"), want);
+        // the same behind a socket, with the tag in a header of the answer
+        let served_store = MemoryStore::new("tok");
+        let served = serve(&served_store).unwrap();
+        let mut wire = sc::Client::connect(link(&served.address, "tok"));
+        wire.request(
+            "POST",
+            "/api/v1/apps/phoenix-cad/projects",
+            Some("{\"name\":\"p\"}"),
+        )
+        .unwrap();
+        assert_eq!(script(&mut wire, "p-0001"), want);
+        // what the script asked of the store: two versions of one file
+        assert_eq!(served_store.versions("p", "dir/a.txt"), 2);
+        assert_eq!(served_store.file("p", "dir/a.txt").as_deref(), Some("two"));
+        // the lines themselves, so that a change of the rules shows
+        assert_eq!(want[0], "first: 201 v1 unchanged=false tag=true");
+        assert!(want
+            .iter()
+            .any(|l| l == "again with no tag: precondition_required"));
+        assert!(want.iter().any(|l| l == "stale tag: precondition_failed"));
+    }
+
+    #[test]
+    fn the_tag_of_the_answer_is_the_one_the_store_checks_and_a_version_asked_for_has_none() {
+        assert_eq!(
+            etag_of_answer("GET", "/x/files/content?name=a", 200, "", "abc"),
+            Some(tag_of("abc"))
+        );
+        assert_eq!(
+            etag_of_answer("PUT", "/x/files/content?name=a", 201, "new", "{}"),
+            Some(tag_of("new"))
+        );
+        assert_eq!(
+            etag_of_answer("PUT", "/x/files/content?name=a", 200, "same", "{}"),
+            Some(tag_of("same"))
+        );
+        // a refusal, a version by number, another route and another method have none
+        assert_eq!(
+            etag_of_answer("PUT", "/x/files/content?name=a", 412, "new", "{}"),
+            None
+        );
+        assert_eq!(
+            etag_of_answer("GET", "/x/files/content?name=a&version=2", 200, "", "abc"),
+            None
+        );
+        assert_eq!(etag_of_answer("GET", "/x/projects", 200, "", "abc"), None);
+        assert_eq!(
+            etag_of_answer("POST", "/x/files/content?name=a", 201, "new", "{}"),
+            None
+        );
+        // the tag is the checksum of the text, and a text that differs by one byte has another
+        assert_eq!(tag_of("abc").len(), 32);
+        assert_ne!(tag_of("abc"), tag_of("abd"));
+        assert_eq!(tag_of("abc"), tag_of("abc"));
+    }
+
+    #[test]
+    fn a_tag_in_any_of_its_forms_is_read_the_same_and_one_that_cannot_be_sent_never_reaches_the_store(
+    ) {
+        let mem = MemoryStore::new("tok");
+        let mut client = sc::Client::new(link("memory:1", "tok"), Box::new(mem.clone()));
+        client
+            .request(
+                "POST",
+                "/api/v1/apps/phoenix-cad/projects",
+                Some("{\"name\":\"p\"}"),
+            )
+            .unwrap();
+        let path = sc::project_file_path("phoenix-cad", "p-0001", "a.txt").unwrap();
+        client.put_if_match(&path, None, b"one", None).unwrap();
+        let tag = client.get_with_etag(&path).unwrap().etag.unwrap();
+        for form in [tag.clone(), format!("\"{tag}\""), format!("W/\"{tag}\"")] {
+            let written = client
+                .put_if_match(&path, Some(&form), b"one", None)
+                .unwrap();
+            assert!(written.unchanged, "{form}");
+        }
+        // a tag with a character that cannot be sent never reaches the store
+        let before = mem.seen().len();
+        assert!(client.put_if_match(&path, Some("a b"), b"x", None).is_err());
+        assert_eq!(mem.seen().len(), before);
+    }
+}

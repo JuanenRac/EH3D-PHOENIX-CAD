@@ -115,7 +115,10 @@ fn sketch_names(doc: &Document) -> Vec<String> {
 struct Feature {
     id: String,
     kind: &'static str,
-    sketch: String,
+    /// The sketch a feature is made from.
+    sketch: Option<String>,
+    /// The feature a feature works on.
+    target: Option<String>,
 }
 
 /// A part of the contract.
@@ -125,9 +128,97 @@ struct PartOut {
     features: Vec<String>,
 }
 
+/// The kinds of feature that the features of the enclosure take when [`ContractOptions::enclosure_features`] is on. The station does not know them yet
+/// (it says so with a warning, the verdict being the same): they are the proposal that `docs/SERVER.md` makes to EH3D-SERVER. `pattern` is a kind the
+/// station knows and that works on the feature it repeats.
+pub const ENCLOSURE_KINDS: [&str; 5] = ["face_hole", "post", "fins", "edging", "lid"];
+
+/// The longest text of a cell of the title block.
+const TITLE_CELL_MAX: usize = 80;
+
+/// The five texts of the title block of the drawings, as the contract carries them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TitleTexts {
+    /// The organisation.
+    pub organisation: String,
+    /// The title (the name of the project when the block has none).
+    pub title: String,
+    /// The number of the drawing.
+    pub number: String,
+    /// The revision.
+    pub revision: String,
+    /// The author.
+    pub author: String,
+}
+
+/// What the project sent to the station carries besides the sketches, the features made from them and the parts. Both are off by default, so a project is
+/// sent as the station reads it today.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContractOptions {
+    /// The holes, posts, fins, patterns, edging and lid of the enclosure as features of the kinds of [`ENCLOSURE_KINDS`] (and `pattern`).
+    pub enclosure_features: bool,
+    /// The title block of the drawings, as the optional domain `titleblock`.
+    pub title_block: Option<TitleTexts>,
+}
+
+impl ContractOptions {
+    /// The options the settings ask for: `contract.enclosure_features`, and the texts of `[title_block]` when `contract.title_block` is on (the title is
+    /// the one of the block, or empty).
+    pub fn from_settings(settings: &crate::config::Settings) -> ContractOptions {
+        let tb = &settings.title_block;
+        ContractOptions {
+            enclosure_features: settings.contract.enclosure_features,
+            title_block: settings.contract.title_block.then(|| TitleTexts {
+                organisation: tb.organisation.clone(),
+                title: tb.title.clone(),
+                number: tb.number.clone(),
+                revision: tb.revision.clone(),
+                author: tb.author.clone(),
+            }),
+        }
+    }
+}
+
+/// Puts a feature of the enclosure in the lists, or changes the one that has the id.
+fn upsert(
+    features: &mut Vec<Feature>,
+    enclosure: &mut Vec<String>,
+    id: String,
+    kind: &'static str,
+    target: Option<String>,
+) {
+    if let Some(f) = features.iter_mut().find(|f| f.id == id) {
+        f.kind = kind;
+        f.target = target;
+    } else {
+        enclosure.push(id.clone());
+        features.push(Feature {
+            id,
+            kind,
+            sketch: None,
+            target,
+        });
+    }
+}
+
+/// Takes a feature of the enclosure out of the lists.
+fn drop_feature(features: &mut Vec<Feature>, enclosure: &mut Vec<String>, id: &str) {
+    features.retain(|f| f.id != id);
+    enclosure.retain(|f| f != id);
+}
+
 /// The project file as the station reads it (`eh3d.cad.project/1`), as JSON text. `name` is the name
 /// the project has on the server. A project with no mechanical domain has no features and no parts.
 pub fn project_json(doc: &Document, name: &str) -> Result<String, CadError> {
+    project_json_with(doc, name, &ContractOptions::default())
+}
+
+/// The same as [`project_json`] with the options: the features of the enclosure and the title block.
+pub fn project_json_with(
+    doc: &Document,
+    name: &str,
+    options: &ContractOptions,
+) -> Result<String, CadError> {
     let units = match doc.project_units()? {
         Some(u) if matches!(u.unit.suffix(), "in" | "mil") => "in",
         _ => "mm",
@@ -157,6 +248,7 @@ pub fn project_json(doc: &Document, name: &str) -> Result<String, CadError> {
         }
         let active = tip.unwrap_or(steps.len()).min(steps.len());
         let mut enclosure: Vec<String> = Vec::new();
+        let (mut edging, mut lid) = (false, false);
         for w in steps.iter().take(active) {
             if w.get(1) == Some(&"1") || w.len() < 5 {
                 continue;
@@ -173,7 +265,8 @@ pub fn project_json(doc: &Document, name: &str) -> Result<String, CadError> {
                     features.push(Feature {
                         id,
                         kind,
-                        sketch: w[5].to_string(),
+                        sketch: Some(w[5].to_string()),
+                        target: None,
                     });
                 }
                 "add-turned" | "add-swept" if w.len() > 6 => {
@@ -190,7 +283,8 @@ pub fn project_json(doc: &Document, name: &str) -> Result<String, CadError> {
                     features.push(Feature {
                         id,
                         kind,
-                        sketch: w[6].to_string(),
+                        sketch: Some(w[6].to_string()),
+                        target: None,
                     });
                 }
                 "add-part" if w.len() > 5 => parts.push(PartOut {
@@ -198,8 +292,53 @@ pub fn project_json(doc: &Document, name: &str) -> Result<String, CadError> {
                     name: unescape_word(w[5]),
                     features: Vec::new(),
                 }),
+                "add-hole" | "replace-hole" if options.enclosure_features => {
+                    upsert(&mut features, &mut enclosure, id, "face_hole", None)
+                }
+                "add-post" | "replace-post" if options.enclosure_features => {
+                    upsert(&mut features, &mut enclosure, id, "post", None)
+                }
+                "add-fins" if options.enclosure_features => {
+                    upsert(&mut features, &mut enclosure, id, "fins", None)
+                }
+                "add-pattern" if options.enclosure_features && w.len() > 5 => {
+                    // the seed is a hole or a post of its own, and the pattern works on it
+                    let seed = format!("{id}.seed");
+                    let kind = if w[5] == "hole" { "face_hole" } else { "post" };
+                    upsert(&mut features, &mut enclosure, seed.clone(), kind, None);
+                    upsert(&mut features, &mut enclosure, id, "pattern", Some(seed));
+                }
+                // what a later step takes away is not in the project that is sent
+                "remove-feature" => drop_feature(&mut features, &mut enclosure, &id),
+                "remove-turned" | "remove-swept" | "remove-part" => {
+                    features.retain(|f| f.id != id);
+                    parts.retain(|p| p.id != id);
+                }
+                "remove-hole" | "remove-post" | "remove-fins" if options.enclosure_features => {
+                    drop_feature(&mut features, &mut enclosure, &id)
+                }
+                "remove-pattern" if options.enclosure_features => {
+                    drop_feature(&mut features, &mut enclosure, &format!("{id}.seed"));
+                    drop_feature(&mut features, &mut enclosure, &id);
+                }
+                "set-edging" if options.enclosure_features && w.len() > 6 => {
+                    edging = w[4..7].iter().any(|t| *t != "sharp");
+                }
+                "set-lid" if options.enclosure_features => lid = w[4] != "none",
                 _ => {}
             }
+        }
+        if edging {
+            upsert(
+                &mut features,
+                &mut enclosure,
+                "edging".into(),
+                "edging",
+                None,
+            );
+        }
+        if lid {
+            upsert(&mut features, &mut enclosure, "lid".into(), "lid", None);
         }
         if !enclosure.is_empty() {
             parts.insert(
@@ -219,12 +358,15 @@ pub fn project_json(doc: &Document, name: &str) -> Result<String, CadError> {
     let features: Vec<String> = features
         .iter()
         .map(|f| {
-            format!(
-                "{{\"id\":{},\"kind\":{},\"sketch\":{}}}",
-                quote(&f.id),
-                quote(f.kind),
-                quote(&f.sketch)
-            )
+            let mut out = format!("{{\"id\":{},\"kind\":{}", quote(&f.id), quote(f.kind));
+            if let Some(s) = &f.sketch {
+                out.push_str(&format!(",\"sketch\":{}", quote(s)));
+            }
+            if let Some(t) = &f.target {
+                out.push_str(&format!(",\"target\":{}", quote(t)));
+            }
+            out.push('}');
+            out
         })
         .collect();
     let parts: Vec<String> = parts
@@ -239,8 +381,22 @@ pub fn project_json(doc: &Document, name: &str) -> Result<String, CadError> {
             )
         })
         .collect();
+    let title_block = match &options.title_block {
+        Some(t) => {
+            let title = if t.title.is_empty() { name } else { &t.title };
+            format!(
+                ",\"titleblock\":{{\"organisation\":{},\"title\":{},\"number\":{},\"revision\":{},\"author\":{}}}",
+                quote(&t.organisation),
+                quote(title),
+                quote(&t.number),
+                quote(&t.revision),
+                quote(&t.author)
+            )
+        }
+        None => String::new(),
+    };
     Ok(format!(
-        "{{\"schema\":{},\"name\":{},\"units\":{},\"sketches\":[{}],\"features\":[{}],\"parts\":[{}]}}",
+        "{{\"schema\":{},\"name\":{},\"units\":{},\"sketches\":[{}],\"features\":[{}],\"parts\":[{}]{title_block}}}",
         quote(PROJECT_SCHEMA),
         quote(name),
         quote(units),
@@ -321,6 +477,26 @@ pub fn check_json(project: &Json) -> Verdict {
                     }
                 }
             }
+        }
+    }
+    if let Some(tb) = project.get("titleblock") {
+        let cells = ["organisation", "title", "number", "revision", "author"];
+        let bad_cell = |key: &str| match tb.get(key) {
+            Some(v) => match v.as_str() {
+                Some(s) => s.chars().count() > TITLE_CELL_MAX || s.chars().any(char::is_control),
+                None => true,
+            },
+            None => false,
+        };
+        if !matches!(tb, Json::Obj(_)) || cells.iter().any(|k| bad_cell(k)) {
+            issues.push(issue(
+                "warning",
+                "bad_titleblock",
+                "",
+                format!(
+                    "titleblock holds texts of at most {TITLE_CELL_MAX} characters on one line"
+                ),
+            ));
         }
     }
     let none: Vec<&str> = Vec::new();
@@ -830,5 +1006,384 @@ mod tests {
             }
         }
         assert!(passed > 5 && failed > 100, "{passed} {failed}");
+    }
+
+    /// A project whose mechanical domain holds these lines under `[steps]` (the other parts of the domain are not read by the contract).
+    fn with_steps(lines: &[&str]) -> Document {
+        let mut doc = Document::new();
+        let text = format!(
+            "mechanical 1\n[steps]\ntip {}\n{}\n",
+            lines.len(),
+            lines.join("\n")
+        );
+        doc.set("mechanical", true, text.into_bytes()).unwrap();
+        doc
+    }
+
+    fn with_options(doc: &Document, enclosure: bool) -> Json {
+        let options = ContractOptions {
+            enclosure_features: enclosure,
+            title_block: None,
+        };
+        Json::parse(&project_json_with(doc, "box", &options).unwrap()).unwrap()
+    }
+
+    fn kinds(json: &Json) -> Vec<(String, String)> {
+        list(json, "features")
+            .iter()
+            .map(|f| {
+                (
+                    id_of(f).unwrap().to_string(),
+                    f.get("kind").and_then(Json::as_str).unwrap().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    const ENCLOSURE_STEPS: [&str; 9] = [
+        "step 0 usb add-hole id1 usb front 30000000 17000000 6000000 plain",
+        "step 0 vent add-hole id2 vent back 1000000 1000000 8000000 plain",
+        "step 0 round set-edging round:1500000 sharp sharp",
+        "step 0 post1 add-post id3 post1 - 25000000 15000000 8000000 6000000 insert 4200000 5000000 none",
+        "step 0 lid set-lid auto:6000000 M3 3400000 countersunk:6300000 200000 lip:1200000:3000000",
+        "step 0 row add-pattern id4 hole row front 1000000 1000000 4000000 plain linear:10000000:0:3",
+        "step 0 fins add-fins id5 fins top u 5 1000000 5000000 3000000 0 0 100000000",
+        "step 0 gone remove-hole id2",
+        "step 1 hidden add-hole id6 hidden front 1 1 1000000 plain",
+    ];
+
+    #[test]
+    fn the_features_of_the_enclosure_are_sent_only_when_the_option_asks_for_them() {
+        let doc = with_steps(&ENCLOSURE_STEPS);
+        // off: the project is as the station reads it today
+        let off = with_options(&doc, false);
+        assert!(list(&off, "features").is_empty() && list(&off, "parts").is_empty());
+        assert_eq!(
+            project_json(&doc, "box").unwrap(),
+            project_json_with(&doc, "box", &ContractOptions::default()).unwrap()
+        );
+        // on: each hole, post, set of fins and pattern, the edging and the lid; what was removed or suppressed is not there
+        let on = with_options(&doc, true);
+        let expected = [
+            ("id1", "face_hole"),
+            ("id3", "post"),
+            ("id4.seed", "face_hole"),
+            ("id4", "pattern"),
+            ("id5", "fins"),
+            ("edging", "edging"),
+            ("lid", "lid"),
+        ];
+        let got: Vec<(String, String)> = kinds(&on);
+        let want: Vec<(String, String)> = expected
+            .iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect();
+        assert_eq!(got, want);
+        // the pattern works on its seed, and the enclosure is a part that holds them all
+        let pattern = list(&on, "features")[3];
+        assert_eq!(
+            pattern.get("target").and_then(Json::as_str),
+            Some("id4.seed")
+        );
+        assert!(pattern.get("sketch").is_none());
+        let parts = list(&on, "parts");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(id_of(parts[0]), Some("enclosure"));
+        assert_eq!(
+            parts[0]
+                .get("features")
+                .and_then(Json::as_array)
+                .unwrap()
+                .len(),
+            7
+        );
+        // the verdict is a pass, with a warning for each kind the station does not know yet
+        let v = check_json(&on);
+        assert!(v.pass, "{v:?}");
+        assert_eq!(v.errors, 0);
+        assert_eq!(v.warnings, 6);
+        assert!(v.issues.iter().all(|i| i.code == "unknown_kind"));
+        for kind in ENCLOSURE_KINDS {
+            assert!(got.iter().any(|(_, k)| k == kind), "{kind}");
+        }
+    }
+
+    #[test]
+    fn what_a_later_step_changes_or_takes_away_is_the_state_that_is_sent() {
+        let doc = with_steps(&[
+            "step 0 a add-hole id1 a front 1 1 1000000 plain",
+            "step 0 a replace-hole id1 a front 2 2 2000000 plain",
+            "step 0 e set-edging chamfer:1000000 sharp sharp",
+            "step 0 e set-edging sharp sharp sharp",
+            "step 0 l set-lid auto:6000000 M3 3400000 plain 200000 nolip",
+            "step 0 l set-lid none",
+            "step 0 p add-pattern id7 post p - 1 1 8000000 6000000 insert 4200000 5000000 none linear:1:0:2",
+            "step 0 p remove-pattern id7",
+            "step 0 f add-fins id8 f top u 5 1000000 5000000 3000000 0 0 100000000",
+            "step 0 f remove-fins id8",
+            "step 0 q add-post id9 q - 1 1 8000000 6000000 insert 4200000 5000000 none",
+            "step 0 q remove-post id9",
+        ]);
+        let json = with_options(&doc, true);
+        // one hole (replaced, not twice), and no edging, lid, pattern, fins or post
+        assert_eq!(
+            kinds(&json),
+            vec![("id1".to_string(), "face_hole".to_string())]
+        );
+        // the extrusions, pockets, turned and swept bodies and parts that a later step removed are not sent either, with or without the option
+        let doc = with_steps(&[
+            "step 0 e1 extrude x1 plate 5000000",
+            "step 0 e2 pocket x2 plate 1000000",
+            "step 0 t add-turned x3 t lathe x 360000000000 0 0 0 steel",
+            "step 0 s add-swept x4 s prof path 0 0 0 steel",
+            "step 0 a add-part x5 a lib cap screw steel 1 0 0 0 xy -",
+            "step 0 r remove-feature x2",
+            "step 0 r remove-turned x3",
+            "step 0 r remove-swept x4",
+            "step 0 r remove-part x5",
+        ]);
+        for enclosure in [false, true] {
+            let json = with_options(&doc, enclosure);
+            assert_eq!(
+                kinds(&json),
+                vec![("x1".to_string(), "extrude".to_string())]
+            );
+            assert!(
+                list(&json, "parts")
+                    .iter()
+                    .all(|p| id_of(p) == Some("enclosure")),
+                "{enclosure}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_title_block_is_an_optional_key_with_the_name_of_the_project_for_an_empty_title() {
+        let doc = with_steps(&[]);
+        let plain = Json::parse(&project_json(&doc, "box").unwrap()).unwrap();
+        assert!(plain.get("titleblock").is_none());
+        let texts = TitleTexts {
+            organisation: "Electro Hobby".into(),
+            title: String::new(),
+            number: "P-7".into(),
+            revision: "B".into(),
+            author: "Ana \"the\" \\ author".into(),
+        };
+        let options = ContractOptions {
+            enclosure_features: false,
+            title_block: Some(texts),
+        };
+        let json = Json::parse(&project_json_with(&doc, "box", &options).unwrap()).unwrap();
+        let tb = json.get("titleblock").unwrap();
+        let text = |k: &str| tb.get(k).and_then(Json::as_str).unwrap().to_string();
+        assert_eq!(text("title"), "box");
+        assert_eq!(text("number"), "P-7");
+        assert_eq!(text("revision"), "B");
+        assert_eq!(text("author"), "Ana \"the\" \\ author");
+        assert!(check_json(&json).issues.is_empty());
+        // the title typed in the block wins
+        let titled = ContractOptions {
+            title_block: Some(TitleTexts {
+                title: "Front panel".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let json = Json::parse(&project_json_with(&doc, "box", &titled).unwrap()).unwrap();
+        assert_eq!(
+            json.get("titleblock")
+                .and_then(|t| t.get("title"))
+                .and_then(Json::as_str),
+            Some("Front panel")
+        );
+    }
+
+    #[test]
+    fn a_title_block_the_station_could_not_show_is_a_warning_and_never_an_error() {
+        let base = |tb: &str| {
+            Json::parse(&format!(
+                "{{\"schema\":\"{PROJECT_SCHEMA}\",\"units\":\"mm\",\"titleblock\":{tb}}}"
+            ))
+            .unwrap()
+        };
+        let long = "x".repeat(81);
+        let fine = "x".repeat(80);
+        for (tb, bad) in [
+            ("{\"title\":\"ok\"}".to_string(), false),
+            (format!("{{\"title\":\"{fine}\"}}"), false),
+            (format!("{{\"title\":\"{long}\"}}"), true),
+            ("{\"author\":\"two\\nlines\"}".to_string(), true),
+            ("{\"number\":5}".to_string(), true),
+            ("[]".to_string(), true),
+            ("\"text\"".to_string(), true),
+        ] {
+            let v = check_json(&base(&tb));
+            assert!(v.pass, "{tb}: {v:?}");
+            let found = v.issues.iter().any(|i| i.code == "bad_titleblock");
+            assert_eq!(found, bad, "{tb}");
+            if bad {
+                assert_eq!((v.errors, v.warnings), (0, 1), "{tb}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_options_come_from_the_section_contract_and_the_title_block_of_the_settings() {
+        let none = ContractOptions::from_settings(&Settings::defaults());
+        assert_eq!(none, ContractOptions::default());
+        let s = Settings::with_user_config(
+            "[contract]\nenclosure_features = 1\ntitle_block = 1\n[title_block]\nauthor = Ana\nnumber = P-9\n",
+        )
+        .unwrap();
+        let o = ContractOptions::from_settings(&s);
+        assert!(o.enclosure_features);
+        let tb = o.title_block.unwrap();
+        assert_eq!(
+            (tb.author.as_str(), tb.number.as_str(), tb.revision.as_str()),
+            ("Ana", "P-9", "A")
+        );
+        assert!(tb.title.is_empty());
+        // only the one asked for
+        let only = Settings::with_user_config("[contract]\ntitle_block = 1\n").unwrap();
+        let o = ContractOptions::from_settings(&only);
+        assert!(!o.enclosure_features && o.title_block.is_some());
+        for bad in ["2", "-1", "yes", ""] {
+            for key in ["enclosure_features", "title_block"] {
+                let e = Settings::with_user_config(&format!("[contract]\n{key} = {bad}\n"))
+                    .unwrap_err()
+                    .to_string();
+                assert!(e.contains(&format!("contract.{key}")), "{key} = {bad}: {e}");
+            }
+        }
+    }
+
+    /// A small generator with a fixed seed (xorshift), so that a failure can be repeated.
+    struct Rng(u64);
+
+    impl Rng {
+        fn draw(&mut self, below: u64) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0 % below
+        }
+    }
+
+    /// Puts a feature in the list of the model, or changes the kind of the one that has the id.
+    fn model_put(model: &mut Vec<(String, &'static str)>, id: &str, kind: &'static str) {
+        match model.iter_mut().find(|(i, _)| i == id) {
+            Some(entry) => entry.1 = kind,
+            None => model.push((id.to_string(), kind)),
+        }
+    }
+
+    #[test]
+    fn random_recipes_of_the_enclosure_give_the_features_a_plain_model_says_with_a_fixed_seed() {
+        for seed in 1..=120u64 {
+            let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let mut lines: Vec<String> = Vec::new();
+            for n in 0..rng.draw(30) + 1 {
+                let id = format!("i{}", rng.draw(6));
+                let flag = u8::from(rng.draw(8) == 0);
+                let line = match rng.draw(9) {
+                    0 => format!("step {flag} s{n} add-hole {id} s front 1 1 1000000 plain"),
+                    1 => format!("step {flag} s{n} replace-hole {id} s front 2 2 1000000 plain"),
+                    2 => format!("step {flag} s{n} add-post {id} s - 1 1 8000000 6000000 insert 4200000 5000000 none"),
+                    3 => format!("step {flag} s{n} add-fins {id} s top u 5 1000000 5000000 3000000 0 0 100000000"),
+                    4 => format!(
+                        "step {flag} s{n} add-pattern {id} {} s front 1 1 1000000 plain linear:1:0:2",
+                        ["hole", "post"][rng.draw(2) as usize]
+                    ),
+                    5 => format!(
+                        "step {flag} s{n} {} {id}",
+                        ["remove-hole", "remove-post", "remove-fins", "remove-pattern"][rng.draw(4) as usize]
+                    ),
+                    6 => format!(
+                        "step {flag} s{n} set-edging {} {} {}",
+                        ["sharp", "round:1500000", "chamfer:1000000"][rng.draw(3) as usize],
+                        ["sharp", "round:1500000"][rng.draw(2) as usize],
+                        ["sharp", "chamfer:1000000"][rng.draw(2) as usize]
+                    ),
+                    7 => format!("step {flag} s{n} set-lid none"),
+                    _ => format!("step {flag} s{n} set-lid auto:6000000 M3 3400000 plain 200000 nolip"),
+                };
+                lines.push(line);
+            }
+            let tip = rng.draw(lines.len() as u64 + 1) as usize;
+            let mut doc = Document::new();
+            let text = format!("mechanical 1\n[steps]\ntip {tip}\n{}\n", lines.join("\n"));
+            doc.set("mechanical", true, text.into_bytes()).unwrap();
+            // the model: the steps that are not suppressed and come before the tip, one by one
+            let mut model: Vec<(String, &'static str)> = Vec::new();
+            let (mut edging, mut lid) = (false, false);
+            for line in lines.iter().take(tip) {
+                let w: Vec<&str> = line.split(' ').collect();
+                if w[1] == "1" {
+                    continue;
+                }
+                let drop = |model: &mut Vec<(String, &'static str)>, id: &str| {
+                    model.retain(|(i, _)| i != id)
+                };
+                match w[3] {
+                    "add-hole" | "replace-hole" => model_put(&mut model, w[4], "face_hole"),
+                    "add-post" | "replace-post" => model_put(&mut model, w[4], "post"),
+                    "add-fins" => model_put(&mut model, w[4], "fins"),
+                    "add-pattern" => {
+                        let seed = format!("{}.seed", w[4]);
+                        model_put(
+                            &mut model,
+                            &seed,
+                            if w[5] == "hole" { "face_hole" } else { "post" },
+                        );
+                        model_put(&mut model, w[4], "pattern");
+                    }
+                    "remove-hole" | "remove-post" | "remove-fins" => drop(&mut model, w[4]),
+                    "remove-pattern" => {
+                        drop(&mut model, &format!("{}.seed", w[4]));
+                        drop(&mut model, w[4]);
+                    }
+                    "set-edging" => edging = w[4..7].iter().any(|t| *t != "sharp"),
+                    "set-lid" => lid = w[4] != "none",
+                    other => panic!("seed {seed}: {other}"),
+                }
+            }
+            if edging {
+                model_put(&mut model, "edging", "edging");
+            }
+            if lid {
+                model_put(&mut model, "lid", "lid");
+            }
+            let json = with_options(&doc, true);
+            let got: Vec<(String, String)> = kinds(&json);
+            let want: Vec<(String, String)> = model
+                .iter()
+                .map(|(i, k)| (i.clone(), k.to_string()))
+                .collect();
+            assert_eq!(got, want, "seed {seed}:\n{}", lines.join("\n"));
+            // the part holds them all in the same order, and every pattern works on a feature that is there
+            let parts = list(&json, "parts");
+            if want.is_empty() {
+                assert!(parts.is_empty(), "seed {seed}");
+            } else {
+                let held: Vec<&str> = parts[0]
+                    .get("features")
+                    .and_then(Json::as_array)
+                    .unwrap()
+                    .iter()
+                    .filter_map(Json::as_str)
+                    .collect();
+                let ids: Vec<&str> = want.iter().map(|(i, _)| i.as_str()).collect();
+                assert_eq!(held, ids, "seed {seed}");
+            }
+            let v = check_json(&json);
+            assert_eq!(v.errors, 0, "seed {seed}: {v:?}");
+            let unknown = want.iter().filter(|(_, k)| k != "pattern").count();
+            assert_eq!(v.warnings, unknown, "seed {seed}");
+            // the option off sends none of it
+            assert!(
+                list(&with_options(&doc, false), "features").is_empty(),
+                "seed {seed}"
+            );
+        }
     }
 }

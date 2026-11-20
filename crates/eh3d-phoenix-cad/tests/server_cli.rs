@@ -58,6 +58,8 @@ fn the_help_lists_the_commands_of_the_server_and_the_keys_of_its_section() {
         "server-load",
         "server-report",
         "server-check",
+        "server-contract",
+        "--metrics",
         "server_address",
         "PHOENIX_CAD_SERVER_PASSWORD",
     ] {

@@ -35,7 +35,7 @@ All of them take `--config FILE` and `--lang CODE` (English without it). Without
 
 | Command | What it does |
 |---|---|
-| `server-status` | the name, version and state the server says of itself |
+| `server-status [--metrics]` | the name, version and state the server says of itself; `--metrics` adds what the link has done (`requests`, `attempts`, `retries`, `replies`, `server_errors`, `failures`, `disconnects` and the latency of the answers in microseconds: last, smallest, mean, median, 95th percentile and largest), from the client of the suite, with no token and no address |
 | `server-list [TEXT]` | the projects whose name has the text, in any letter case, the last changed first |
 | `server-save PROJECT [--name NAME] [--comment TEXT]` | saves the project file as a new version of the file of the project NAME (the name of the file without `--name`) |
 | `server-load NAME --out FILE [--overwrite]` | reads the project, checks it is a project file and writes it to FILE, never over a file that exists unless `--overwrite` is given |
@@ -44,6 +44,30 @@ All of them take `--config FILE` and `--lang CODE` (English without it). Without
 ## In the window
 
 Three entries of the Reports menu belong to this chapter. **Project on the server** has the name the project gets (empty means the name of its file without the extension), a comment for the version, a button to **save on the server** (a new version of `project.phoenixproj`; nothing is written when it is the version already there), a button to **open from the server** (the project comes with no file, so saving asks for one, and the unsaved mark is off) and a text to look for with a button to **list the projects**. Saving on the server is one more place to keep the project, not a save: the file, the unsaved mark and the history of the window stay as they were. The address and the token are those of `[server]`; with no address the panel says so, and a refusal of the server (a token that is gone, a name that cannot be used, a project it does not have) is shown in the status bar in the language of the window. **Units of the project** shows the unit and the decimals the project keeps, with two texts (an empty one keeps what is shown now) and the buttons to keep them in the project or to follow the settings again; it is `project-units` of the command line. The **bill of materials** panel can add the bill of each assembly (the parts that mates join, and the parts and bodies that no mate holds) after the bill of all, as `bom --by-assembly` does. The logic is in `window::Window` (`server_save_with`, `server_open_with`, `server_list_with`, `apply_units_text`) and is tested without a screen, over the store in memory; the buttons have never been opened on a screen.
+
+## What a save can carry besides the structure: `[contract]`
+
+The section `[contract]` of the settings has two keys, both `0` by default, so a project is sent exactly as the station reads it today:
+
+| Key | Default | What it adds to `project.json` |
+|---|---|---|
+| `enclosure_features` | 0 | the holes, posts, fins, patterns, edging and lid of the enclosure as features (the proposal below) |
+| `title_block` | 0 | the texts of `[title_block]` (organisation, title, number, revision, author) as the optional key `titleblock`; an empty title is the name of the project |
+
+`server-contract PROJECT` prints the document as it would be written, and the window sends the same document: the features follow the settings and the title block is the one of the window as it is now (a change of it is a new version of `project.json` at the next save). The steps of the recipe are read in order up to the tip, a suppressed step is skipped, and what a later step replaces or takes away is not in the document (a removed extrusion, pocket, turned or swept body or part is not sent, with or without the options).
+
+**Proposal to EH3D-SERVER: the kinds of feature of an enclosure.** The station knows `extrude`, `revolve`, `pocket`, `hole` (from a sketch) and `fillet`, `chamfer`, `mirror`, `pattern` (on another feature). A parametric enclosure is made of other things, so with `enclosure_features = 1` this program sends them as features of these kinds, all in the part `enclosure`, and the station answers a warning `unknown_kind` for each until it knows them (the verdict is the same):
+
+| Kind | Id | What it is | Keys besides `id` and `kind` |
+|---|---|---|---|
+| `face_hole` | the id of the step | a hole or an opening in a face of the box (round, countersunk, counterbored, rectangular or oval) | none |
+| `post` | the id of the step | a post inside the box, for a screw | none |
+| `fins` | the id of the step | a set of cooling fins rising from a face | none |
+| `pattern` | the id of the step | a hole or a post repeated along a line or round a centre (a kind the station knows) | `target`: the id of the seed, `<id>.seed`, which is itself a `face_hole` or a `post` |
+| `edging` | `edging` | the rounded or chamfered edges of the box, when at least one of the three treatments is not sharp | none |
+| `lid` | `lid` | the fixing of the lid, when there is one | none |
+
+What the server would need to take them: to count them by kind in the `report` (`features_by_kind` already does it for any kind), to take `face_hole`, `post`, `fins`, `edging` and `lid` as kinds with no `sketch` and no `target` (a `hole` needs a sketch, so it cannot be used for a hole in a face), and to leave the order of the features as the recipe gives it. The optional key `titleblock` is an object of five texts of at most 80 characters on one line; a station that does not read it ignores it, and this program's own check answers the warning `bad_titleblock` for a text it could not show.
 
 ## The station `cad` of the server
 
@@ -55,8 +79,9 @@ EH3D-SERVER has a plugin `cad`: stations that read the *structure* of a project 
 |---|---|
 | `server-check PROJECT [--name NAME] [--kind check\|report]` | makes the contract of a project file, asks the station for a `check` (or, with `--kind report`, a `report` that adds the counts of parts, sketches and features) and tells the verdict, one line for each thing it found and, for a report, the counts, in the language of `--lang` |
 | `server-check --stored NAME [--kind ...]` | the same with the `project.json` that the last save of the project NAME wrote, read from the store |
+| `server-contract PROJECT [--name NAME]` | prints the `project.json` that a save would write for the project file, as the settings of `[contract]` ask for it; it asks nothing of the network, so it needs no address and no server |
 
-The codes of the station are told in the eight languages: `bad_schema`, `unknown_units`, `missing_id`, `duplicate_id`, `missing_ref`, `unknown_kind` and `empty_part`; a code this program does not know keeps the sentence the station gave. The check can also be made here before anything is sent: `servercad::check_json` follows the rules of the station and the store in memory answers a job with the same document (`servercad::station_answer`). A station that is not set (`server_machine` empty), that ends its job `failed` or that does not answer within `server_timeout_s` is told in the language of the person.
+The codes of the station are told in the eight languages: `bad_schema`, `unknown_units`, `missing_id`, `duplicate_id`, `missing_ref`, `unknown_kind`, `empty_part` and `bad_titleblock`; a code this program does not know keeps the sentence the station gave. The check can also be made here before anything is sent: `servercad::check_json` follows the rules of the station and the store in memory answers a job with the same document (`servercad::station_answer`). A station that is not set (`server_machine` empty), that ends its job `failed` or that does not answer within `server_timeout_s` is told in the language of the person.
 
 In the window, the **Project on the server** panel has **Check on the station** and **Report from the station** (`Window::server_station_with`), which send the project as it is now, saved or not, and show the answer; below them is the panel of the settings of the server that every program of the suite shows (`eh3d-view`, only in the build with the window): the address, the token, the login and the logout, and the state of the link. The buttons and that panel have never been opened on a screen.
 

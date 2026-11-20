@@ -20,13 +20,14 @@ use crate::store;
 pub const PASSWORD_VARIABLE: &str = "PHOENIX_CAD_SERVER_PASSWORD";
 
 /// The commands of this module, as the line of the command gives them.
-pub const COMMANDS: [&str; 6] = [
+pub const COMMANDS: [&str; 7] = [
     "server-status",
     "server-list",
     "server-save",
     "server-load",
     "server-report",
     "server-check",
+    "server-contract",
 ];
 
 #[derive(Default)]
@@ -42,6 +43,7 @@ struct Options {
     kind: Option<String>,
     comment: String,
     overwrite: bool,
+    metrics: bool,
     words: Vec<String>,
 }
 
@@ -69,6 +71,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--kind" => o.kind = Some(value("check or report")?),
             "--comment" => o.comment = value("a text")?,
             "--overwrite" => o.overwrite = true,
+            "--metrics" => o.metrics = true,
             other if other.starts_with("--") => return Err(format!("unknown option {other}")),
             other => o.words.push(other.to_string()),
         }
@@ -116,7 +119,11 @@ pub fn run(command: &str, args: &[String]) -> Result<String, String> {
     let o = parse(args)?;
     let lang = o.lang.unwrap_or(Lang::En);
     let settings = settings_of(o.config.as_deref())?;
+    if command == "server-contract" {
+        return contract_text(&o, &settings);
+    }
     let mut store = connect(&o, &settings, lang)?;
+    store.set_contract(servercad::ContractOptions::from_settings(&settings));
     let failed = |e: crate::server::ServerError| e.text;
     match command {
         "server-status" => {
@@ -124,10 +131,16 @@ pub fn run(command: &str, args: &[String]) -> Result<String, String> {
                 return Err("server-status takes no arguments".to_string());
             }
             let h = store.health().map_err(failed)?;
-            Ok(format!(
+            let mut out = format!(
                 "{}\n",
                 fill(Msg::ServerLink.tr(lang), &[&h.name, &h.version, &h.status])
-            ))
+            );
+            if o.metrics {
+                out.push_str(Msg::ServerMetricsHead.tr(lang));
+                out.push('\n');
+                out.push_str(&store.link_metrics());
+            }
+            Ok(out)
         }
         "server-list" => {
             let query = match o.words.as_slice() {
@@ -235,7 +248,9 @@ pub fn run(command: &str, args: &[String]) -> Result<String, String> {
                         .map_err(|e| format!("{}: {e}", file.display()))?;
                     let doc = Document::from_bytes(&bytes, settings.mechanical.max_bytes)
                         .map_err(|e| format!("{}: {e}", file.display()))?;
-                    let text = servercad::project_json(&doc, &name).map_err(|e| e.to_string())?;
+                    let options = servercad::ContractOptions::from_settings(&settings);
+                    let text = servercad::project_json_with(&doc, &name, &options)
+                        .map_err(|e| e.to_string())?;
                     (name, text)
                 }
             };
@@ -244,6 +259,24 @@ pub fn run(command: &str, args: &[String]) -> Result<String, String> {
         }
         other => Err(format!("{other}: not a command of the server")),
     }
+}
+
+/// `server-contract PROJECT [--name NAME]`: the project file as the station reads it (`project.json`), with the features of the enclosure and the title
+/// block the settings ask for (`[contract]`), printed as it would be sent. It asks nothing of the network, so it works with no address and no server.
+fn contract_text(o: &Options, settings: &Settings) -> Result<String, String> {
+    let file = PathBuf::from(one_word(o, "project file")?);
+    let name = o
+        .name
+        .clone()
+        .or_else(|| stem(&file))
+        .ok_or("the project needs a name: give --name")?;
+    let bytes = store::load_limited(&file, settings.mechanical.max_bytes as u64)
+        .map_err(|e| format!("{}: {e}", file.display()))?;
+    let doc = Document::from_bytes(&bytes, settings.mechanical.max_bytes)
+        .map_err(|e| format!("{}: {e}", file.display()))?;
+    let options = servercad::ContractOptions::from_settings(settings);
+    let text = servercad::project_json_with(&doc, &name, &options).map_err(|e| e.to_string())?;
+    Ok(format!("{text}\n"))
 }
 
 /// The sentence of an issue in the language: the text of its code with the id it is about, or the
@@ -257,6 +290,7 @@ pub fn issue_text(lang: Lang, issue: &Issue) -> String {
         "missing_ref" => Some(Msg::ServerIssueMissingRef),
         "unknown_kind" => Some(Msg::ServerIssueUnknownKind),
         "empty_part" => Some(Msg::ServerIssueEmptyPart),
+        "bad_titleblock" => Some(Msg::ServerIssueBadTitleBlock),
         _ => None,
     };
     match known {
@@ -372,7 +406,8 @@ mod tests {
     #[test]
     fn with_no_address_every_command_says_so_in_the_language_asked_for() {
         for lang in Lang::ALL {
-            for command in COMMANDS {
+            // the command that prints the contract asks nothing of the network, so it has no address to miss
+            for command in COMMANDS.into_iter().filter(|c| *c != "server-contract") {
                 let e = run(command, &words(&["--lang", lang.code()])).unwrap_err();
                 assert_eq!(
                     e,
@@ -653,6 +688,7 @@ mod tests {
                 "missing_ref",
                 "unknown_kind",
                 "empty_part",
+                "bad_titleblock",
             ] {
                 let issue = Issue {
                     severity: "error".to_string(),
@@ -695,6 +731,189 @@ mod tests {
             ] {
                 assert!(!m.tr(lang).is_empty());
             }
+        }
+    }
+
+    fn contract_config(dir: &Scratch, address: &str, contract: &str) -> String {
+        let path = dir.file("contract.cfg");
+        fs::write(
+            &path,
+            format!(
+                "[server]\nserver_address = {address}\nserver_token = tok\nserver_machine = cad1\nserver_retries = 0\nserver_timeout_s = 5\n[contract]\n{contract}\n[title_block]\nnumber = P-9\nauthor = Ana\n"
+            ),
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn server_contract_prints_the_project_as_it_would_be_sent_with_no_server_at_all() {
+        let dir = Scratch::new("contract");
+        let kinds = |text: &str| -> Vec<String> {
+            let json = eh3d_serverclient::Json::parse(text.trim_end()).unwrap();
+            json.get("features")
+                .and_then(eh3d_serverclient::Json::as_array)
+                .unwrap()
+                .iter()
+                .filter_map(|f| f.get("kind").and_then(eh3d_serverclient::Json::as_str))
+                .map(str::to_string)
+                .collect()
+        };
+        // the shipped settings: the structure the station reads today, and no address needed
+        let plain = run("server-contract", &words(&[BOX])).unwrap();
+        assert!(plain.starts_with("{\"schema\":\"eh3d.cad.project/1\",\"name\":\"box\","));
+        assert!(plain.ends_with("}\n") && !plain.contains("titleblock"));
+        assert!(kinds(&plain).is_empty());
+        // the section [contract] adds the features of the enclosure and the title block
+        let cfg = contract_config(&dir, "", "enclosure_features = 1\ntitle_block = 1");
+        let full = run("server-contract", &words(&[BOX, "--config", cfg.as_str()])).unwrap();
+        let mut kinds = kinds(&full);
+        kinds.sort();
+        assert_eq!(
+            kinds,
+            [
+                "edging",
+                "face_hole",
+                "face_hole",
+                "lid",
+                "post",
+                "post",
+                "post",
+                "post"
+            ]
+        );
+        assert!(full.contains("\"titleblock\":{\"organisation\":\"\",\"title\":\"box\",\"number\":\"P-9\",\"revision\":\"A\",\"author\":\"Ana\"}"), "{full}");
+        // the name of the project is the one asked for
+        let named = run(
+            "server-contract",
+            &words(&[BOX, "--name", "Front", "--config", cfg.as_str()]),
+        )
+        .unwrap();
+        assert!(named.contains("\"name\":\"Front\"") && named.contains("\"title\":\"Front\""));
+        // what is wrong with the arguments is told
+        assert!(run("server-contract", &words(&[]))
+            .unwrap_err()
+            .contains("needs project file"));
+        assert!(run("server-contract", &words(&[BOX, BOX]))
+            .unwrap_err()
+            .contains("only one"));
+        let missing = dir.file("nothing.phoenixproj");
+        assert!(run("server-contract", &words(&[missing.as_str()])).is_err());
+    }
+
+    #[test]
+    fn the_settings_of_the_contract_decide_what_a_save_writes_and_the_station_warns_of_the_new_kinds(
+    ) {
+        let mem = MemoryStore::new("tok");
+        let served = serve(&mem).unwrap();
+        let dir = Scratch::new("contract-save");
+        let off = config_with_station(&dir, &served.address, "cad1");
+        run(
+            "server-save",
+            &words(&[BOX, "--name", "plain", "--config", off.as_str()]),
+        )
+        .unwrap();
+        let stored = mem.file("plain", "project.json").unwrap();
+        assert!(!stored.contains("face_hole") && !stored.contains("titleblock"));
+        let on = contract_config(
+            &dir,
+            &served.address,
+            "enclosure_features = 1\ntitle_block = 1",
+        );
+        run(
+            "server-save",
+            &words(&[BOX, "--name", "rich", "--config", on.as_str()]),
+        )
+        .unwrap();
+        let stored = mem.file("rich", "project.json").unwrap();
+        assert_eq!(stored.matches("\"kind\":\"face_hole\"").count(), 2);
+        assert_eq!(stored.matches("\"kind\":\"post\"").count(), 4);
+        assert!(stored.contains("\"number\":\"P-9\""));
+        // the station passes it and says, once for each, which kinds it does not know yet
+        let out = run(
+            "server-check",
+            &words(&["--stored", "rich", "--config", on.as_str()]),
+        )
+        .unwrap();
+        assert!(
+            out.starts_with("rich: pass (0 errors, 8 warnings)\n"),
+            "{out}"
+        );
+        assert_eq!(
+            out.matches("is of a kind the station does not know")
+                .count(),
+            8
+        );
+        let out = run(
+            "server-check",
+            &words(&["--stored", "plain", "--config", on.as_str()]),
+        )
+        .unwrap();
+        assert!(
+            out.starts_with("plain: pass (0 errors, 0 warnings)\n"),
+            "{out}"
+        );
+        // the same file checked directly follows the settings too
+        let out = run("server-check", &words(&[BOX, "--config", on.as_str()])).unwrap();
+        assert!(
+            out.starts_with("box: pass (0 errors, 8 warnings)\n"),
+            "{out}"
+        );
+        let out = run("server-check", &words(&[BOX, "--config", off.as_str()])).unwrap();
+        assert!(
+            out.starts_with("box: pass (0 errors, 0 warnings)\n"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn server_status_tells_what_the_link_has_done_when_it_is_asked_to() {
+        let mem = MemoryStore::new("tok");
+        let served = serve(&mem).unwrap();
+        let dir = Scratch::new("metrics");
+        let cfg = config_for(&dir, &served.address, "tok");
+        let plain = run("server-status", &words(&["--config", cfg.as_str()])).unwrap();
+        assert_eq!(plain, "Server eh3d-server 0.0.0-memory: ok\n");
+        let out = run(
+            "server-status",
+            &words(&["--metrics", "--config", cfg.as_str()]),
+        )
+        .unwrap();
+        let (first, rest) = out.split_once('\n').unwrap();
+        assert_eq!(first, "Server eh3d-server 0.0.0-memory: ok");
+        let mut lines = rest.lines();
+        assert_eq!(
+            lines.next(),
+            Some("What the link has done (times in microseconds):")
+        );
+        let metrics: Vec<(&str, &str)> = lines.filter_map(|l| l.split_once(" = ")).collect();
+        let get = |k: &str| metrics.iter().find(|(key, _)| *key == k).map(|(_, v)| *v);
+        // one request, one try, one answer, nothing lost or repeated
+        for (key, value) in [
+            ("requests", "1"),
+            ("attempts", "1"),
+            ("retries", "0"),
+            ("replies", "1"),
+            ("server_errors", "0"),
+            ("failures", "0"),
+            ("disconnects", "0"),
+        ] {
+            assert_eq!(get(key), Some(value), "{key}");
+        }
+        assert!(get("latency_p95_us").is_some_and(|v| v.parse::<u64>().is_ok()));
+        // it holds no token and no address, and every language has the head
+        assert!(!out.contains("tok") && !out.contains(&served.address));
+        for lang in Lang::ALL {
+            let out = run(
+                "server-status",
+                &words(&["--metrics", "--lang", lang.code(), "--config", cfg.as_str()]),
+            )
+            .unwrap();
+            assert!(
+                out.contains(Msg::ServerMetricsHead.tr(lang)),
+                "{}",
+                lang.code()
+            );
         }
     }
 }

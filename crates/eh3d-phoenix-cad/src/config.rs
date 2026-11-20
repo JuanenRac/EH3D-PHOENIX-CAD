@@ -1015,9 +1015,37 @@ pub struct Settings {
     pub title_block: TitleBlockSettings,
     /// The link to the EH3D server (`[server]`): the keys of the client of the suite.
     pub server: eh3d_serverclient::Settings,
+    /// What the project saved for the station of the server carries besides the structure it reads today (`[contract]`).
+    pub contract: ContractSettings,
     /// The named values that expressions can use: the sizes of the screws, the compensation of the
     /// printer and the `[constants]` of the settings.
     pub constants: Constants,
+}
+
+/// What the project saved for the station of the server carries (`[contract]`): both off by default, so a project is sent as the station reads it today.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ContractSettings {
+    /// The holes, posts, fins, patterns, edging and lid of the enclosure as features of the contract.
+    pub enclosure_features: bool,
+    /// The texts of the title block as the optional domain `titleblock` of the contract.
+    pub title_block: bool,
+}
+
+impl ContractSettings {
+    /// Reads and checks the keys of `[contract]`.
+    pub fn from_config(c: &Config) -> Result<ContractSettings, CadError> {
+        let flag = |key: &str| -> Result<bool, CadError> {
+            match c.number(key)? {
+                0 => Ok(false),
+                1 => Ok(true),
+                _ => Err(CadError::Config(format!("{key} must be 0 or 1"))),
+            }
+        };
+        Ok(ContractSettings {
+            enclosure_features: flag("contract.enclosure_features")?,
+            title_block: flag("contract.title_block")?,
+        })
+    }
 }
 
 /// Adds a constant, refusing a name that is already taken or is not a plain word.
@@ -1300,6 +1328,7 @@ impl Settings {
         let placement = PlacementSettings::from_config(c)?;
         let title_block = TitleBlockSettings::from_config(c)?;
         let server = crate::server::from_config(c)?;
+        let contract = ContractSettings::from_config(c)?;
         let constants = build_constants(c, &screws, &printer, counterbore_extra, &expr)?;
         Ok(Settings {
             backups,
@@ -1325,6 +1354,7 @@ impl Settings {
             placement,
             title_block,
             server,
+            contract,
             constants,
         })
     }

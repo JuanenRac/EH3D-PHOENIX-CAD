@@ -12,12 +12,13 @@ The model is written to a file from the **Export** menu of the window or with th
 | DXF | `dxf` | `.dxf` | the plan, the front or the side as a drawing |
 | SVG | `svg` | `.svg` | the same views, scaled to a page, with dimensions |
 | Sheet of views | `dxf` or `svg` with `--view sheet` | `.dxf`, `.svg` | the plan, the front and the side on one drawing |
+| PDF sheet | `pdf` | `.pdf` | the same sheet as one page of a PDF file, with the page, scale, margin and title block of the SVG sheet |
 | Report | `report` | `.txt` | the fit report |
 | Bill | `bill` | `.csv` | the bill of materials of the parts placed in the model |
 | Order sheet | `order` | `.html` | the bars to buy, the holes to drill and the parts with their cost, as one self-contained page |
 
 ```
-eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill|order
+eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|pdf|step|script|report|bill|order
                         [--view top|front|side|sheet] [--out FILE] [--overwrite] [--ascii|--binary]
                         [--title-field KEY=TEXT]... [--cut-line AXIS=POSITION[:LETTERS]]
 ```
@@ -112,7 +113,7 @@ The DXF file is R12 text with the entities `LINE`, `CIRCLE` and `ARC` and the he
 
 ### The sheet of views
 
-`export --view sheet` (or **Sheet of views** in the Export menu, `dxf-sheet` and `svg-sheet`) puts the front, the plan and the side on one drawing, each with its own outline, cavity, centre lines and dimensions (`Drawing::sheet`). The front is the main view, at the origin. With `drawing.sheet_angle = 1` (the default, first-angle projection as in ISO) the plan is under the front and the side, which looks from the right, is to its left; with `3` (third angle) the plan is over the front and the side to its right. Between two views are `drawing.sheet_gap` (20 mm by default) and the room that the dimension lines of the view next to the gap take, so no dimension line lies on a neighbour. The legend is written once, to the right of the whole sheet, and lists the holes of each view under its name (*Front view*, *Plan view*, *Side view*, each cut at `drawing.max_dimensions`; with `drawing.sheet_legends = 0` only those of the front); the border and the title block go round and under the whole sheet. The three views together count against `drawing.max_entities` (`PHOENIX-CAD-050`).
+`export --view sheet` (or **Sheet of views** in the Export menu, `dxf-sheet`, `svg-sheet` and `pdf-sheet`) puts the front, the plan and the side on one drawing, each with its own outline, cavity, centre lines and dimensions (`Drawing::sheet`). The front is the main view, at the origin. With `drawing.sheet_angle = 1` (the default, first-angle projection as in ISO) the plan is under the front and the side, which looks from the right, is to its left; with `3` (third angle) the plan is over the front and the side to its right. Between two views are `drawing.sheet_gap` (20 mm by default) and the room that the dimension lines of the view next to the gap take, so no dimension line lies on a neighbour. The legend is written once, to the right of the whole sheet, and lists the holes of each view under its name (*Front view*, *Plan view*, *Side view*, each cut at `drawing.max_dimensions`; with `drawing.sheet_legends = 0` only those of the front); the border and the title block go round and under the whole sheet. The three views together count against `drawing.max_entities` (`PHOENIX-CAD-050`).
 
 ### The section on the sheet
 
@@ -134,6 +135,12 @@ The three views are dimensioned by themselves, in the DXF file (on the layer `CO
 * **The legend.** To the right of the box (`drawing.legend_gap`, 10 mm by default) the drawing lists its dimensions as text in the language of the export: the title, the size of the box, the thickness of the walls, the floor and the lid, and one line for each hole of the face the view looks at with the tag of the hole schedule (`H1`, `H2`, ...), its diameter (the width for a rectangle or a slot) and its position, up to `drawing.max_dimensions` of them and then a line that counts the rest. The lines are written where the dimensions are (the layer `COTAS` of the DXF file and the group `COTAS` of the SVG file, whose page grows to the right to hold them) and not when those are off. `drawing.legend = 0` leaves it out (`Drawing::add_legend`).
 
 The sizes are not tolerances (nothing here knows ISO 286 fits), a hole of a countersink or a slot is dimensioned by its centre, and the dimension lines are plain lines with no arrow heads: they are for reading a drawing, not for a drawing standard.
+
+## The PDF sheet and the scale bar
+
+`export PROJECT --format pdf` (or **Sheet of views (.pdf)** in the Export menu, `pdf-sheet` in `export.format`) writes the sheet of views as one page of a PDF file (`eh3d_phoenix_cad::pdf`, `Drawing::to_pdf_with`). The page is laid out by the same code as the SVG sheet (`Drawing::page_layout`: `drawing.paper`, `drawing.paper_portrait`, `drawing.paper_margin`, the standard scale and the title block), so the two have the same page and the same marks: the lines, circles and arcs of each layer in its colour and dash, the dimensions, the legend, the frame, the cutting line and its section (`drawing.sheet_section`), the title block and the scale in the corner. A PDF is always the sheet, so `--view` is refused with it. The text is Helvetica (one of the 14 fonts every reader has) with the encoding WinAnsi: the letters of the Western languages and the signs of the diameter and the multiplication are there; a letter it has no glyph for (the Japanese and Chinese cells of the title block) is written as a question mark. The content is not compressed and there is no date and no identifier, so the same sheet gives the same bytes; the table of cross references holds the exact offset of every object (`pdf::check` reads a file back and says whether it is well formed). The file has been checked here by reading it back, and has not been opened in a PDF reader.
+
+`drawing.scale_bar` (0 by default) draws a scale bar in every drawing file, the views and the sheet, in the SVG, DXF and PDF formats: `2` to `10` are the divisions of the bar. The bar is a length of the model, the longest round one (1, 2 or 5 times a power of ten, in millimetres, from 1 mm up) that is at most two fifths of the width of the drawing, so it is true at any scale and on any paper. It is drawn from the left edge, under everything the drawing holds and the room of its dimensions, on the layer `MARCO` with every other division hatched, with the figure `0` under its left end and its length (`50 mm`) to the right of it; a drawing narrower than 25 mm gets none. It is drawn before the legend and the frame, so the frame goes round it.
 
 ## The hole schedule
 
@@ -175,6 +182,7 @@ In `phoenix-cad.default.cfg` (the `config` command writes them):
 | `drawing.sheet_legends` | 1 | the legend of the sheet lists the holes of every view under the name of the view; 0 lists only those of the front |
 | `drawing.sheet_symbol` | 0 | 1 draws the symbol of the projection under the lower left corner of the sheet (the circles to the right of a truncated cone for first angle, to its left for third angle) |
 | `drawing.sheet_symbol_size` | 10 mm | the height of the large end of that symbol, from 4 mm to 50 mm |
+| `drawing.scale_bar` | 0 | 0 draws no scale bar; 2 to 10 draw one under the views (see below) in that many divisions |
 | `drawing.sheet_section` | 0 | 1 puts the cutting line (`cut_line`, `cut_at`, `cut_label`) on the sheet of views and the section of that plane, hatched as the section drawing is, to the right of the sheet; 0 leaves both out of the sheet (the sheet is then exactly what it was) |
 | `drawing.cut_line` | 0 | 0 draws no cutting line; 1, 2 or 3 draw the line of the plane across `x`, `y` or `z` in the views that show it edge-on (see below) |
 | `drawing.cut_at` | 0 mm | where that plane is along its axis, from the outer face of the box |
@@ -206,7 +214,7 @@ With `title_block.enabled = 1` the DXF and SVG drawings of the views and of a sk
 
 The texts can also be given for one export with `--title-field KEY=TEXT` (`KEY` is `organisation`, `title`, `number`, `revision` or `author`; the same limits as the settings), which turns the block on for that export: `export PROJECT --format svg --title-field title="Front plate" --title-field number=EH-7`.
 
-In `phoenix-cad-window.default.cfg`: `export.format` (the format the dialog starts with: `script`, `step`, `stl`, `dxf-top`, `dxf-front`, `dxf-side`, `dxf-sheet`, `svg-top`, `svg-front`, `svg-side`, `svg-sheet`, `report`, `bill`, `obj`, `3mf` or `order`), `export.overwrite` and `export.max_kib`.
+In `phoenix-cad-window.default.cfg`: `export.format` (the format the dialog starts with: `script`, `step`, `stl`, `dxf-top`, `dxf-front`, `dxf-side`, `dxf-sheet`, `svg-top`, `svg-front`, `svg-side`, `svg-sheet`, `pdf-sheet`, `report`, `bill`, `obj`, `3mf` or `order`), `export.overwrite` and `export.max_kib`.
 
 ## A section of the model
 
