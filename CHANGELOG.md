@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **The documents and the counts are up to date:** `docs/EXPORT.md` has the new sections on the files of other programs and on the tools on solids that were read, the three new settings in its table and the SVG drawings next to the DXF ones, `docs/NOT_YET.md` lists what is still not done (booleans between two solids, the whole standard of limits and fits with a checked table, the extensions of 3MF, IGES, the colours and text of SVG), the help of the program lists the new commands, and the eight READMEs say that the Rust library has 1480 tests (the library, the eight files of command tests and the examples of the documentation).
+
 - **`mesh-transform FILE OUT` scales, turns, mirrors and moves solids:** `--scale F|FX:FY:FZ`, `--rotate AXIS:DEGREES`, `--about X:Y:Z`, `--mirror AXIS[:POSITION]` and `--move X:Y:Z` are applied in this order to every solid of a file (`meshops::scale`, `rotate`, `mirror` and `translate`); a mirror, or a scale with an odd number of negative factors, turns the triangles so that the solid stays outside in, a factor of zero and a result more than a thousand kilometres from the origin are refused, and the sines and cosines are the ones of the circles of the program so that every computer gives the same bits.
 
 - **Patterns of whole solids:** `mesh-pattern FILE OUT --linear COUNT --step X:Y:Z` repeats every solid along a line and `--circular COUNT --axis A [--center X:Y:Z] [--angle DEGREES]` round an axis (a full turn spreads the copies evenly, any other angle puts the last copy at the end angle), up to 100000 copies and the limit of triangles of the settings (`meshops::linear_pattern`, `circular_pattern`).
