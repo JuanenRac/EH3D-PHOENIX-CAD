@@ -156,6 +156,20 @@ sketch 1
 
 A sketch that was kept in a `.phoenixsketch` file next to the project is migrated by opening it and keeping it in the project; nothing is converted behind the person's back.
 
+## The domain `units`
+
+The unit in which a project shows and reads lengths, and the decimals it shows, are kept in the optional domain `units` (never critical: a program that does not know it keeps it as it is and opens the project for editing). The text is three lines, in this order:
+
+```
+PHOENIX-CAD-UNITS 1
+unit mm
+decimals 3
+```
+
+`unit` is one of `nm`, `um`, `mm`, `cm`, `m`, `in` and `mil`, in lower case, and `decimals` is a whole number from 0 to 12. Anything else (another version, a unit that is not on the list, a line missing, repeated or out of order, a sign in front of the number) is refused when the domain is read; the project is then opened with the units of the settings and the status says that the units were ignored, and the next `set_project_units` writes a good domain over the bad one.
+
+A project with the domain is shown in its unit, and a length typed with no unit is read in it, whatever `units.display` and `units.decimals` of the settings say (`Window::set_project_units`, `Document::project_units`). A project without it, a new project and a project opened after one that has units follow the settings again. The command `project-units` tells, sets (`--unit`, `--decimals`) and takes away (`--clear`) the units of a file.
+
 ## Limits
 
 The limits are keys of the settings file, section `[mechanical]` (hard caps in brackets): `max_bytes` (the whole domain; 16 MiB by default, cap 256 MiB), `max_steps` (10 000, cap 1 000 000), `max_name_bytes` (256, cap 4096, counted before escaping), `max_outline_points` (10 000, cap 1 000 000) and `max_board_holes` (1 000, cap 100 000). A domain over a limit is refused when it is read **and** when it is written. The expressions are read under the limits of `[expr]`.

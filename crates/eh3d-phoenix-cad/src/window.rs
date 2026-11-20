@@ -34,7 +34,7 @@ use crate::mount::{Lid, Post};
 use crate::parametric::{ParamModel, Parameter};
 use crate::pattern::{Layout, PatternOp, Seed};
 use crate::profile::ProfileLimits;
-use crate::project::{Document, PARAMETERS_DOMAIN};
+use crate::project::{Document, ProjectUnits, MAX_UNIT_DECIMALS, PARAMETERS_DOMAIN};
 use crate::scad::mm_text;
 use crate::scene::{
     face_plane, floor_plane, mm, outer_size, post_centre, project_with, references, scene_with,
@@ -47,7 +47,7 @@ use crate::store;
 use crate::swept::SweptSpec;
 use crate::turned::TurnedSpec;
 use crate::uiconfig::UiSettings;
-use crate::units::{format_angle, format_length, parse_angle, parse_length, Count};
+use crate::units::{format_angle, format_length, parse_angle, parse_length, Count, Unit};
 use crate::vars::{Param, Variables};
 use crate::{CadError, Length};
 use std::path::{Path, PathBuf};
@@ -602,6 +602,8 @@ pub struct Window {
     pub export_overwrite: bool,
     /// The library of parts that is open, when one is.
     pub library: Option<Library>,
+    /// The unit and the decimals of the settings, which a project without units of its own follows.
+    base_units: (Unit, u32),
     /// The part of the library the next part added is made from (its place in the library).
     pub catalog_choice: usize,
     measurements: Vec<Measurement>,
@@ -765,8 +767,10 @@ impl Window {
         let mech = Mechanical::new(ParamModel::new(ui.new_box)?, Variables::new());
         let built = mech.build(&settings.constants, &settings.expr)?;
         let manual = ui.fit;
+        let base_units = (settings.unit, settings.decimals);
         let mut window = Window {
             lang,
+            base_units,
             view3d: ViewControl::new(
                 Camera {
                     yaw: ui.yaw,
@@ -844,6 +848,7 @@ impl Window {
         self.mech = fresh;
         self.built = built;
         self.document = Document::new();
+        (self.settings.unit, self.settings.decimals) = self.base_units;
         self.path = None;
         self.read_only = false;
         self.dirty = false;
@@ -4142,6 +4147,14 @@ impl Window {
             Err(e) => Some(e),
         };
         let built = self.rebuild(&mech).map_err(Status::Error)?;
+        // the units of the project win over the ones of the settings; units that cannot be read
+        // leave the project open in the units of the settings
+        let (units, units_lost) = match opened.document.project_units() {
+            Ok(units) => (units, false),
+            Err(_) => (None, true),
+        };
+        (self.settings.unit, self.settings.decimals) =
+            units.map_or(self.base_units, |u| (u.unit, u.decimals));
         self.mech = mech;
         self.built = built;
         self.document = opened.document;
@@ -4159,6 +4172,8 @@ impl Window {
             Status::Error(e)
         } else if self.read_only {
             Status::Problem(Msg::ReadOnlyOpened, Vec::new())
+        } else if units_lost {
+            Status::Problem(Msg::UnitsIgnored, Vec::new())
         } else {
             Status::Done(Msg::Opened, vec![name])
         };
@@ -4195,6 +4210,42 @@ impl Window {
                 false
             }
         }
+    }
+
+    /// The units this project keeps (`None` while it follows the settings).
+    pub fn project_units(&self) -> Option<ProjectUnits> {
+        self.document.project_units().ok().flatten()
+    }
+
+    /// Sets the unit and the decimals of the project, which are saved with it and win over the
+    /// ones of the settings whoever opens it, or takes them away with `None` (the project follows
+    /// the settings again). False, and the status says why, when the project is read-only or the
+    /// decimals are over 12.
+    pub fn set_project_units(&mut self, units: Option<ProjectUnits>) -> bool {
+        if self.read_only {
+            self.status = Status::Problem(Msg::ReadOnlyBadge, Vec::new());
+            return false;
+        }
+        if units.is_some_and(|u| u.decimals > MAX_UNIT_DECIMALS) {
+            self.status = Status::Error(CadError::ValueOutOfRange("decimals"));
+            return false;
+        }
+        if let Err(e) = self.document.set_project_units(units) {
+            self.status = Status::Error(e);
+            return false;
+        }
+        (self.settings.unit, self.settings.decimals) =
+            units.map_or(self.base_units, |u| (u.unit, u.decimals));
+        self.dirty = true;
+        self.status = match units {
+            Some(u) => Status::Done(
+                Msg::UnitsSet,
+                vec![u.unit.suffix().to_string(), u.decimals.to_string()],
+            ),
+            None => Status::Done(Msg::UnitsCleared, Vec::new()),
+        };
+        self.refresh();
+        true
     }
 
     /// Writes the project to the file it came from. False when it has none yet.
@@ -9671,5 +9722,136 @@ mass: "
         let es = w.mate_words(&w.mate_from_draft(&draft).unwrap());
         assert_eq!(es, "proporción x 250/1000");
         w.lang = Lang::En;
+    }
+
+    #[test]
+    fn a_project_keeps_the_unit_it_was_given_and_it_comes_back_when_the_file_is_opened() {
+        let dir = Scratch::new("project-units");
+        let mut w = fresh();
+        assert_eq!(w.project_units(), None);
+        assert_eq!(w.fields[0].text, "100.000 mm");
+        let inches = ProjectUnits {
+            unit: Unit::Inch,
+            decimals: 3,
+        };
+        assert!(w.set_project_units(Some(inches)));
+        assert_eq!(w.project_units(), Some(inches));
+        assert_eq!(w.fields[0].text, "3.937 in");
+        assert!(w.dirty);
+        assert_eq!(
+            w.status,
+            Status::Done(Msg::UnitsSet, vec!["in".to_string(), "3".to_string()])
+        );
+        // a length typed with no unit is in the unit of the project
+        assert_eq!(w.parse_text("2").unwrap(), parse_length("2 in").unwrap());
+        let path = dir.0.join("inches.phoenixproj");
+        assert!(w.save_to(&path));
+        // a window whose settings are in millimetres opens it in inches
+        let mut other = fresh();
+        assert_eq!(other.fields[0].text, "100.000 mm");
+        assert!(other.open(&path));
+        assert_eq!(other.project_units(), Some(inches));
+        assert_eq!(other.fields[0].text, "3.937 in");
+        assert_eq!(
+            other.status,
+            Status::Done(Msg::Opened, vec!["inches.phoenixproj".to_string()])
+        );
+        // a new project goes back to the settings
+        other.new_project();
+        assert_eq!(other.project_units(), None);
+        assert_eq!(other.fields[0].text, "100.000 mm");
+        // so does a project that has no units of its own, opened after one that has
+        let plain = dir.0.join("plain.phoenixproj");
+        let mut third = fresh();
+        assert!(third.save_to(&plain));
+        assert!(other.open(&path));
+        assert_eq!(other.fields[0].text, "3.937 in");
+        assert!(other.open(&plain));
+        assert_eq!(other.fields[0].text, "100.000 mm");
+    }
+
+    #[test]
+    fn the_units_of_a_project_can_be_taken_away_and_the_project_follows_the_settings_again() {
+        let dir = Scratch::new("project-units-clear");
+        let mut w = fresh();
+        assert!(w.set_project_units(Some(ProjectUnits {
+            unit: Unit::Centimetre,
+            decimals: 1
+        })));
+        assert_eq!(w.fields[0].text, "10.0 cm");
+        assert!(w.set_project_units(None));
+        assert_eq!(w.status, Status::Done(Msg::UnitsCleared, Vec::new()));
+        assert_eq!(w.fields[0].text, "100.000 mm");
+        let path = dir.0.join("cleared.phoenixproj");
+        assert!(w.save_to(&path));
+        let mut other = fresh();
+        assert!(other.open(&path));
+        assert_eq!(other.project_units(), None);
+        // the settings of the window are the ones it was made with, not the last project's
+        let mut inch_settings = Settings::defaults();
+        inch_settings.unit = Unit::Mil;
+        inch_settings.decimals = 0;
+        let mut mils = Window::new(Lang::En, inch_settings, UiSettings::defaults()).unwrap();
+        assert!(mils.open(&path));
+        assert_eq!(mils.fields[0].text, "3937 mil");
+        assert!(mils.set_project_units(Some(ProjectUnits {
+            unit: Unit::Metre,
+            decimals: 2
+        })));
+        mils.new_project();
+        assert_eq!(mils.fields[0].text, "3937 mil");
+    }
+
+    #[test]
+    fn units_that_cannot_be_read_leave_the_project_open_in_the_units_of_the_settings() {
+        let dir = Scratch::new("project-units-lost");
+        let mut doc = Document::new();
+        doc.set_mechanical(&fresh().mech, &Settings::defaults().mechanical)
+            .unwrap();
+        doc.set(crate::project::UNITS_DOMAIN, false, b"garbage".to_vec())
+            .unwrap();
+        let path = dir.0.join("lost.phoenixproj");
+        std::fs::write(&path, doc.to_bytes()).unwrap();
+        let mut w = fresh();
+        assert!(w.open(&path));
+        assert_eq!(w.status, Status::Problem(Msg::UnitsIgnored, Vec::new()));
+        assert!(!w.read_only);
+        assert_eq!(w.project_units(), None);
+        assert_eq!(w.fields[0].text, "100.000 mm");
+        // it can be given units, which replace the ones that were lost
+        assert!(w.set_project_units(Some(ProjectUnits {
+            unit: Unit::Millimetre,
+            decimals: 1
+        })));
+        assert_eq!(w.fields[0].text, "100.0 mm");
+    }
+
+    #[test]
+    fn units_are_not_set_on_a_read_only_project_nor_with_too_many_decimals() {
+        let dir = Scratch::new("project-units-refused");
+        let mut doc = Document::new();
+        doc.set_mechanical(&fresh().mech, &Settings::defaults().mechanical)
+            .unwrap();
+        doc.set("thermal", true, b"something newer".to_vec())
+            .unwrap();
+        let path = dir.0.join("newer.phoenixproj");
+        std::fs::write(&path, doc.to_bytes()).unwrap();
+        let mut w = fresh();
+        assert!(w.open(&path) && w.read_only);
+        let before = w.fields[0].text.clone();
+        assert!(!w.set_project_units(Some(ProjectUnits {
+            unit: Unit::Inch,
+            decimals: 3
+        })));
+        assert_eq!(w.fields[0].text, before);
+        assert_eq!(w.project_units(), None);
+        let mut v = fresh();
+        assert!(!v.set_project_units(Some(ProjectUnits {
+            unit: Unit::Inch,
+            decimals: MAX_UNIT_DECIMALS + 1
+        })));
+        assert!(matches!(v.status, Status::Error(_)));
+        assert!(!v.dirty);
+        assert_eq!(v.fields[0].text, "100.000 mm");
     }
 }

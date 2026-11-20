@@ -22,6 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::enclosure::EnclosureParams;
 use crate::expr::{parse, ExprLimits};
 use crate::parametric::{ParamModel, Parameter};
+use crate::units::Unit;
 use crate::vars::{Param, Variables};
 use crate::{CadError, Length};
 
@@ -401,6 +402,85 @@ pub fn migrate_with(doc: &mut Document, steps: &[Migration], target: u32) -> Res
     Ok(())
 }
 
+/// The name of the domain that holds the units of a project.
+pub const UNITS_DOMAIN: &str = "units";
+
+const UNITS_HEADER: &str = "PHOENIX-CAD-UNITS 1";
+
+/// The most decimals a project may ask for.
+pub const MAX_UNIT_DECIMALS: u32 = 12;
+
+/// The unit in which a project shows and reads lengths, and how many decimals it shows. It is kept
+/// in the optional domain [`UNITS_DOMAIN`], so a project of inches stays in inches whoever opens it
+/// and an older program, which does not know the domain, keeps it as it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectUnits {
+    /// The unit.
+    pub unit: Unit,
+    /// The decimals shown, from 0 to [`MAX_UNIT_DECIMALS`].
+    pub decimals: u32,
+}
+
+impl ProjectUnits {
+    /// The text of the domain: the header, the unit and the decimals, one to a line.
+    pub fn to_bytes(self) -> Vec<u8> {
+        format!(
+            "{UNITS_HEADER}\nunit {}\ndecimals {}\n",
+            self.unit.suffix(),
+            self.decimals
+        )
+        .into_bytes()
+    }
+
+    /// Reads the text of the domain. Anything but the header, the two lines in this order, a unit
+    /// of the list and decimals from 0 to [`MAX_UNIT_DECIMALS`] is refused.
+    pub fn from_bytes(bytes: &[u8]) -> Result<ProjectUnits, CadError> {
+        let text = std::str::from_utf8(bytes).map_err(|_| bad("the units are not text"))?;
+        let mut lines = text.lines();
+        if lines.next() != Some(UNITS_HEADER) {
+            return Err(bad("the units have no header of this version"));
+        }
+        let unit = lines
+            .next()
+            .and_then(|l| l.strip_prefix("unit "))
+            .and_then(Unit::from_suffix)
+            .ok_or_else(|| bad("the unit of the project is not one of the list"))?;
+        let decimals = lines
+            .next()
+            .and_then(|l| l.strip_prefix("decimals "))
+            .filter(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
+            .and_then(|d| d.parse::<u32>().ok())
+            .filter(|d| *d <= MAX_UNIT_DECIMALS)
+            .ok_or_else(|| bad("the decimals of the project are not from 0 to 12"))?;
+        if lines.next().is_some() {
+            return Err(bad("the units have a line more than they should"));
+        }
+        Ok(ProjectUnits { unit, decimals })
+    }
+}
+
+impl Document {
+    /// The units of the project, or `None` when it has none (it follows the settings). A domain
+    /// that cannot be read is an error.
+    pub fn project_units(&self) -> Result<Option<ProjectUnits>, CadError> {
+        match self.get(UNITS_DOMAIN) {
+            Some(domain) => ProjectUnits::from_bytes(&domain.data).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// Sets the units of the project, or takes them away with `None` (the domain is optional).
+    pub fn set_project_units(&mut self, units: Option<ProjectUnits>) -> Result<(), CadError> {
+        match units {
+            Some(u) => self.set(UNITS_DOMAIN, false, u.to_bytes()),
+            None => {
+                self.domains.remove(UNITS_DOMAIN);
+                Ok(())
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -764,5 +844,70 @@ param edge_margin expr if(length > 80 mm, screw_M3_clearance, 2.5 mm)\n";
         // a file already at the current version is not touched
         let new = Document::from_bytes_with(&doc.to_bytes(), BIG, 3, steps).unwrap();
         assert_eq!(new, doc);
+    }
+
+    #[test]
+    fn the_units_of_a_project_are_written_and_read_back_in_a_domain_that_is_optional() {
+        for unit in [
+            Unit::Nanometre,
+            Unit::Micrometre,
+            Unit::Millimetre,
+            Unit::Centimetre,
+            Unit::Metre,
+            Unit::Inch,
+            Unit::Mil,
+        ] {
+            for decimals in [0, 1, 3, MAX_UNIT_DECIMALS] {
+                let u = ProjectUnits { unit, decimals };
+                assert_eq!(ProjectUnits::from_bytes(&u.to_bytes()).unwrap(), u);
+                // the same units always give the same text
+                assert_eq!(u.to_bytes(), u.to_bytes());
+            }
+        }
+        let u = ProjectUnits {
+            unit: Unit::Mil,
+            decimals: 2,
+        };
+        assert_eq!(
+            u.to_bytes(),
+            b"PHOENIX-CAD-UNITS 1\nunit mil\ndecimals 2\n".to_vec()
+        );
+        // a document without the domain has none, and one with it keeps it through the file
+        let mut doc = Document::new();
+        assert_eq!(doc.project_units().unwrap(), None);
+        doc.set_project_units(Some(u)).unwrap();
+        assert!(!doc.get(UNITS_DOMAIN).unwrap().critical);
+        let again = Document::from_bytes(&doc.to_bytes(), 1 << 20).unwrap();
+        assert_eq!(again.project_units().unwrap(), Some(u));
+        assert_eq!(again.to_bytes(), doc.to_bytes());
+        // taking them away leaves the others alone
+        doc.set("other", false, b"kept".to_vec()).unwrap();
+        doc.set_project_units(None).unwrap();
+        assert_eq!(doc.project_units().unwrap(), None);
+        assert_eq!(doc.names(), ["other"]);
+        doc.set_project_units(None).unwrap();
+    }
+
+    #[test]
+    fn units_that_are_not_exactly_the_text_are_refused() {
+        for bad in [
+            "",
+            "PHOENIX-CAD-UNITS 2\nunit mm\ndecimals 3\n",
+            "PHOENIX-CAD-UNITS 1\nunit MM\ndecimals 3\n",
+            "PHOENIX-CAD-UNITS 1\nunit furlong\ndecimals 3\n",
+            "PHOENIX-CAD-UNITS 1\ndecimals 3\nunit mm\n",
+            "PHOENIX-CAD-UNITS 1\nunit mm\ndecimals 13\n",
+            "PHOENIX-CAD-UNITS 1\nunit mm\ndecimals -1\n",
+            "PHOENIX-CAD-UNITS 1\nunit mm\ndecimals +2\n",
+            "PHOENIX-CAD-UNITS 1\nunit mm\ndecimals \n",
+            "PHOENIX-CAD-UNITS 1\nunit mm\ndecimals 3\nmore\n",
+            "PHOENIX-CAD-UNITS 1\nunit mm\n",
+        ] {
+            assert!(ProjectUnits::from_bytes(bad.as_bytes()).is_err(), "{bad:?}");
+        }
+        assert!(ProjectUnits::from_bytes(&[0xff, 0xfe]).is_err());
+        let mut doc = Document::new();
+        doc.set(UNITS_DOMAIN, false, b"garbage".to_vec()).unwrap();
+        assert!(doc.project_units().is_err());
     }
 }

@@ -6,7 +6,7 @@ use eh3d_phoenix_cad::catalog;
 use eh3d_phoenix_cad::config::{Settings, DEFAULT_CONFIG};
 use eh3d_phoenix_cad::drawing::View;
 use eh3d_phoenix_cad::export::Format;
-use eh3d_phoenix_cad::lang::{Lang, Msg};
+use eh3d_phoenix_cad::lang::{fill, Lang, Msg};
 use eh3d_phoenix_cad::shot;
 use eh3d_phoenix_cad::sketch::settings::SketchSettings;
 #[cfg(feature = "gui")]
@@ -47,6 +47,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad server-save PROJECT.phoenixproj [--name NAME] [--comment TEXT] [--user NAME] [--lang CODE] [--config FILE]   saves a project file on the server as a new version of the file of the project NAME (the name of the file without --name; the project is made when the server has none of that name, the write says which version it is made from, and the same bytes make no version)
   eh3d-phoenix-cad server-load NAME --out FILE [--overwrite] [--user NAME] [--lang CODE] [--config FILE]   reads the project NAME from the server, checks it is a project file and writes it to FILE, never over a file that exists unless --overwrite is given
   eh3d-phoenix-cad server-report NAME --from FILE [--report NAME] [--comment TEXT] [--user NAME] [--lang CODE] [--config FILE]   sends a report (a text file such as the output of bom, partlist or holes) to the folder of reports of the project NAME on the server, as a new version of the file REPORT (the name of the file without --report)
+  eh3d-phoenix-cad project-units PROJECT.phoenixproj [--unit nm|um|mm|cm|m|in|mil] [--decimals N] [--clear] [--out FILE] [--overwrite] [--lang CODE] [--config FILE]   tells the unit and the decimals the project keeps (in its own domain, so a project of inches stays in inches whoever opens it; a project without them follows the settings); with --unit and --decimals (0 to 12) it sets them, with --clear it takes them away, and writes the project to --out or over the file itself, never over a file that exists unless --overwrite is given
   eh3d-phoenix-cad config                                                         every setting of the library, of the window and of the sketch with its default value, as a file for --config
 
 --open FILE is the same as giving the file by itself; a sketch file opens the window on the sketch. --lang takes en, es, de, fr, it, ja, zh or pt; without it the language of the system is used (the reports cutplan, clearance, placements, holes and balance and the answer of sketch-export are in English unless --lang is given; with --text the first four are lines for a person in that language instead of comma separated values).
@@ -353,6 +354,97 @@ fn run_bom(args: &[String]) -> Result<bool, String> {
     .map_err(|e| error_text(&e, lang))?;
     print!("{out}");
     Ok(win.info.failed == 0)
+}
+
+/// `project-units`: tells the units a project keeps, or sets them (`--unit`, `--decimals`) or takes
+/// them away (`--clear`) and writes the project: to `--out`, or over the file itself with
+/// `--overwrite`; never over a file that exists unless `--overwrite` is given.
+fn run_project_units(args: &[String]) -> Result<bool, String> {
+    let (lang, args) = take_lang(args)?;
+    let (mut unit, mut decimals, mut clear) = (None, None, false);
+    let (mut out, mut overwrite) = (None::<PathBuf>, false);
+    let mut rest: Vec<String> = Vec::new();
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        match word.as_str() {
+            "--unit" => {
+                let w = words.next().ok_or("--unit needs a unit")?;
+                unit = Some(
+                    eh3d_phoenix_cad::units::Unit::from_suffix(w)
+                        .ok_or_else(|| format!("--unit {w}: not nm, um, mm, cm, m, in or mil"))?,
+                );
+            }
+            "--decimals" => {
+                let w = words.next().ok_or("--decimals needs a number")?;
+                decimals = Some(
+                    w.parse::<u32>()
+                        .map_err(|_| format!("--decimals {w}: not a whole number"))?,
+                );
+            }
+            "--clear" => clear = true,
+            "--out" => out = Some(PathBuf::from(words.next().ok_or("--out needs a file")?)),
+            "--overwrite" => overwrite = true,
+            _ => rest.push(word.clone()),
+        }
+    }
+    let (file, config) = file_and_config(&rest, "project file")?;
+    let mut win = open_for_report(&file, config.as_deref(), lang)?;
+    let changes = clear || unit.is_some() || decimals.is_some();
+    if !changes {
+        if out.is_some() || overwrite {
+            return Err("--out and --overwrite need --unit, --decimals or --clear".to_owned());
+        }
+        match win.project_units() {
+            Some(u) => println!(
+                "{}",
+                fill(
+                    Msg::UnitsSet.tr(lang),
+                    &[u.unit.suffix(), &u.decimals.to_string()]
+                )
+            ),
+            None => println!(
+                "{}",
+                fill(
+                    Msg::UnitsNone.tr(lang),
+                    &[
+                        win.settings.unit.suffix(),
+                        &win.settings.decimals.to_string()
+                    ]
+                )
+            ),
+        }
+        return Ok(true);
+    }
+    if clear && (unit.is_some() || decimals.is_some()) {
+        return Err("--clear cannot be given with --unit or --decimals".to_owned());
+    }
+    let now = win.project_units();
+    let units = if clear {
+        None
+    } else {
+        Some(eh3d_phoenix_cad::project::ProjectUnits {
+            unit: unit.or(now.map(|u| u.unit)).unwrap_or(win.settings.unit),
+            decimals: decimals
+                .or(now.map(|u| u.decimals))
+                .unwrap_or(win.settings.decimals),
+        })
+    };
+    let target = out.unwrap_or_else(|| file.clone());
+    if target.exists() && !overwrite {
+        return Err(format!(
+            "{} exists: give --overwrite to write over it",
+            target.display()
+        ));
+    }
+    if !win.set_project_units(units) {
+        return Err(win.status.text(lang));
+    }
+    let told = win.status.text(lang);
+    if !win.save_to(&target) {
+        return Err(win.status.text(lang));
+    }
+    println!("{told}");
+    Ok(true)
 }
 
 /// `holes`: reads a project and prints the schedule of the holes of the box, or with `--tools`
@@ -1475,6 +1567,7 @@ fn run(args: &[String]) -> Result<bool, String> {
         "holes" => run_holes(rest),
         "partlist" => run_partlist(rest),
         "bom" => run_bom(rest),
+        "project-units" => run_project_units(rest),
         "balance" => run_balance(rest),
         "revolve" => run_revolve(rest),
         "sweep" => run_sweep(rest),

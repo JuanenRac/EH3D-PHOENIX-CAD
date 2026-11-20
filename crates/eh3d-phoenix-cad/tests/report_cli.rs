@@ -1236,3 +1236,77 @@ fn the_section_drawing_hatches_each_material_at_its_own_angle_when_the_settings_
     assert_eq!(code, 1);
     assert!(err.contains("drawing.hatch_angles"), "{err}");
 }
+
+#[test]
+fn the_units_of_a_project_are_told_set_and_taken_away_from_the_command_line() {
+    let dir = Scratch::new("project-units");
+    let copy = dir.file("box.phoenixproj");
+    fs::copy(BOX, &copy).unwrap();
+    let (code, out, err) = run(&["project-units", &copy]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        out,
+        "The project has no units of its own: it follows the settings (mm, 3 decimals)\n"
+    );
+    // nothing is written over a file that exists unless it was ordered
+    let (code, _, err) = run(&["project-units", &copy, "--unit", "in"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("--overwrite"), "{err}");
+    let inches = dir.file("inches.phoenixproj");
+    let (code, out, err) = run(&[
+        "project-units",
+        &copy,
+        "--unit",
+        "in",
+        "--decimals",
+        "2",
+        "--out",
+        &inches,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "Units of the project: in, 2 decimals\n");
+    // the first file is as it was and the new one keeps its units
+    assert_eq!(fs::read(&copy).unwrap(), fs::read(BOX).unwrap());
+    let (code, out, _) = run(&["project-units", &inches, "--lang", "es"]);
+    assert_eq!(code, 0);
+    assert_eq!(out, "Unidades del proyecto: in, 2 decimales\n");
+    // one of the two can change and the other stays
+    let (code, out, err) = run(&["project-units", &inches, "--decimals", "4", "--overwrite"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "Units of the project: in, 4 decimals\n");
+    let (code, out, err) = run(&["project-units", &inches, "--unit", "mil", "--overwrite"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "Units of the project: mil, 4 decimals\n");
+    // the project still opens and checks
+    let (code, _, err) = run(&["check", &inches]);
+    assert!(code == 0 || code == 1, "{err}");
+    // and the units can be taken away
+    let (code, out, err) = run(&["project-units", &inches, "--clear", "--overwrite"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "The project follows the units of the settings again\n");
+    let (_, out, _) = run(&["project-units", &inches, "--lang", "de"]);
+    assert!(
+        out.starts_with("Das Projekt hat keine eigenen Einheiten"),
+        "{out}"
+    );
+    // what cannot be done is refused with a sentence and writes nothing
+    let before = fs::read(&inches).unwrap();
+    for (args, why) in [
+        (vec!["--unit", "furlong"], "not nm, um, mm"),
+        (vec!["--decimals", "x"], "not a whole number"),
+        (vec!["--decimals", "13", "--overwrite"], "decimals"),
+        (
+            vec!["--clear", "--unit", "mm", "--overwrite"],
+            "cannot be given with",
+        ),
+        (vec!["--overwrite"], "need --unit"),
+        (vec!["--unit"], "--unit needs a unit"),
+    ] {
+        let mut all = vec!["project-units", inches.as_str()];
+        all.extend(args);
+        let (code, _, err) = run(&all);
+        assert_eq!(code, 1, "{all:?}");
+        assert!(err.to_lowercase().contains(why), "{all:?}: {err}");
+    }
+    assert_eq!(fs::read(&inches).unwrap(), before);
+}
