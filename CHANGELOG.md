@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.1.1] - Sheet of views as a PDF, scale bar, shared client for the project store, enclosure features for the server station, tangent and angle mates and richer constraints
+
 - **The documents tell the PDF sheet, the scale bar, the contract and the link metrics, and the test counts are up to date:** `docs/EXPORT.md` has the new chapter on the PDF sheet and the scale bar and its setting, `docs/SERVER.md` the section `[contract]`, the card of the kinds proposed to the server, `server-contract` and `server-status --metrics`, `docs/STATUS.md` and `docs/ERROR_CODES.md` the new things and the mixed numbers, and the eight READMEs say that the Rust library has 1294 tests (the ones `cargo test` runs: the library, the six files of command tests and the examples of the documentation).
 
 - **Mixed numbers of inches are read wherever a length is typed:** `1 1/2 in`, `2 3/16 in`, `-1 1/2 in` and `12 1/2 mm` (a whole number, a space and a proper fraction; the sign of the whole number is the sign of the value) are read by `units::parse_length`, so the fields of the window, the settings and the commands take them, and an angle takes `22 1/2`. A fraction that is not proper (`1 5/2`), has a sign of its own (`1 -1/2`) or is broken is refused with `PHOENIX-CAD-008`; the plain fractions and decimals are read as they were. 1 test and a line of the doctest.
