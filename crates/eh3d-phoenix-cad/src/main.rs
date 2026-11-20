@@ -28,7 +28,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad cutplan PROJECT.phoenixproj [--text] [--lang CODE] [--config FILE]            the cutting plan of the profiles placed in a project: the pieces of the cut list fitted into bars (the longest cut each profile comes in) with the kerf of the saw and the trimmed ends, as comma separated values or, with --text, as lines for a person
   eh3d-phoenix-cad clearance PROJECT.phoenixproj [--text] [--lang CODE] [--config FILE]                  lists, as comma separated values, the pairs of placed parts that do not touch and are closer than clearance.min_gap (exit 1 when there is one)
   eh3d-phoenix-cad placements PROJECT.phoenixproj [--explode PERCENT] [--text] [--lang CODE] [--config FILE]   where each placed part is (the corner and the size in millimetres and the turn) and the size of the whole assembly, as comma separated values; with --explode the parts are first pulled apart from the middle of the assembly by that percentage
-  eh3d-phoenix-cad bom PROJECT.phoenixproj [--text] [--group material|kind|name] [--lang CODE] [--config FILE]                  the bill of materials with cost: the parts and bodies grouped into lines with quantity, material, mass, the price of the material (price_per_kg of the settings) and the cost, with the subtotal, the markup and the total, as comma separated values for a spreadsheet; --text prints lines for a person in the language of --lang (any of the eight)
+  eh3d-phoenix-cad bom PROJECT.phoenixproj [--text] [--group material|kind|name | --by-assembly] [--lang CODE] [--config FILE]                  the bill of materials with cost: the parts and bodies grouped into lines with quantity, material, mass, the price of the material (price_per_kg of the settings) and the cost, with the subtotal, the markup and the total, as comma separated values for a spreadsheet; --text prints lines for a person in the language of --lang (any of the eight); --by-assembly gives a bill for each assembly (the parts that mates join, each set priced alone, and the parts and bodies that no mate holds last, as (no assembly)) instead of one bill for the model
   eh3d-phoenix-cad partlist PROJECT.phoenixproj [--text] [--lang CODE] [--config FILE]           the placed parts with their properties (name, kind, part, material, density, volume, mass, corner and size of the box) and the totals, as comma separated values; --text prints lines for a person in the language of --lang (any of the eight)
   eh3d-phoenix-cad holes PROJECT.phoenixproj [--tools] [--text] [--lang CODE] [--config FILE]            the schedule of the holes of the box for the person who drills (a tag, the face, the position, the diameter and the shape of each) as comma separated values, or with --tools the drills and cutters they need grouped by diameter and shape
   eh3d-phoenix-cad sketch-export PROJECT.phoenixproj|SKETCH.phoenixsketch --format dxf|svg|step [--height LENGTH] [--sketch NAME] [--out FILE] [--overwrite] [--lang CODE] [--config FILE]   writes a sketch (the only one of the project, or the one named) as a flat drawing of its closed outlines for a laser or a router, or with --format step (which needs --height) as a STEP file of the prism that its outlines make when raised by that height, with the holes through it and a circle or an arc as the polygon of the profile; never over a file that exists unless --overwrite is given
@@ -312,7 +312,10 @@ fn run_bom(args: &[String]) -> Result<bool, String> {
     // `--group material|kind|name` prints the totals by group instead of the lines
     let mut group = None;
     let mut rest: Vec<String> = Vec::new();
-    let mut words = args.iter().filter(|a| *a != "--text");
+    let by_assembly = args.iter().any(|a| a == "--by-assembly");
+    let mut words = args
+        .iter()
+        .filter(|a| *a != "--text" && *a != "--by-assembly");
     while let Some(word) = words.next() {
         if word == "--group" {
             let by = words
@@ -328,6 +331,19 @@ fn run_bom(args: &[String]) -> Result<bool, String> {
     }
     let (file, config) = file_and_config(&rest, "project file")?;
     let win = open_for_report(&file, config.as_deref(), lang)?;
+    if by_assembly {
+        if group.is_some() {
+            return Err("--by-assembly and --group cannot be given together".to_string());
+        }
+        let out = if text {
+            win.bom_assemblies_text()
+        } else {
+            win.bom_assemblies_csv()
+        }
+        .map_err(|e| error_text(&e, lang))?;
+        print!("{out}");
+        return Ok(win.info.failed == 0);
+    }
     let out = match (group, text) {
         (Some(by), true) => win.bom_groups_text(by),
         (Some(by), false) => win.bom_groups_csv(by),

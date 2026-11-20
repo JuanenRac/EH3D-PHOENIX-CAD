@@ -18,15 +18,19 @@
 //! with `=`, `+`, `-` or `@` gets a quote mark in front so that a spreadsheet does not take the
 //! name of a part for a formula.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use crate::catalog::{mass_g_text, Kind};
+use crate::assembly::Mate;
+use crate::catalog::{mass_g_text, Kind, PartInstance};
 use crate::config::CostSettings;
+use crate::enclosure::Id;
 use crate::lang::{fill, Lang, Msg};
 use crate::partlist::{List, Row};
 use crate::revolve::scaled;
 use crate::scad::mm_text;
+use crate::swept::SweptBody;
+use crate::turned::Turned;
 use crate::window::kind_msg;
 use crate::CadError;
 
@@ -526,6 +530,154 @@ pub fn text_in(bom: &Bom, lang: Lang) -> String {
     out
 }
 
+/// The bill of one assembly: the parts that mates hold together, or the parts and bodies that no
+/// mate holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssemblyBom {
+    /// The name of the part of the assembly that comes first by name; empty for the parts and
+    /// bodies that belong to no assembly.
+    pub name: String,
+    /// The names of the parts of the assembly in order (the bodies of the rest, by name).
+    pub parts: Vec<String>,
+    /// The bill of the assembly alone: its lines, its totals and its markup.
+    pub bom: Bom,
+}
+
+/// The first part of the set that a part belongs to, found with the sets joined so far.
+fn set_root(parent: &mut BTreeMap<Id, Id>, id: Id) -> Id {
+    let mut top = id;
+    while let Some(next) = parent.get(&top).copied().filter(|n| *n != top) {
+        top = next;
+    }
+    let mut at = id;
+    while at != top {
+        let next = parent.insert(at, top).unwrap_or(top);
+        at = next;
+    }
+    top
+}
+
+/// The bills of the assemblies of a model. An assembly is a set of parts joined by mates (a mate
+/// joins the part it places to the part it is measured from, and mates that join through a third
+/// part make one set); each has its own bill, priced alone. The parts that no mate holds and the
+/// turned and swept bodies, which a mate cannot place, are the last bill, with an empty name.
+/// Assemblies come in the order of the name of their first part, and a model with no mates has
+/// only the last bill.
+pub fn by_assembly(
+    parts: &BTreeMap<Id, PartInstance>,
+    turned: &BTreeMap<Id, Turned>,
+    swept: &BTreeMap<Id, SweptBody>,
+    densities: &BTreeMap<String, u32>,
+    mates: &BTreeMap<Id, Mate>,
+    cost: &CostSettings,
+) -> Result<Vec<AssemblyBom>, CadError> {
+    let mut parent: BTreeMap<Id, Id> = parts.keys().map(|k| (*k, *k)).collect();
+    let mut mated: BTreeSet<Id> = BTreeSet::new();
+    for m in mates.values() {
+        if m.a != m.b && parts.contains_key(&m.a) && parts.contains_key(&m.b) {
+            let (ra, rb) = (set_root(&mut parent, m.a), set_root(&mut parent, m.b));
+            if ra != rb {
+                parent.insert(rb, ra);
+            }
+            mated.insert(m.a);
+            mated.insert(m.b);
+        }
+    }
+    let mut sets: BTreeMap<Id, Vec<Id>> = BTreeMap::new();
+    for id in &mated {
+        let top = set_root(&mut parent, *id);
+        sets.entry(top).or_default().push(*id);
+    }
+    let mut named: Vec<(String, Id, Vec<Id>)> = sets
+        .into_values()
+        .filter_map(|ids| {
+            ids.iter()
+                .map(|i| (parts[i].name.clone(), *i))
+                .min()
+                .map(|(name, first)| (name, first, ids))
+        })
+        .collect();
+    named.sort();
+    let mut out = Vec::new();
+    for (name, _, ids) in named {
+        let subset: BTreeMap<Id, PartInstance> =
+            ids.iter().map(|i| (*i, parts[i].clone())).collect();
+        let list =
+            crate::partlist::list_with(&subset, &BTreeMap::new(), &BTreeMap::new(), densities)?;
+        let mut names: Vec<String> = subset.values().map(|p| p.name.clone()).collect();
+        names.sort();
+        out.push(AssemblyBom {
+            name,
+            parts: names,
+            bom: from_list(&list, cost)?,
+        });
+    }
+    let loose: BTreeMap<Id, PartInstance> = parts
+        .iter()
+        .filter(|(id, _)| !mated.contains(*id))
+        .map(|(id, p)| (*id, p.clone()))
+        .collect();
+    let list = crate::partlist::list_with(&loose, turned, swept, densities)?;
+    if !list.rows.is_empty() {
+        let mut names: Vec<String> = list.rows.iter().map(|r| r.name.clone()).collect();
+        names.sort();
+        out.push(AssemblyBom {
+            name: String::new(),
+            parts: names,
+            bom: from_list(&list, cost)?,
+        });
+    }
+    Ok(out)
+}
+
+/// The bills of the assemblies as comma separated values, the same text in any language: the
+/// columns of the bill with the name of the assembly in front (`(no assembly)` for the last bill),
+/// and under each its rows `subtotal`, `markup` and `total`.
+pub fn assemblies_csv(list: &[AssemblyBom]) -> String {
+    let mut out = String::new();
+    for (k, a) in list.iter().enumerate() {
+        let label = if a.name.is_empty() {
+            "(no assembly)".to_string()
+        } else {
+            cell(&a.name)
+        };
+        let text = csv(&a.bom);
+        for (n, line) in text.lines().enumerate() {
+            if n == 0 {
+                if k == 0 {
+                    let _ = writeln!(out, "assembly,{line}");
+                }
+                continue;
+            }
+            let _ = writeln!(out, "{label},{line}");
+        }
+    }
+    if out.is_empty() {
+        out.push_str("assembly\n");
+    }
+    out
+}
+
+/// The bills of the assemblies as lines of text in a language: a title for each assembly with the
+/// number of its parts, then its bill.
+pub fn assemblies_text_in(list: &[AssemblyBom], lang: Lang) -> String {
+    let mut out = String::new();
+    for a in list {
+        let title = if a.name.is_empty() {
+            Msg::BomNoAssembly.tr(lang).to_string()
+        } else {
+            fill(
+                Msg::BomAssembly.tr(lang),
+                &[&a.name, &a.parts.len().to_string()],
+            )
+        };
+        let _ = writeln!(out, "{title}");
+        out.push_str(&text_in(&a.bom, lang));
+        out.push('\n');
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -969,5 +1121,181 @@ total,3,5,14000.000,39.100,0.796,EUR\n"
         }
         assert!(text_in(&bom, Lang::De).contains("Zwischensumme 0.796 EUR"));
         assert!(text_in(&bom, Lang::Es).contains("coste 0.348 EUR"));
+    }
+
+    fn mm(v: i64) -> crate::Length {
+        crate::Length::from_mm(v).unwrap()
+    }
+
+    fn nid(n: u64) -> Id {
+        Id::from_parts(1_700_000_000_000, 1, n).unwrap()
+    }
+
+    fn cube(name: &str, material: &str, x: i64) -> PartInstance {
+        use crate::catalog::{Orientation, Part, Shape};
+        PartInstance {
+            name: name.into(),
+            library: "lib".into(),
+            part: Part {
+                name: "cube".into(),
+                material: material.into(),
+                shape: Shape::Profile {
+                    width: mm(10),
+                    height: mm(10),
+                    wall: crate::Length::ZERO,
+                    default_cut: mm(10),
+                    max_cut: mm(100),
+                },
+            },
+            at: [mm(x), crate::Length::ZERO, crate::Length::ZERO],
+            orientation: Orientation::default(),
+            cut: Some(mm(10)),
+        }
+    }
+
+    fn densities() -> BTreeMap<String, u32> {
+        BTreeMap::from([("steel".to_owned(), 8000), ("PLA".to_owned(), 1240)])
+    }
+
+    fn stack(a: u64, b: u64) -> (Id, Mate) {
+        use crate::assembly::MateKind;
+        (
+            nid(100 + a * 10 + b),
+            Mate {
+                a: nid(a),
+                b: nid(b),
+                kind: MateKind::Stack,
+            },
+        )
+    }
+
+    fn parts_of(list: &[(u64, &str, &str)]) -> BTreeMap<Id, PartInstance> {
+        list.iter()
+            .map(|(n, name, material)| (nid(*n), cube(name, material, *n as i64 * 20)))
+            .collect()
+    }
+
+    fn split(parts: &BTreeMap<Id, PartInstance>, mates: &[(Id, Mate)]) -> Vec<AssemblyBom> {
+        let mates: BTreeMap<Id, Mate> = mates.iter().cloned().collect();
+        by_assembly(
+            parts,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &densities(),
+            &mates,
+            &cost(100, 10),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn the_parts_that_mates_join_are_an_assembly_and_the_rest_is_the_last_bill() {
+        let parts = parts_of(&[
+            (1, "frame", "steel"),
+            (2, "post", "steel"),
+            (3, "lid", "PLA"),
+            (4, "spare", "steel"),
+            (5, "bolt", "steel"),
+        ]);
+        // the lid stands on the post and the post on the frame (a chain through a third part)
+        let out = split(&parts, &[stack(1, 2), stack(2, 3)]);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].name, "frame");
+        assert_eq!(out[0].parts, ["frame", "lid", "post"]);
+        assert_eq!(out[0].bom.pieces, 3);
+        assert_eq!(out[1].name, "");
+        assert_eq!(out[1].parts, ["bolt", "spare"]);
+        assert_eq!(out[1].bom.pieces, 2);
+        // between them they hold every piece and every microgram of the model
+        let whole = from_list(
+            &crate::partlist::list(&parts, &densities()).unwrap(),
+            &cost(100, 10),
+        )
+        .unwrap();
+        assert_eq!(out.iter().map(|a| a.bom.pieces).sum::<u32>(), whole.pieces);
+        assert_eq!(
+            out.iter().map(|a| a.bom.mass_ug).sum::<i128>(),
+            whole.mass_ug
+        );
+        assert_eq!(
+            out.iter().map(|a| a.bom.volume_nm3).sum::<i128>(),
+            whole.volume_nm3
+        );
+    }
+
+    #[test]
+    fn assemblies_come_in_the_order_of_their_first_name_and_what_mates_cannot_join_is_ignored() {
+        let parts = parts_of(&[
+            (1, "zeta", "steel"),
+            (2, "zed", "steel"),
+            (3, "beta", "steel"),
+            (4, "alpha", "steel"),
+            (6, "lonely", "PLA"),
+        ]);
+        let ghost = stack(6, 9);
+        let itself = (
+            nid(200),
+            Mate {
+                a: nid(6),
+                b: nid(6),
+                kind: crate::assembly::MateKind::Stack,
+            },
+        );
+        let out = split(&parts, &[stack(1, 2), stack(3, 4), ghost, itself]);
+        let names: Vec<&str> = out.iter().map(|a| a.name.as_str()).collect();
+        // the first name of {beta, alpha} is alpha and of {zeta, zed} is zed; the lonely part is the rest
+        assert_eq!(names, ["alpha", "zed", ""]);
+        assert_eq!(out[2].parts, ["lonely"]);
+        // without any mate the model is one bill with no name
+        let one = split(&parts, &[]);
+        assert_eq!(one.len(), 1);
+        assert!(one[0].name.is_empty());
+        assert_eq!(one[0].bom.pieces, 5);
+        assert!(split(&BTreeMap::new(), &[]).is_empty());
+    }
+
+    #[test]
+    fn the_bills_of_the_assemblies_are_comma_separated_values_with_the_assembly_in_front() {
+        let parts = parts_of(&[
+            (1, "=frame", "steel"),
+            (2, "post", "steel"),
+            (3, "loose one", "PLA"),
+        ]);
+        let out = split(&parts, &[stack(1, 2)]);
+        let csv = assemblies_csv(&out);
+        let lines: Vec<&str> = csv.lines().collect();
+        assert!(lines[0].starts_with("assembly,item,name,kind,material,"));
+        // one header, and for each assembly its lines and its three rows of totals
+        assert_eq!(lines.len(), 1 + (1 + 3) + (1 + 3));
+        assert!(lines[1].starts_with("'=frame,1,cube,"), "{}", lines[1]);
+        assert!(lines.iter().any(|l| l.starts_with("'=frame,subtotal,")));
+        assert!(lines.iter().any(|l| l.starts_with("(no assembly),1,cube,")));
+        assert!(lines.last().unwrap().starts_with("(no assembly),total,"));
+        // the columns are those of the bill, plus the assembly
+        let width = lines[0].split(',').count();
+        assert!(lines.iter().all(|l| l.split(',').count() == width));
+        assert_eq!(assemblies_csv(&[]), "assembly\n");
+    }
+
+    #[test]
+    fn the_bills_of_the_assemblies_are_told_in_each_of_the_eight_languages() {
+        let parts = parts_of(&[
+            (1, "frame", "steel"),
+            (2, "post", "steel"),
+            (3, "bolt", "PLA"),
+        ]);
+        let out = split(&parts, &[stack(1, 2)]);
+        let en = assemblies_text_in(&out, Lang::En);
+        assert!(en.starts_with("Assembly frame: 2 parts\n"), "{en}");
+        assert!(en.contains("Parts and bodies in no assembly\n"));
+        let es = assemblies_text_in(&out, Lang::Es);
+        assert!(es.starts_with("Conjunto frame: 2 piezas\n"), "{es}");
+        let mut seen = Vec::new();
+        for lang in Lang::ALL {
+            let t = assemblies_text_in(&out, lang);
+            assert!(t.contains(&text_in(&out[0].bom, lang)));
+            assert!(!seen.contains(&t));
+            seen.push(t);
+        }
     }
 }

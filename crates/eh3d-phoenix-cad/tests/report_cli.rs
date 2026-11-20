@@ -1170,3 +1170,23 @@ fn an_edited_sketch_is_a_sketch_that_can_be_drawn_again() {
     assert_eq!(code, 0, "{err}");
     assert!(fs::read_to_string(&drawing).unwrap().contains("<svg"));
 }
+
+#[test]
+fn the_bill_by_assembly_has_a_bill_for_each_set_of_parts_that_mates_join() {
+    let (code, csv, err) = run(&["bom", ASSEMBLY, "--by-assembly"]);
+    assert_eq!(code, 0, "{err}");
+    let lines: Vec<&str> = csv.lines().collect();
+    assert!(lines[0].starts_with("assembly,item,name,kind,"), "{csv}");
+    // the mates of the example join its parts into one assembly: its rows come first, with its totals
+    assert!(lines.iter().any(|l| l.contains(",subtotal,")), "{csv}");
+    let width = lines[0].split(',').count();
+    assert!(lines.iter().all(|l| l.split(',').count() == width), "{csv}");
+    // the text is in the language asked for
+    let (code, text, _) = run(&["bom", ASSEMBLY, "--by-assembly", "--text", "--lang", "es"]);
+    assert_eq!(code, 0);
+    assert!(text.starts_with("Conjunto "), "{text}");
+    // the two ways of grouping do not go together
+    let (code, _, err) = run(&["bom", ASSEMBLY, "--by-assembly", "--group", "name"]);
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("cannot be given together"), "{err}");
+}

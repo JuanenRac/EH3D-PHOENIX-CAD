@@ -2396,6 +2396,31 @@ impl Window {
             .map(|b| crate::bom::groups_text_in(&b, by, self.lang))
     }
 
+    /// The bills of the assemblies of the model: the parts that mates join, each set with its own
+    /// bill, and the parts and bodies that no mate holds (see [`crate::bom::by_assembly`]).
+    pub fn bom_assemblies(&self) -> Result<Vec<crate::bom::AssemblyBom>, CadError> {
+        crate::bom::by_assembly(
+            &self.placed_parts()?,
+            self.built.enclosure.turned(),
+            self.built.enclosure.swept(),
+            &self.settings.materials,
+            self.built.enclosure.mates(),
+            &self.settings.cost,
+        )
+    }
+
+    /// The bills of the assemblies as comma separated values.
+    pub fn bom_assemblies_csv(&self) -> Result<String, CadError> {
+        self.bom_assemblies()
+            .map(|a| crate::bom::assemblies_csv(&a))
+    }
+
+    /// The bills of the assemblies as lines of text in the language of the window.
+    pub fn bom_assemblies_text(&self) -> Result<String, CadError> {
+        self.bom_assemblies()
+            .map(|a| crate::bom::assemblies_text_in(&a, self.lang))
+    }
+
     /// The list of the placed parts as comma separated values.
     pub fn part_list_csv(&self) -> Result<String, CadError> {
         self.part_list().map(|l| crate::partlist::csv(&l))
