@@ -15,11 +15,16 @@ eh3d-container = { version = ">=0.0.1", path = "../../../EH3D-COMMON/crates/cont
 # the link to EH3D-SERVER (projects kept on it, reports sent to it) is the client every program of the suite uses; no dependency of its own
 eh3d-serverclient = { version = ">=0.0.1", path = "../../../EH3D-COMMON/crates/serverclient" }
 
-# the panel of the settings of the server that every program of the suite shows (the window only; the link itself needs none of it)
+# the words of the frame of the window and the panel of the settings of the server that every program of the suite shows (the model has no window in it; the drawing is the feature `gui`)
 [dependencies.eh3d-view]
 version = ">=0.0.1"
 path = "../../../EH3D-COMMON/crates/view"
-optional = true
+
+# the frame of the window: panels that dock, float and fold, workspaces, the menu bar and the shortcuts; the model has no window, the drawing is the feature `gui`
+[dependencies.eh3d-dock]
+version = ">=0.0.1"
+path = "../../../EH3D-COMMON/crates/dock"
+default-features = false
 
 [[bin]]
 name = "eh3d-phoenix-cad"
@@ -28,7 +33,7 @@ path = "src/main.rs"
 [features]
 default = []
 # the window (egui, with the icon of the program): `cargo run --release --features gui`
-gui = ["dep:eframe", "dep:png", "dep:eh3d-view", "eh3d-view/gui"]
+gui = ["dep:eframe", "dep:png", "eh3d-view/gui", "eh3d-dock/gui"]
 
 # the window
 [dependencies.eframe]

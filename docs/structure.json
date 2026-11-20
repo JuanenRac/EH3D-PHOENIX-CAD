@@ -142,6 +142,19 @@
           }
         },
         {
+          "name": "HISTORY.md",
+          "desc": {
+            "en": "the history as a graph, the prism solids and the solver crate",
+            "es": "el historial como grafo, los sólidos de prismas y el crate del solucionador",
+            "de": "der Verlauf als Graph, die Quaderkörper und das Löser-Crate",
+            "fr": "l'historique en graphe, les solides de prismes et le crate du solveur",
+            "it": "la cronologia come grafo, i solidi di prismi e il crate del risolutore",
+            "ja": "グラフとしての履歴、角柱ソリッド、ソルバーのクレート",
+            "zh": "作为图的历史、棱柱实体与求解器 crate",
+            "pt": "o histórico como grafo, os sólidos de prismas e o crate do solver"
+          }
+        },
+        {
           "name": "CATALOG.md",
           "desc": {
             "en": "the catalog of parts: libraries, bill of materials, cut list",
@@ -250,14 +263,14 @@
         {
           "name": "crates/",
           "desc": {
-            "en": "model: enclosure, patterns, fins, parts, assemblies, sketches, script, window",
-            "es": "modelo mecánico: caja, patrones, aletas, piezas, ensamblajes, croquis, script, ventana",
-            "de": "mechanisches Modell: Gehäuse, Muster, Kühlrippen, Teile, Baugruppen, Skizzen, Skript, Fenster",
-            "fr": "modèle mécanique : boîtier, motifs, ailettes, pièces, assemblages, esquisses, script, fenêtre",
-            "it": "modello meccanico: contenitore, schemi, alette, parti, assiemi, schizzi, script, finestra",
-            "ja": "機械モデル：筐体、パターン、冷却フィン、部品、アセンブリ、スケッチ、スクリプト、ウィンドウ",
-            "zh": "机械模型：外壳、阵列、散热片、零件、装配、草图、脚本、窗口",
-            "pt": "modelo mecânico: caixa, padrões, alhetas, peças, montagens, esboços, script, janela"
+            "en": "model: enclosure, parts, sketches, history, solver, script, window",
+            "es": "modelo: caja, piezas, croquis, historial, solucionador, script, ventana",
+            "de": "Modell: Gehäuse, Teile, Skizzen, Verlauf, Löser, Skript, Fenster",
+            "fr": "modèle : boîtier, pièces, esquisses, historique, solveur, script, fenêtre",
+            "it": "modello: contenitore, parti, schizzi, cronologia, risolutore, script, finestra",
+            "ja": "モデル：筐体、部品、スケッチ、履歴、ソルバー、スクリプト、ウィンドウ",
+            "zh": "模型：外壳、零件、草图、历史、求解器、脚本、窗口",
+            "pt": "modelo: caixa, peças, esboços, histórico, solver, script, janela"
           }
         },
         {

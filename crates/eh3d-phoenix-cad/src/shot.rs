@@ -112,6 +112,9 @@ pub struct WindowArgs {
     /// The part of the window that shows first (`--view model` or `--view sketch`); none shows the
     /// sketch when a sketch file is given and the model otherwise.
     pub view: Option<StartView>,
+    /// The workspace of the frame the window opens in (`--window model|review|compact`); none
+    /// takes the one of the settings file.
+    pub window: Option<&'static str>,
     /// The picture mode: the window opens, saves a PNG file and closes by itself.
     pub shot: Option<ShotRequest>,
 }
@@ -139,7 +142,7 @@ struct PictureOptions {
     replace: bool,
 }
 
-/// Reads the arguments of the window (after an optional leading `gui`): `--shot FILE.png`, `--size WxH`, `--theme`, `--wait N`, `--replace`, `--lang CODE`, `--view model|sketch`, `--config FILE`, `--open FILE` and bare
+/// Reads the arguments of the window (after an optional leading `gui`): `--shot FILE.png`, `--size WxH`, `--theme`, `--wait N`, `--replace`, `--lang CODE`, `--view model|sketch`, `--window model|review|compact`, `--config FILE`, `--open FILE` and bare
 /// file names, of which at most `max_files` are accepted. The answer for a mistake is the reason.
 pub fn parse_window_args(args: &[String], max_files: usize) -> Result<WindowArgs, String> {
     let args = if args.first().is_some_and(|a| a == "gui") {
@@ -187,6 +190,15 @@ pub fn parse_window_args(args: &[String], max_files: usize) -> Result<WindowArgs
             "--view" => {
                 let text = iter.next().ok_or("--view needs model or sketch")?;
                 parsed.view = Some(StartView::parse(text).ok_or("--view is model or sketch")?);
+            }
+            "--window" => {
+                let text = iter
+                    .next()
+                    .ok_or("--window needs model, review or compact")?;
+                parsed.window = Some(
+                    crate::dockui::workspace_of_word(text)
+                        .ok_or("--window is model, review or compact")?,
+                );
             }
             "--replace" => picture.replace = true,
             "--config" => {
@@ -241,6 +253,26 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn the_workspace_of_the_frame_is_asked_for_with_window() {
+        let parsed = parse_window_args(&args(&["--window", "review"]), 1).unwrap();
+        assert_eq!(parsed.window, Some("Review"));
+        let parsed =
+            parse_window_args(&args(&["--window", "COMPACT", "--view", "sketch"]), 1).unwrap();
+        assert_eq!(
+            (parsed.window, parsed.view),
+            (Some("Compact"), Some(StartView::Sketch))
+        );
+        assert_eq!(parse_window_args(&args(&[]), 1).unwrap().window, None);
+        for bad in [
+            &["--window"][..],
+            &["--window", "sketch"],
+            &["--window", ""],
+        ] {
+            assert!(parse_window_args(&args(bad), 1).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

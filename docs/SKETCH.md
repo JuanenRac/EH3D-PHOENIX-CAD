@@ -92,6 +92,8 @@ The solver is deterministic bit for bit: it uses only sums, products, quotients 
 
 Limits to know: the matrices are dense, so a sketch is limited by the settings to a few hundred elements; the solver finds a solution near the drawing and does not look for the other ones; a conflict is found by comparing rows of the Jacobian, so two constraints that are nearly but not exactly dependent (closer than the rank tolerance) are treated as dependent.
 
+The numeric part of all this (the steps above, the rank of the rows and the list of the redundant and the conflicting constraints) is the crate `eh3d-phoenix-cad-solver`, which knows nothing of sketches: `Sketch::solve` builds the residual rows of its constraints, hands them to the engine and writes the solution back (see `docs/HISTORY.md` for the contract of the crate).
+
 ## The settings
 
 All tuned values are in `phoenix-cad-sketch.default.cfg` (section `[sketch]`), read with `SketchSettings::with_user_config`; the code holds none. A user file only needs the keys it changes, and can be the same file as the other settings.
@@ -142,7 +144,7 @@ Each `[sketch]` is followed by the text of one sketch in the form below (its fir
 
 ## The window
 
-The window has a **Sketch** part beside the **Box** part (the switch in the top bar). `eh3d-phoenix-cad SKETCH.phoenixsketch` opens it on a sketch file at once, and `eh3d-phoenix-cad PROJECT.phoenixproj --view sketch` opens the project and, in the Sketch part, the first sketch of the project (or the file next to the project when the project has none). Everything the window decides is in `eh3d_phoenix_cad::sketch_ui` and is tested without a screen; `gui` only draws the primitives that `SketchEditor::scene` returns and passes on the clicks, drags, wheel and keys.
+The sketch is drawn in panels of the docking frame of the window beside the panels of the model: the canvas is a tab of the same place as the 3D view, and the tools, the constraints and the dimensions are panels of their own (the entry Sketch of the menu Tools, or a click on a tab, makes the sketch the mode of the window; the file commands of the menus then act on the sketch). `eh3d-phoenix-cad SKETCH.phoenixsketch` opens it on a sketch file at once, and `eh3d-phoenix-cad PROJECT.phoenixproj --view sketch` opens the project and, in the Sketch part, the first sketch of the project (or the file next to the project when the project has none). Everything the window decides is in `eh3d_phoenix_cad::sketch_ui` and is tested without a screen; `gui` only draws the primitives that `SketchEditor::scene` returns and passes on the clicks, drags, wheel and keys.
 
 * **Tools**: select, point, line, polyline, rectangle, circle and arc, and a switch that draws the next lines, circles and arcs as construction geometry. A line takes two clicks, a polyline one click for each corner (Enter, a right click, a double click or a click on its first corner ends it, and the whole polyline is one step of the history), a rectangle two opposite corners, a circle its centre and a point of it, an arc its centre, its start and its end (the end is brought to the circle of the start).
 * **Snaps**: a click lands on a point that exists, else on a line, circle or arc that exists (the new point is then tied to it with *point on object*), else on the grid, else where the pointer is. A line that ends on a point uses that point, so nothing has to be glued. A corner of a rectangle clicked on a point is made *coincident* with it.

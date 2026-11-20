@@ -98,6 +98,7 @@ pub mod config;
 pub mod configdiff;
 pub mod convert;
 pub mod datum;
+pub mod dockui;
 pub mod drag;
 pub mod drawing;
 pub mod dxf_import;
@@ -105,12 +106,15 @@ pub mod dxf_mesh;
 pub mod enclosure;
 pub mod export;
 pub mod expr;
+pub mod featuredag;
 pub mod fins;
 pub mod fit;
+pub mod glb;
 pub mod graph;
 #[cfg(feature = "gui")]
 pub mod gui;
 pub mod history;
+pub mod history_cli;
 pub mod inflate;
 pub mod interchange;
 pub mod iso286;
@@ -140,6 +144,7 @@ pub mod pdf;
 pub mod placement;
 pub mod ply;
 pub mod printer;
+pub mod prism;
 pub mod profile;
 pub mod project;
 pub mod projection;
@@ -380,6 +385,15 @@ pub enum CadError {
     MeshCheck(String),
     /// A solid or a drawing larger than the settings allow: more triangles or more entities.
     ExportLimit(String),
+    /// A history of features that is not valid: a file that is not one, an operation or a
+    /// reference that does not exist, the wrong number of inputs, a name used twice, more
+    /// nodes than the settings allow.
+    History(String),
+    /// A node of the history whose operation could not be built: a size that is not
+    /// positive, a value that is not a length, a result outside the range of lengths.
+    FeatureFailed(String),
+    /// A solid of aligned prisms beyond the limits of the settings.
+    PrismLimit(String),
 }
 
 impl CadError {
@@ -436,6 +450,9 @@ impl CadError {
             CadError::MeshShape(_) => "PHOENIX-CAD-048",
             CadError::MeshCheck(_) => "PHOENIX-CAD-049",
             CadError::ExportLimit(_) => "PHOENIX-CAD-050",
+            CadError::History(_) => "PHOENIX-CAD-051",
+            CadError::FeatureFailed(_) => "PHOENIX-CAD-052",
+            CadError::PrismLimit(_) => "PHOENIX-CAD-053",
         }
     }
 }
@@ -499,7 +516,10 @@ impl fmt::Display for CadError {
             | CadError::Interference(why)
             | CadError::MeshShape(why)
             | CadError::MeshCheck(why)
-            | CadError::ExportLimit(why) => write!(f, "{title}: {why}"),
+            | CadError::ExportLimit(why)
+            | CadError::History(why)
+            | CadError::FeatureFailed(why)
+            | CadError::PrismLimit(why) => write!(f, "{title}: {why}"),
         }
     }
 }
@@ -561,6 +581,9 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-048", "Shape the solid cannot be made of"),
     ("PHOENIX-CAD-049", "Solid does not match the model"),
     ("PHOENIX-CAD-050", "Export above the limits"),
+    ("PHOENIX-CAD-051", "History of features not valid"),
+    ("PHOENIX-CAD-052", "Feature could not be built"),
+    ("PHOENIX-CAD-053", "Solid of prisms beyond the limits"),
 ];
 
 #[cfg(test)]
@@ -764,6 +787,9 @@ mod tests {
             CadError::MeshShape("rim".into()),
             CadError::MeshCheck("open".into()),
             CadError::ExportLimit("triangles".into()),
+            CadError::History("node".into()),
+            CadError::FeatureFailed("size".into()),
+            CadError::PrismLimit("cells".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));

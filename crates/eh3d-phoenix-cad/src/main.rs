@@ -20,8 +20,8 @@ use std::process::ExitCode;
 
 const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the properties, a 3D view and a plan, and the fit check of a board
 
-  eh3d-phoenix-cad [gui] [PROJECT.phoenixproj | SKETCH.phoenixsketch] [--view model|sketch] [--lang CODE] [--config FILE]   the window (a build with --features gui): with no arguments it opens with a new project; the sketches of a project are kept in the project file, and a .phoenixsketch file is opened to edit it and put in the project, or written from the sketch as a copy
-  eh3d-phoenix-cad gui [PROJECT | SKETCH] [--view model|sketch] --shot OUT.png [--size WxH] [--theme forge|dark|light] [--wait N] [--lang CODE] [--config FILE] [--replace]   a picture of the window (a build with --features gui)
+  eh3d-phoenix-cad [gui] [PROJECT.phoenixproj | SKETCH.phoenixsketch] [--view model|sketch] [--window model|review|compact] [--lang CODE] [--config FILE]   the window (a build with --features gui): with no arguments it opens with a new project; the sketches of a project are kept in the project file, and a .phoenixsketch file is opened to edit it and put in the project, or written from the sketch as a copy
+  eh3d-phoenix-cad gui [PROJECT | SKETCH] [--view model|sketch] [--window model|review|compact] --shot OUT.png [--size WxH] [--theme forge|dark|light] [--wait N] [--lang CODE] [--config FILE] [--replace]   a picture of the window (a build with --features gui)
   eh3d-phoenix-cad check PROJECT.phoenixproj [--lang CODE] [--config FILE]       reads a project, builds the box (with the extrusions and pockets of its sketches) and prints its measures, the fit of the board and the state of every step
   eh3d-phoenix-cad interference PROJECT.phoenixproj [--lang CODE] [--config FILE]  reads a project, puts the parts where their mates place them and lists the pairs of parts that share volume (touching is not sharing; a screw through the hole of a bracket is allowed)
   eh3d-phoenix-cad bill PROJECT.phoenixproj [--config FILE]                       the bill of materials of the parts placed in a project (profiles cut to a length, screws and brackets) as comma separated values, with the volume and the mass for the density of each material
@@ -66,7 +66,9 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad mesh-slice FILE --axis x|y|z --at LENGTH [--svg OUT.svg] [--csv] [--overwrite] [--lang CODE]   the section a plane makes in each solid: the outlines, the holes, the area and the length (exit 1 when a section does not close); --svg draws it
   eh3d-phoenix-cad mesh-clip FILE OUT --axis x|y|z --at LENGTH [--keep above|below] | --box LOW..HIGH [--overwrite] [--lang CODE]   cuts each solid by a plane or keeps what is inside a box, closing the cut with a cap so that the part left is a solid again
   eh3d-phoenix-cad iso-fit SIZE CLASS|HOLE/SHAFT [--table FILE] [--csv] [--lang CODE]   the limits of a class of tolerance (H7, g6) or of a fit (H7/g6) at a nominal size up to 500 mm, from a table of data that says whether it is verified (the shipped one is not)
-  eh3d-phoenix-cad config                                                         every setting of the library, of the window and of the sketch with its default value, as a file for --config
+  eh3d-phoenix-cad history-check PROJECT.phoenixproj [--text] [--glb OUT.glb [--overwrite]] [--lang CODE] [--config FILE]   builds the history of features of a project (parameters with expressions and operations that depend on each other: boxes, moves, arrays and the union, difference and intersection of aligned prisms) and reports every node as comma separated values (node,name,state,code,detail) or, with --text, as lines in the language of --lang; with --glb the solid of the history is written as a binary glTF file (the profile phoenix-cad-glb/1: metres, one mesh, flat normals, never over a file that exists unless --overwrite is given); it exits with 0 when every node was built, with 2 when the verification did not pass (a node failed or depends on one that failed) and with 1 when it could not run
+  eh3d-phoenix-cad history-graph PROJECT.phoenixproj [--lang CODE] [--config FILE]   the graph of dependencies of the history of a project as a file for Graphviz
+  eh3d-phoenix-cad config                                                         every setting of the library, of the window, of the sketch and of the history with its default value, as a file for --config
 
 --open FILE is the same as giving the file by itself; a sketch file opens the window on the sketch. --lang takes en, es, de, fr, it, ja, zh or pt; without it the language of the system is used (the reports cutplan, clearance, placements, holes and balance and the answer of sketch-export are in English unless --lang is given; with --text the first four are lines for a person in that language instead of comma separated values).
 --shot writes a PNG file of the window (the exit code is 0 when it was written, 1 when it was not and 2 when the arguments are wrong); the window keeps no settings in that mode.
@@ -1670,9 +1672,10 @@ fn run(args: &[String]) -> Result<bool, String> {
                 return Err("config takes no arguments".to_owned());
             }
             print!(
-                "{DEFAULT_CONFIG}\n{}\n{}",
+                "{DEFAULT_CONFIG}\n{}\n{}\n{}",
                 default_file(),
-                eh3d_phoenix_cad::sketch::settings::default_file()
+                eh3d_phoenix_cad::sketch::settings::default_file(),
+                eh3d_phoenix_cad::featuredag::default_file()
             );
             Ok(true)
         }
@@ -1763,6 +1766,8 @@ fn start_of(parsed: &shot::WindowArgs) -> Result<eh3d_phoenix_cad::gui::Start, S
         project,
         sketch,
         view,
+        window: parsed.window,
+        config: parsed.config.clone(),
     })
 }
 
@@ -1823,6 +1828,26 @@ fn main() -> ExitCode {
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::from(2)
+            }
+        };
+    }
+    if let Some(command) = args
+        .first()
+        .filter(|c| eh3d_phoenix_cad::history_cli::COMMANDS.contains(&c.as_str()))
+    {
+        // a check that does not pass exits with 2; a command that could not run exits with 1
+        return match eh3d_phoenix_cad::history_cli::run(command, &args[1..]) {
+            Ok((out, ok)) => {
+                print!("{out}");
+                if ok {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::from(2)
+                }
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::from(1)
             }
         };
     }
