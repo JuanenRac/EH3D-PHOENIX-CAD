@@ -8,18 +8,17 @@
 //! found by its name, saved as a new version of its file and read back, and the reports written next to it.
 //!
 //! The server keeps the versions of every file and refuses a write over a file that exists unless it says which version it was made from (`If-Match`), so
-//! two people never overwrite each other without knowing: [`Store::save`] reads the tag of the file first and sends it. The client of the suite sends text,
-//! so a project is sent as text (the project file of this program is text); a file that holds other bytes is refused before anything is sent.
+//! two people never overwrite each other without knowing: [`Store::save`] reads the tag of the file first and sends it with `put_if_match` of the client of the suite,
+//! which sends the bytes of the file with the header `If-Match`. A project is sent as text (the project file of this program is text); a file that holds other
+//! bytes is refused before anything is sent. A file that changed in between is the sentence `precondition_failed` of the table of the server.
 //!
 //! Nothing here changes the local files: the project that is saved to the server is the bytes of a file, and the project that is read back is checked
 //! (it must be a project file) before anyone writes it to a disk.
 
-use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 use eh3d_serverclient as sc;
-use sc::{Json, Reply, Request, Transport, TransportError};
+use sc::{Json, Reply};
 
 use crate::config::Config;
 use crate::lang::{fill, Lang, Msg};
@@ -142,122 +141,6 @@ fn safe_segment(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-/// A tag the server gave (a checksum): letters and digits, so that it cannot break a header line.
-fn valid_tag(tag: &str) -> bool {
-    (1..=128).contains(&tag.len()) && tag.bytes().all(|b| b.is_ascii_alphanumeric())
-}
-
-/// The mark that a path carries for [`HttpTransport`] to turn into the `If-Match` header; the server never sees it.
-const TAG_MARK: &str = "&x_if_match=";
-
-/// The path with the tag of the version a write is made from.
-pub fn with_if_match(path: &str, tag: &str) -> String {
-    format!("{path}{TAG_MARK}{tag}")
-}
-
-/// A path without the mark, and the tag that was in it.
-pub fn split_if_match(path: &str) -> (&str, Option<&str>) {
-    match path.rsplit_once(TAG_MARK) {
-        Some((clean, tag)) => (clean, Some(tag)),
-        None => (path, None),
-    }
-}
-
-/// Plain HTTP/1.1, one request per connection, as the transport of the suite, with the two things the store needs and that one does not do: the
-/// `If-Match` header of a write over a file (from the mark of [`with_if_match`]) and the type `application/octet-stream` for the bytes of a file.
-pub struct HttpTransport {
-    address: String,
-}
-
-impl HttpTransport {
-    /// A transport to `host:port` (a leading `http://` is taken off).
-    pub fn new(address: impl Into<String>) -> HttpTransport {
-        HttpTransport {
-            address: address.into(),
-        }
-    }
-}
-
-impl Transport for HttpTransport {
-    fn send(&self, request: &Request) -> Result<Reply, TransportError> {
-        let (path, tag) = split_if_match(&request.path);
-        sc::transport::check_request_part("the path", path).map_err(TransportError::Connect)?;
-        sc::transport::check_request_part("the address of the server", &self.address)
-            .map_err(TransportError::Connect)?;
-        if let Some(t) = request.bearer() {
-            sc::transport::check_request_part("the token", t).map_err(TransportError::Connect)?;
-        }
-        if let Some(t) = tag {
-            if !valid_tag(t) {
-                return Err(TransportError::Connect(
-                    "the tag of the version has a character that cannot be sent".to_string(),
-                ));
-            }
-        }
-        let authority = self
-            .address
-            .strip_prefix("http://")
-            .unwrap_or(&self.address)
-            .trim_end_matches('/')
-            .to_string();
-        let target = authority
-            .to_socket_addrs()
-            .map_err(|e| TransportError::Connect(format!("{authority}: {e}")))?
-            .next()
-            .ok_or_else(|| TransportError::Connect(format!("{authority}: no address")))?;
-        let connect_limit = request.timeout.min(Duration::from_secs(5));
-        let mut stream = TcpStream::connect_timeout(&target, connect_limit)
-            .map_err(|e| TransportError::Connect(format!("{authority}: {e}")))?;
-        let io = |e: std::io::Error| match e.kind() {
-            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => {
-                TransportError::Timeout
-            }
-            _ => TransportError::Io(e.to_string()),
-        };
-        stream.set_read_timeout(Some(request.timeout)).map_err(io)?;
-        stream
-            .set_write_timeout(Some(request.timeout))
-            .map_err(io)?;
-        let payload = request.body.clone().unwrap_or_default();
-        let mut head = format!(
-            "{} {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nAccept: application/json\r\n",
-            request.method, path, authority
-        );
-        if let Some(t) = request.bearer() {
-            head.push_str(&format!("Authorization: Bearer {t}\r\n"));
-        }
-        if let Some(t) = tag {
-            head.push_str(&format!("If-Match: \"{t}\"\r\n"));
-        }
-        if request.body.is_some() {
-            let kind = if path.contains("/files/content") {
-                "application/octet-stream"
-            } else {
-                "application/json"
-            };
-            head.push_str(&format!(
-                "Content-Type: {kind}\r\nContent-Length: {}\r\n",
-                payload.len()
-            ));
-        } else if request.method == "POST" || request.method == "PUT" {
-            head.push_str("Content-Length: 0\r\n");
-        }
-        head.push_str("\r\n");
-        head.push_str(&payload);
-        stream.write_all(head.as_bytes()).map_err(io)?;
-        let limit = request.max_answer_bytes;
-        let mut raw = Vec::new();
-        (&mut stream)
-            .take(limit.saturating_add(1))
-            .read_to_end(&mut raw)
-            .map_err(io)?;
-        if raw.len() as u64 > limit {
-            return Err(TransportError::TooLarge);
-        }
-        sc::transport::parse_response(&raw)
-    }
-}
-
 /// The language of the suite for the language of the window.
 fn link_lang(lang: Lang) -> sc::Lang {
     sc::Lang::from_tag(lang.code()).unwrap_or(sc::Lang::En)
@@ -292,9 +175,8 @@ impl Store {
                 needs_login: false,
             });
         }
-        let transport = HttpTransport::new(link.server_address.clone());
         Ok(Store::over(
-            sc::Client::new(link.clone(), Box::new(transport)),
+            sc::Client::connect(link.clone()),
             lang,
             max_bytes,
         ))
@@ -323,6 +205,14 @@ impl Store {
         ServerError {
             text: fill(msg.tr(self.lang), values),
             needs_login: false,
+        }
+    }
+
+    /// A refusal of the store: a file that changed since it was read is the sentence of the table of the server, not a reason for a new login.
+    fn fail_store(&self, e: &sc::StoreError) -> ServerError {
+        ServerError {
+            text: e.text(link_lang(self.lang)),
+            needs_login: matches!(e, sc::StoreError::Other(c) if c.needs_login()),
         }
     }
 
@@ -433,7 +323,7 @@ impl Store {
             let tag = f
                 .get("sha256")
                 .and_then(Json::as_str)
-                .filter(|t| valid_tag(t))
+                .filter(|t| sc::etag_header(t).is_ok())
                 .ok_or_else(|| self.bad_answer("sha256"))?
                 .to_string();
             out.push(RemoteFile {
@@ -458,28 +348,25 @@ impl Store {
         if !safe_segment(project) {
             return Err(self.bad_answer("id"));
         }
-        let mut path = format!(
-            "{}/{project}/files/content?name={}",
-            Store::base(),
-            sc::path_segment(file)
-        );
+        let mut path =
+            sc::project_file_path(APP, project, file).map_err(|e| self.bad_answer(&e))?;
         if !comment.is_empty() {
             path.push_str(&format!("&comment={}", sc::path_segment(comment)));
         }
         if let Some(t) = tag {
-            if !valid_tag(t) {
-                return Err(self.bad_answer("sha256"));
-            }
-            path = with_if_match(&path, t);
+            sc::etag_header(t).map_err(|_| self.bad_answer("sha256"))?;
         }
-        let reply = self.call("PUT", &path, Some(text))?;
-        let json = self.json_of(&reply)?;
-        let version = json
-            .get("version")
-            .and_then(Json::as_u64)
-            .ok_or_else(|| self.bad_answer("version"))?;
-        let unchanged = json.get("unchanged").and_then(Json::as_bool) == Some(true);
-        Ok((version, unchanged))
+        let done = self
+            .client
+            .put_if_match(
+                &path,
+                tag,
+                text.as_bytes(),
+                Some("application/octet-stream"),
+            )
+            .map_err(|e| self.fail_store(&e))?;
+        let version = done.version.ok_or_else(|| self.bad_answer("version"))?;
+        Ok((version, done.unchanged))
     }
 
     /// Reads the bytes of a file of a project (its current version).
@@ -487,12 +374,12 @@ impl Store {
         if !safe_segment(project) {
             return Err(self.bad_answer("id"));
         }
-        let path = format!(
-            "{}/{project}/files/content?name={}",
-            Store::base(),
-            sc::path_segment(file)
-        );
-        Ok(self.call("GET", &path, None)?.body)
+        let path = sc::project_file_path(APP, project, file).map_err(|e| self.bad_answer(&e))?;
+        let read = self
+            .client
+            .get_with_etag(&path)
+            .map_err(|e| self.fail_store(&e))?;
+        Ok(read.text())
     }
 
     fn project_for_write(&mut self, name: &str) -> Result<(Remote, bool), ServerError> {
@@ -1355,5 +1242,81 @@ server_max_answer_mib = 16
             .station("check", "plate", &contract_of(PLATE, "plate"))
             .unwrap_err();
         assert!(e.needs_login, "{}", e.text);
+    }
+
+    fn store_over_sim(sim: &sc::sim::SimServer, lang: Lang, token: &str) -> Store {
+        let mut link = link_to("sim:1");
+        link.set("server_token", token).unwrap();
+        Store::over(sc::Client::new(link, Box::new(sim.clone())), lang, 1 << 20)
+    }
+
+    #[test]
+    fn a_file_is_written_and_read_over_the_simulator_of_the_shared_client_with_its_tags() {
+        let sim = sc::sim::SimServer::new();
+        let mut store = store_over_sim(&sim, Lang::En, "program-token");
+        let (v1, same1) = store.write_file("p1", "a.txt", "one", "", None).unwrap();
+        assert_eq!((v1, same1), (1, false));
+        let tag = sim.file_tag(APP, "p1", "a.txt").unwrap();
+        let (v2, same2) = store
+            .write_file("p1", "a.txt", "two", "a note", Some(&tag))
+            .unwrap();
+        assert_eq!((v2, same2), (2, false));
+        assert_eq!(store.read_file("p1", "a.txt").unwrap(), "two");
+        let tag2 = sim.file_tag(APP, "p1", "a.txt").unwrap();
+        let (v3, same3) = store
+            .write_file("p1", "a.txt", "two", "", Some(&tag2))
+            .unwrap();
+        assert_eq!((v3, same3), (2, true));
+        assert_eq!(sim.file_versions(APP, "p1", "a.txt"), 2);
+        // a file in a folder keeps its slash in the name
+        store
+            .write_file("p1", "reports/r.txt", "r", "", None)
+            .unwrap();
+        assert_eq!(sim.file(APP, "p1", "reports/r.txt").unwrap(), b"r".to_vec());
+    }
+
+    #[test]
+    fn a_write_from_an_old_tag_or_with_none_is_told_in_the_language_of_the_person() {
+        for lang in Lang::ALL {
+            let sim = sc::sim::SimServer::new();
+            let mut store = store_over_sim(&sim, lang, "program-token");
+            store.write_file("p", "f", "one", "", None).unwrap();
+            let old = sim.file_tag(APP, "p", "f").unwrap();
+            sim.write_file(APP, "p", "f", b"somebody else");
+            let stale = store
+                .write_file("p", "f", "mine", "", Some(&old))
+                .unwrap_err();
+            assert_eq!(
+                stale.text,
+                sc::text_for("precondition_failed", link_lang(lang))
+            );
+            assert!(!stale.needs_login);
+            let none = store.write_file("p", "f", "mine", "", None).unwrap_err();
+            assert_eq!(
+                none.text,
+                sc::text_for("precondition_required", link_lang(lang))
+            );
+            // nothing of the refused writes reached the store
+            assert_eq!(sim.file(APP, "p", "f").unwrap(), b"somebody else".to_vec());
+        }
+    }
+
+    #[test]
+    fn a_tag_that_cannot_be_sent_and_a_missing_file_are_refused_with_a_sentence() {
+        let sim = sc::sim::SimServer::new();
+        let mut store = store_over_sim(&sim, Lang::En, "program-token");
+        store.write_file("p", "f", "one", "", None).unwrap();
+        for tag in ["", "a b", "a\"b", "x\r\ny"] {
+            let e = store
+                .write_file("p", "f", "two", "", Some(tag))
+                .unwrap_err();
+            assert!(!e.needs_login, "{tag:?}");
+        }
+        assert_eq!(sim.file_versions(APP, "p", "f"), 1);
+        // an unknown file is read as an error, with the sentence of the server
+        let missing = store.read_file("p", "nothing").unwrap_err();
+        assert!(!missing.text.is_empty() && !missing.needs_login);
+        // a project that is not a safe segment never reaches the store
+        assert!(store.read_file("../x", "f").is_err());
     }
 }

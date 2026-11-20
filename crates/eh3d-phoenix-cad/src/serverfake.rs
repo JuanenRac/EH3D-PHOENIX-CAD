@@ -21,9 +21,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use eh3d_serverclient::json::quote;
-use eh3d_serverclient::{Reply, Request, Transport, TransportError};
-
-use crate::server::split_if_match;
+use eh3d_serverclient::{parse_etag, FullReply, Reply, Request, Transport, TransportError};
 
 /// What the store saw of a request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -503,18 +501,50 @@ fn read(p: &Project, query: &str) -> (u16, String) {
     }
 }
 
+/// The tag of the version a file answer names: the one of a current version that was read or written (a version asked for by number has none).
+fn etag_of_answer(
+    method: &str,
+    target: &str,
+    status: u16,
+    sent: &str,
+    out: &str,
+) -> Option<String> {
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    if !path.ends_with("/files/content") || query_get(query, "version").is_some() {
+        return None;
+    }
+    match (method, status) {
+        ("GET", 200) => Some(tag_of(out)),
+        ("PUT", 200 | 201) => Some(tag_of(sent)),
+        _ => None,
+    }
+}
+
 impl Transport for MemoryStore {
     fn send(&self, request: &Request) -> Result<Reply, TransportError> {
-        let (path, tag) = split_if_match(&request.path);
+        self.send_full(request).map(FullReply::into_reply)
+    }
+
+    fn send_full(&self, request: &Request) -> Result<FullReply, TransportError> {
+        let if_match = request.header("if-match").map(parse_etag);
+        let sent = String::from_utf8_lossy(&request.payload()).to_string();
         let (status, body) = self.handle(
             &request.method,
-            path,
+            &request.path,
             request.bearer(),
-            tag,
-            None,
-            request.body.as_deref().unwrap_or(""),
+            if_match.as_deref(),
+            request.header("content-type"),
+            &sent,
         );
-        Ok(Reply { status, body })
+        let mut headers = Vec::new();
+        if let Some(tag) = etag_of_answer(&request.method, &request.path, status, &sent, &body) {
+            headers.push(("ETag".to_string(), format!("\"{tag}\"")));
+        }
+        Ok(FullReply {
+            status,
+            headers,
+            body: body.into_bytes(),
+        })
     }
 }
 
@@ -621,8 +651,11 @@ fn answer(mut stream: TcpStream, store: &MemoryStore) -> std::io::Result<()> {
         201 => "Created",
         _ => "Error",
     };
+    let etag = etag_of_answer(method, target, status, &text, &out)
+        .map(|t| format!("ETag: \"{t}\"\r\n"))
+        .unwrap_or_default();
     let reply = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{out}",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\n{etag}Content-Length: {}\r\nConnection: close\r\n\r\n{out}",
         out.len()
     );
     stream.write_all(reply.as_bytes())?;

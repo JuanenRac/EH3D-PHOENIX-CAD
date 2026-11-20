@@ -2,7 +2,7 @@
 
 EH3D-PHOENIX-CAD can keep its projects on the EH3D server and send it the reports of a project. It is a second place for the same files: the local files, the window and every command that works on a file are as they were, and with no address in the settings nothing is sent anywhere.
 
-The code is `src/server.rs` (the store of the server, the transport and the settings), `src/server_cli.rs` (the commands) and `src/serverfake.rs` (a store in memory for the tests). The link is the client of the suite, `eh3d-serverclient` of EH3D-COMMON (the same keys, ranges, login, retries, token that cannot be printed and errors by code in eight languages as every other program of the suite).
+The code is `src/server.rs` (the store of the server and the settings), `src/server_cli.rs` (the commands) and `src/serverfake.rs` (a store in memory for the tests). The link is the client of the suite, `eh3d-serverclient` of EH3D-COMMON (the same keys, ranges, login, retries, token that cannot be printed and errors by code in eight languages as every other program of the suite).
 
 ## The settings
 
@@ -26,8 +26,8 @@ Under the application `phoenix-cad` of the project store (`/api/v1/apps/phoenix-
 
 * a project of the store is named like the project here (1 to 120 characters, no control character) and holds the file `project.phoenixproj`, which is the project file as it is, the file `project.json`, which is the same project as the station of the server reads it (see below), and the folder `reports/`;
 * the server keeps every version of a file. A new version is written with `If-Match`, the tag of the version it is made from (read just before), so two people never overwrite each other: a change made in the meantime is refused with the text of `precondition_failed` in the language of the person, and the next save goes over it knowingly. The same bytes as the current version make no version;
-* the client of the suite sends text, so a project is sent as text (the project file of this program is text); a file that holds other bytes is refused before anything is sent, and what comes back is checked to be a project file before it is given back;
-* the transport of this program (`server::HttpTransport`) is the plain HTTP of the suite with the header `If-Match` and the type `application/octet-stream` for the bytes of a file.
+* a project is sent as text (the project file of this program is text); a file that holds other bytes is refused before anything is sent, and what comes back is checked to be a project file before it is given back;
+* the bytes of a file go with `Client::put_if_match` of the client of the suite (the header `If-Match` and the type `application/octet-stream`) and are read with `Client::get_with_etag`, so this program has no transport of its own; a write is sent once, because after a time-out the first try may have been applied.
 
 ## The commands
 
@@ -60,4 +60,4 @@ The codes of the station are told in the eight languages: `bad_schema`, `unknown
 
 In the window, the **Project on the server** panel has **Check on the station** and **Report from the station** (`Window::server_station_with`), which send the project as it is now, saved or not, and show the answer; below them is the panel of the settings of the server that every program of the suite shows (`eh3d-view`, only in the build with the window): the address, the token, the login and the logout, and the state of the link. The buttons and that panel have never been opened on a screen.
 
-**What the shared client does not do yet.** The request of `eh3d-serverclient` (EH3D-COMMON 0.2.5) has no field for headers and its body is text, so the header `If-Match` and the type `application/octet-stream` of a file still go through the plain HTTP transport of this program (`server::HttpTransport`). When the client takes headers and bytes, that transport goes away; until then this stays here.
+**The shared client.** Since EH3D-COMMON 0.2.6 the request of `eh3d-serverclient` carries header lines and a body of bytes (`RequestParts`, `Client::request_full`) and the store has its own helpers (`project_file_path`, `get_with_etag`, `put_if_match`, `StoreError`), so the transport that this program had for the header `If-Match` is gone. The store in memory of the tests (`serverfake::MemoryStore`) is a `Transport` of the client that reads the header `If-Match` and the bytes of the request and answers with the header `ETag`; it keeps its own routes for the list of projects and for the jobs of the station, which the simulator of the client (`sim::SimServer`) does not have, and the rules of the tag are tried against that simulator too.
