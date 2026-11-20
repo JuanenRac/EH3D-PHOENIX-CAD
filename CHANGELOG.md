@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.1.0] - Project on the EH3D server, comparing versions, colours by material, cutting lines, editable title fields and units per project
+
 - **The link to the EH3D server is a section of the settings:** `[server]` holds `server_address`, `server_token`, `server_machine`, `server_timeout_s` (1 to 120), `server_retries` (0 to 5), `server_mdns` (`on` or `off`) and `server_max_answer_mib` (1 to 256) exactly as the client of the suite (`eh3d-serverclient` of EH3D-COMMON) reads them, with the empty address that sends nothing anywhere as the default, a value out of its range refused with its key, a token that `Debug` never shows, and a warning when the token would travel in the clear to a network that is not the person's own (`Settings::server`, `server::from_config`, `docs/SERVER.md`). The CI of the repository builds against the tag of EH3D-COMMON that holds the client. 5 tests.
 
 - **A project is saved on the server as a version of its file and read back:** `server::Store` finds the project of the application `cad` by its exact name (making it when the server has none), reads the tag of `project.phoenixproj`, writes the new version with `If-Match` so that a change made in the meantime is refused with the text of the code of the server in the language of the person, writes nothing when the bytes are those of the current version, and reads a project back only after checking that it is a project file (a file that is not text, is over the limit or comes back damaged is refused before it is given). The transport of the program (`server::HttpTransport`) is the plain HTTP of the suite with the header `If-Match` and the type of the bytes of a file. 8 tests.
