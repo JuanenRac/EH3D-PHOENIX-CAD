@@ -316,7 +316,7 @@ fn parse_mixed(s: &str) -> Option<(i128, i128)> {
 }
 
 /// A number written as `12`, `1.6`, `0,5`, `1/16` or `1 1/2`, as a numerator and a positive denominator.
-fn parse_rational(s: &str) -> Option<(i128, i128)> {
+pub(crate) fn parse_rational(s: &str) -> Option<(i128, i128)> {
     if let Some(mixed) = parse_mixed(s) {
         return Some(mixed);
     }

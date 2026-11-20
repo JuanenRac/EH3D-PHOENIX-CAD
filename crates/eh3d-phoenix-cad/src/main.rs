@@ -51,6 +51,15 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad server-contract PROJECT [--name NAME] [--config FILE]   prints the project as the station cad of the server reads it (the project.json that server-save writes: sketches, features and parts, and with the section [contract] of the settings the holes, posts, fins, patterns, edging and lid of the enclosure and the title block), without asking anything of the network, so it works with no address and no server
   eh3d-phoenix-cad project-units PROJECT.phoenixproj [--unit nm|um|mm|cm|m|in|mil] [--decimals N] [--clear] [--out FILE] [--overwrite] [--lang CODE] [--config FILE]   tells the unit and the decimals the project keeps (in its own domain, so a project of inches stays in inches whoever opens it; a project without them follows the settings); with --unit and --decimals (0 to 12) it sets them, with --clear it takes them away, and writes the project to --out or over the file itself, never over a file that exists unless --overwrite is given
   eh3d-phoenix-cad compare BEFORE.phoenixproj AFTER.phoenixproj [--text] [--lang CODE] [--config FILE]   what changed between two versions of an assembly: the parts added, taken away, replaced, cut again, moved or turned (the positions after the mates) and the mates added, taken away or changed, as comma separated values (change,part,from,to) or, with --text, as lines in the language of --lang; it exits with 0 when the two versions are the same and with 1 when they differ
+  eh3d-phoenix-cad mesh-check FILE.stl|.obj|.3mf|.step|.stp [--repair OUT.stl|.obj|.3mf [--overwrite]] [--lang CODE] [--config FILE]   checks each solid of a file of triangles for a slicer: the shells, the Euler characteristic and the genus, the open and the shared edges, the triangles with no area, the repeated vertices, a surface turned inside out, the shortest and the longest edge, the worst triangle and the radii of gyration about the principal axes (exit 1 when a solid has a problem); --repair turns the solids that are inside out and writes them all to the file
+  eh3d-phoenix-cad convert VALUE [--to nm|um|mm|cm|m|in|mil|deg|dms] [--decimals N] [--fraction N] [--lang CODE]   reads a length (1 1/2 in, 25.4 mm) or an angle (12.5, 12d30m15s or 12 degrees 30 minutes 15 seconds written with the signs of degrees, minutes and seconds) and writes it in another unit; --fraction N writes inches as a mixed number of N-ths (1, 2, 4 ... 128); dms writes degrees, minutes and seconds
+  eh3d-phoenix-cad bolt-circle --count N --diameter LENGTH [--start DEGREES] [--center X:Y] [--text] [--lang CODE]   the holes of a bolt circle for the drill: the angle and the place of each hole as comma separated values, or with --text the angle and the distance between neighbours too
+  eh3d-phoenix-cad bom-costs PROJECT.phoenixproj [--tax PERCENT] [--top N] [--text] [--lang CODE] [--config FILE]   where the money of the bill of materials goes: the lines from the dearest to the cheapest with their share of the subtotal and of the running sum, the first N of them, and with --tax the tax on the total
+  eh3d-phoenix-cad templates [--lang CODE]                                       lists the projects a new one can start from (box, plate, frame and assembly)
+  eh3d-phoenix-cad new --template NAME --out FILE.phoenixproj [--overwrite] [--lang CODE]   writes a new project from a template, never over a file that exists unless --overwrite is given
+  eh3d-phoenix-cad measure distance|angle POINT... [--lang CODE]                  measures between points written X:Y:Z (a length with its unit or bare millimetres): the distance between two points, from a point to an edge (three points) or between two edges (four), the angle at a vertex between three points or between two edges
+  eh3d-phoenix-cad config-diff FILE [--text] [--lang CODE]                       puts every key of a settings file next to its default (changed, same or extra) as comma separated values or text; exit 1 when a key is not one of the defaults
+  eh3d-phoenix-cad sketch-info SKETCH.phoenixsketch [--lang CODE] [--config FILE]   what a sketch holds: the points, lines, circles and arcs, the construction geometry, the constraints and the size and drawn length of what is drawn
   eh3d-phoenix-cad config                                                         every setting of the library, of the window and of the sketch with its default value, as a file for --config
 
 --open FILE is the same as giving the file by itself; a sketch file opens the window on the sketch. --lang takes en, es, de, fr, it, ja, zh or pt; without it the language of the system is used (the reports cutplan, clearance, placements, holes and balance and the answer of sketch-export are in English unless --lang is given; with --text the first four are lines for a person in that language instead of comma separated values).
@@ -1658,6 +1667,11 @@ fn run(args: &[String]) -> Result<bool, String> {
         "faces" => run_faces(rest),
         "sketch-edit" => run_sketch_edit(rest),
         "export" => run_export(rest),
+        c if eh3d_phoenix_cad::tools_cli::COMMANDS.contains(&c) => {
+            let (out, ok) = eh3d_phoenix_cad::tools_cli::run(c, rest)?;
+            print!("{out}");
+            Ok(ok)
+        }
         c if eh3d_phoenix_cad::server_cli::COMMANDS.contains(&c) => {
             let out = eh3d_phoenix_cad::server_cli::run(c, rest)?;
             print!("{out}");
