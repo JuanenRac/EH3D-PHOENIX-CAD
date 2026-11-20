@@ -301,6 +301,13 @@ pub struct MeshSettings {
     pub step_max_entities: u32,
     /// The most faces of a STEP file that is read.
     pub step_max_faces: u32,
+    /// The largest file of triangles that is read (STL, OBJ, 3MF, PLY, OFF or DXF), in kibibytes;
+    /// it is also the most that one entry of a 3MF package may hold once unpacked.
+    pub read_max_kib: u32,
+    /// The most triangles of a file that is read.
+    pub read_max_triangles: u32,
+    /// The most entries of a 3MF package that is read.
+    pub zip_max_entries: u32,
 }
 
 impl MeshSettings {
@@ -310,6 +317,12 @@ impl MeshSettings {
     pub const STEP_ENTITIES_CAP: u32 = 50_000_000;
     /// The most faces of a STEP file that can be asked for.
     pub const STEP_FACES_CAP: u32 = 10_000_000;
+    /// The most kibibytes of a file of triangles that can be asked for.
+    pub const READ_KIB_CAP: u32 = 4_194_304;
+    /// The most triangles of a file that can be asked for.
+    pub const READ_TRIANGLES_CAP: u32 = 200_000_000;
+    /// The most entries of a package that can be asked for.
+    pub const ZIP_ENTRIES_CAP: u32 = 100_000;
     /// The least sides of a circle.
     pub const MIN_SEGMENTS: u32 = 8;
     /// The most sides of a circle.
@@ -375,6 +388,27 @@ impl MeshSettings {
                 Self::STEP_FACES_CAP
             )));
         }
+        let read_max_kib = c.number("mesh.read_max_kib")?;
+        if !(1..=Self::READ_KIB_CAP).contains(&read_max_kib) {
+            return Err(CadError::Config(format!(
+                "mesh.read_max_kib must be from 1 to {}",
+                Self::READ_KIB_CAP
+            )));
+        }
+        let read_max_triangles = c.number("mesh.read_max_triangles")?;
+        if !(12..=Self::READ_TRIANGLES_CAP).contains(&read_max_triangles) {
+            return Err(CadError::Config(format!(
+                "mesh.read_max_triangles must be from 12 to {}",
+                Self::READ_TRIANGLES_CAP
+            )));
+        }
+        let zip_max_entries = c.number("mesh.zip_max_entries")?;
+        if !(1..=Self::ZIP_ENTRIES_CAP).contains(&zip_max_entries) {
+            return Err(CadError::Config(format!(
+                "mesh.zip_max_entries must be from 1 to {}",
+                Self::ZIP_ENTRIES_CAP
+            )));
+        }
         Ok(MeshSettings {
             circle_segments,
             max_triangles,
@@ -384,6 +418,9 @@ impl MeshSettings {
             step_max_kib,
             step_max_entities,
             step_max_faces,
+            read_max_kib,
+            read_max_triangles,
+            zip_max_entries,
         })
     }
 }
@@ -1827,6 +1864,9 @@ markup_percent = 1000
                 step_max_kib: 65_536,
                 step_max_entities: 1_000_000,
                 step_max_faces: 100_000,
+                read_max_kib: 524_288,
+                read_max_triangles: 5_000_000,
+                zip_max_entries: 1000,
             }
         );
         assert_eq!(

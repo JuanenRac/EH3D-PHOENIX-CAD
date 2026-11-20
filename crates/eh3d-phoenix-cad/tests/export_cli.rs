@@ -505,11 +505,14 @@ fn mesh_info_refuses_what_it_cannot_read_and_exits_with_one_for_an_open_surface(
     let (code, _, err) = run(&["mesh-info", &dir.file("missing.obj")]);
     assert_eq!(code, 1);
     assert!(err.contains("missing.obj"), "{err}");
-    let step = dir.file("a.dxf");
+    let step = dir.file("a.xyz");
     fs::write(&step, "x").unwrap();
     let (code, _, err) = run(&["mesh-info", &step]);
     assert_eq!(code, 1);
-    assert!(err.contains(".stl, .obj, .3mf, .step or .stp"), "{err}");
+    assert!(
+        err.contains(".stl, .obj, .3mf, .step, .stp, .ply, .off or .dxf"),
+        "{err}"
+    );
     let (code, _, err) = run(&["mesh-info"]);
     assert_eq!(code, 1);
     assert!(err.contains("mesh file"), "{err}");

@@ -448,93 +448,41 @@ pub fn read_obj(text: &str) -> Result<Vec<Body>, String> {
     Ok(bodies)
 }
 
-/// The text of the attribute `name` of an XML tag (`<vertex x="1"/>` gives `1` for `x`).
-fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
-    let key = format!(" {name}=\"");
-    let from = tag.find(&key)? + key.len();
-    let len = tag[from..].find('"')?;
-    Some(&tag[from..from + len])
-}
-
-/// How many nanometres a unit of the 3MF model is.
-fn unit_nanometres(unit: &str) -> Option<f64> {
-    match unit {
-        "micron" => Some(1_000.0),
-        "millimeter" => Some(NM_PER_MM),
-        "centimeter" => Some(10.0 * NM_PER_MM),
-        "inch" => Some(25.4 * NM_PER_MM),
-        "foot" => Some(304.8 * NM_PER_MM),
-        "meter" => Some(1000.0 * NM_PER_MM),
-        _ => None,
-    }
-}
-
-/// The solids of the model of a 3MF package written like [`three_mf`], read back: the package must
-/// be stored without compression and its model must be in `3D/3dmodel.model`.
+/// The solids of a 3MF package, read back: the entries may be kept or compressed, the model is
+/// found through the relationships of the package, and the components and the transformations of
+/// the build are applied (see [`crate::threemf`]).
 pub fn read_three_mf(bytes: &[u8]) -> Result<Vec<Body>, String> {
-    let entries = read_stored_zip(bytes)?;
-    let model = entries
-        .iter()
-        .find(|(name, _)| name == "3D/3dmodel.model")
-        .ok_or_else(|| "the package has no 3D/3dmodel.model".to_owned())?;
-    let xml = std::str::from_utf8(&model.1).map_err(|_| "the model is not text".to_owned())?;
-    let head = xml
-        .find("<model")
-        .and_then(|i| xml[i..].find('>').map(|j| &xml[i..i + j]))
-        .ok_or_else(|| "the model has no <model> element".to_owned())?;
-    let unit = attribute(head, "unit").unwrap_or("millimeter");
-    let scale = unit_nanometres(unit).ok_or_else(|| format!("the unit {unit} is not known"))?;
-    let mut bodies = Vec::new();
-    let mut rest = xml;
-    while let Some(i) = rest.find("<object ") {
-        let after = &rest[i..];
-        let end = after
-            .find("</object>")
-            .ok_or_else(|| "an object is not closed".to_owned())?;
-        let object = &after[..end];
-        let open = object.find('>').unwrap_or(object.len());
-        let name = attribute(&object[..open], "name").unwrap_or("").to_owned();
-        let mut mesh = Mesh::default();
-        for tag in object.split('<').skip(1) {
-            if tag.starts_with("vertex ") {
-                let get = |k: &str| {
-                    attribute(tag, k)
-                        .ok_or_else(|| format!("a vertex of {name} has no {k}"))
-                        .and_then(|t| nanometres(t, scale, "a vertex"))
-                };
-                mesh.vertices.push([get("x")?, get("y")?, get("z")?]);
-            } else if tag.starts_with("triangle ") {
-                let get = |k: &str| {
-                    attribute(tag, k)
-                        .and_then(|t| t.parse::<u32>().ok())
-                        .filter(|v| (*v as usize) < mesh.vertices.len())
-                        .ok_or_else(|| format!("a triangle of {name} has no vertex {k}"))
-                };
-                let t = [get("v1")?, get("v2")?, get("v3")?];
-                mesh.triangles.push(t);
-            }
-        }
-        bodies.push((name, mesh));
-        rest = &after[end + "</object>".len()..];
-    }
-    Ok(bodies)
+    let limits = ReadLimits::shipped();
+    crate::threemf::read_package(bytes, &limits.zip, limits.max_triangles)
 }
 
 /// The surface of the triangles that [`crate::mesh::read_stl`] gives (nine millimetres each): a
 /// vertex that lies at the same nanometre as another is the same vertex, as in the file this
 /// program writes, so that the surface can be checked for being closed.
 pub fn mesh_from_triangles(triangles: &[[f64; 9]]) -> Mesh {
+    let nm: Vec<[f64; 9]> = triangles
+        .iter()
+        .map(|t| {
+            let mut out = [0.0; 9];
+            for (slot, v) in out.iter_mut().zip(t) {
+                *slot = (v * NM_PER_MM).round();
+            }
+            out
+        })
+        .collect();
+    merge_by(&nm)
+}
+
+/// The surface of triangles given in nanometres (nine numbers each): a vertex at the same place as
+/// another is the same vertex, in the order of first appearance.
+pub fn merge_by(triangles: &[[f64; 9]]) -> Mesh {
     use std::collections::HashMap;
     let mut index: HashMap<[i64; 3], u32> = HashMap::new();
     let mut mesh = Mesh::default();
     for t in triangles {
         let mut corners = [0u32; 3];
         for (k, corner) in corners.iter_mut().enumerate() {
-            let v = [
-                (t[3 * k] * NM_PER_MM).round(),
-                (t[3 * k + 1] * NM_PER_MM).round(),
-                (t[3 * k + 2] * NM_PER_MM).round(),
-            ];
+            let v = [t[3 * k], t[3 * k + 1], t[3 * k + 2]];
             let key = [v[0] as i64, v[1] as i64, v[2] as i64];
             *corner = *index.entry(key).or_insert_with(|| {
                 mesh.vertices.push(v);
@@ -544,6 +492,130 @@ pub fn mesh_from_triangles(triangles: &[[f64; 9]]) -> Mesh {
         mesh.triangles.push(corners);
     }
     mesh
+}
+
+/// The solids put in one surface, one after the other (for the formats that hold one object).
+pub fn merge(bodies: &[(&str, &Mesh)]) -> Mesh {
+    let mut out = Mesh::default();
+    for (_, mesh) in bodies {
+        let base = out.vertices.len() as u32;
+        out.vertices.extend_from_slice(&mesh.vertices);
+        out.triangles.extend(
+            mesh.triangles
+                .iter()
+                .map(|t| [t[0] + base, t[1] + base, t[2] + base]),
+        );
+    }
+    out
+}
+
+/// The triangles of a surface as the places of their corners, each starting at its smallest corner
+/// and the list in order: two surfaces of the same triangles give the same list whatever the order
+/// of their vertices.
+#[cfg(test)]
+pub(crate) fn canonical_triangles(mesh: &Mesh) -> Vec<[[i64; 3]; 3]> {
+    let mut out: Vec<[[i64; 3]; 3]> = mesh
+        .triangles
+        .iter()
+        .map(|t| {
+            let c = mesh
+                .corners(t)
+                .map(|p| [p[0] as i64, p[1] as i64, p[2] as i64]);
+            let first = (0..3).min_by_key(|k| c[*k]).unwrap_or(0);
+            [c[first], c[(first + 1) % 3], c[(first + 2) % 3]]
+        })
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+/// The limits of the files of triangles that are read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadLimits {
+    /// The limits of a STEP file.
+    pub step: crate::step_import::StepLimits,
+    /// The limits of the package of a 3MF file.
+    pub zip: crate::zipread::ZipLimits,
+    /// The most bytes of any file.
+    pub max_bytes: usize,
+    /// The most triangles of any file.
+    pub max_triangles: usize,
+}
+
+impl ReadLimits {
+    /// The limits that the settings give.
+    pub fn from_settings(s: &crate::config::MeshSettings) -> ReadLimits {
+        ReadLimits {
+            step: crate::step_import::StepLimits::from_settings(s),
+            zip: crate::zipread::ZipLimits::new(s.zip_max_entries, s.read_max_kib),
+            max_bytes: s.read_max_kib as usize * 1024,
+            max_triangles: s.read_max_triangles as usize,
+        }
+    }
+
+    /// The limits of the shipped settings.
+    pub fn shipped() -> ReadLimits {
+        ReadLimits::from_settings(&crate::config::Settings::defaults().mesh)
+    }
+}
+
+/// What a file of triangles holds, with the warnings about what was not as it should be.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Read {
+    /// The solids.
+    pub bodies: Vec<Body>,
+    /// What was left out or not as expected, each with a name.
+    pub warnings: Vec<crate::stlread::ReadWarning>,
+}
+
+/// The solids of a file of an interchange format, by its extension (`stl`, `obj`, `3mf`, `step`,
+/// `stp`, `ply`, `off` or `dxf`), with the limits given and the warnings of the readers that have
+/// them.
+pub fn read_file_checked(name: &str, bytes: &[u8], limits: &ReadLimits) -> Result<Read, String> {
+    let extension = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    let text = |bytes: &[u8]| {
+        std::str::from_utf8(bytes)
+            .map(str::to_owned)
+            .map_err(|_| "the file is not UTF-8 text".to_owned())
+    };
+    if extension != "step" && extension != "stp" && bytes.len() > limits.max_bytes {
+        return Err(format!(
+            "the file has {} bytes and {} are allowed",
+            bytes.len(),
+            limits.max_bytes
+        ));
+    }
+    let mut warnings = Vec::new();
+    let bodies = match extension.as_str() {
+        "stl" => {
+            let file = crate::stlread::read(bytes, limits.max_triangles)?;
+            warnings = file.warnings;
+            file.solids
+                .iter()
+                .map(|(n, t)| (n.clone(), mesh_from_triangles(t)))
+                .collect()
+        }
+        "obj" => read_obj(&text(bytes)?)?,
+        "3mf" => crate::threemf::read_package(bytes, &limits.zip, limits.max_triangles)?,
+        "step" | "stp" => crate::step_import::read_step(&text(bytes)?, &limits.step)?,
+        "ply" => {
+            let (body, w) = crate::ply::read(bytes, limits.max_triangles)?;
+            warnings = w;
+            vec![body]
+        }
+        "off" => vec![crate::off::read(&text(bytes)?, limits.max_triangles)?],
+        "dxf" => {
+            let (bodies, w) = crate::dxf_mesh::read(&text(bytes)?, limits.max_triangles)?;
+            warnings = w;
+            bodies
+        }
+        _ => {
+            return Err(
+                "the file must end in .stl, .obj, .3mf, .step, .stp, .ply, .off or .dxf".to_owned(),
+            )
+        }
+    };
+    Ok(Read { bodies, warnings })
 }
 
 /// The solids of a file of an interchange format, by its extension: `stl` (one solid, called
@@ -564,22 +636,11 @@ pub fn read_file_bytes_limited(
     bytes: &[u8],
     step_limits: &crate::step_import::StepLimits,
 ) -> Result<Vec<Body>, String> {
-    let extension = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-    match extension.as_str() {
-        "stl" => {
-            let triangles = crate::mesh::read_stl(bytes)?;
-            Ok(vec![("solid".to_owned(), mesh_from_triangles(&triangles))])
-        }
-        "obj" => read_obj(
-            std::str::from_utf8(bytes).map_err(|_| "the file is not UTF-8 text".to_owned())?,
-        ),
-        "3mf" => read_three_mf(bytes),
-        "step" | "stp" => crate::step_import::read_step(
-            std::str::from_utf8(bytes).map_err(|_| "the file is not UTF-8 text".to_owned())?,
-            step_limits,
-        ),
-        _ => Err("the file must end in .stl, .obj, .3mf, .step or .stp".to_owned()),
-    }
+    let limits = ReadLimits {
+        step: *step_limits,
+        ..ReadLimits::shipped()
+    };
+    read_file_checked(name, bytes, &limits).map(|r| r.bodies)
 }
 
 #[cfg(test)]
@@ -886,7 +947,7 @@ mod tests {
         assert!((read[0].1.volume_nm3() - 1.0e21).abs() < 1.0e12);
         // the text form gives the same surface
         let text = crate::mesh::stl_ascii(&[("box", &a)]).into_bytes();
-        assert_eq!(read_file_bytes("box.stl", &text).unwrap(), read);
+        assert_eq!(read_file_bytes("box.stl", &text).unwrap()[0].1, read[0].1);
         // a file that is not closed says so
         let mut open = read[0].1.clone();
         open.triangles.pop();

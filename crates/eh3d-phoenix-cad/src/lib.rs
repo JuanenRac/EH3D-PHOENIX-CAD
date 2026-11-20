@@ -101,6 +101,7 @@ pub mod datum;
 pub mod drag;
 pub mod drawing;
 pub mod dxf_import;
+pub mod dxf_mesh;
 pub mod enclosure;
 pub mod export;
 pub mod expr;
@@ -110,6 +111,7 @@ pub mod graph;
 #[cfg(feature = "gui")]
 pub mod gui;
 pub mod history;
+pub mod inflate;
 pub mod interchange;
 pub mod lang;
 #[cfg(feature = "gui")]
@@ -124,6 +126,7 @@ pub mod messages;
 pub mod mount;
 pub mod names;
 pub mod nesting;
+pub mod off;
 pub mod ordersheet;
 pub mod panels;
 pub mod parametric;
@@ -132,6 +135,7 @@ pub mod partpattern;
 pub mod pattern;
 pub mod pdf;
 pub mod placement;
+pub mod ply;
 pub mod printer;
 pub mod profile;
 pub mod project;
@@ -152,11 +156,14 @@ pub mod sketch_ui;
 pub mod sketchinfo;
 pub mod solid;
 pub mod step;
+pub mod step_faceted;
 pub mod step_import;
+pub mod stlread;
 pub mod store;
 pub mod sweep;
 pub mod swept;
 pub mod templates;
+pub mod threemf;
 pub mod titleblock;
 pub mod tools_cli;
 pub mod triangulate;
@@ -165,6 +172,7 @@ pub mod uiconfig;
 pub mod units;
 pub mod vars;
 pub mod window;
+pub mod zipread;
 
 pub use enclosure::{
     Edging, Enclosure, EnclosureParams, Face, Feature, FeatureKind, Hole, HoleStyle, Id, Operation,
