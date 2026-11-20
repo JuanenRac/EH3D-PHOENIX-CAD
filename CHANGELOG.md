@@ -4,6 +4,44 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **The program can be built for Windows, Linux and macOS from GitHub Actions:** the new workflow `release-binaries.yml` (started by hand, with a dry run and the branch or tag it builds) makes the window and the command line for Windows 64 and 32 bits, Linux and macOS on Apple silicon and Intel, each package with the licence, the README, the changelog, the icon, the default settings and the sample projects, sketches and part libraries; it writes `SHA256SUMS` and a manifest of the build, attests the files, checks them again as a stranger would and, only when it is not a dry run and the owner approves, prepares an unsigned draft release. The sibling repository is taken at the tag named in `SIBLING_REFS`.
+
+- **`mesh-check FILE` tells whether a mesh can be printed:** for each solid of an STL, OBJ, 3MF or STEP file it prints the vertices, triangles and separate shells, the surface, the volume and the size, the Euler characteristic and the genus (told only for a closed surface), every open edge, every edge shared by more than two triangles, every edge whose neighbours are wound the other way, the triangles that use a vertex twice or have no area, the repeated vertices and a verdict; the exit code is 1 when a solid has a problem. The check lives in the library as `meshcheck::analyse` and never changes the mesh.
+
+- **The proportions of the triangles are told:** the shortest and the longest edge and the worst triangle (its longest edge over its height on that edge, 1.155 for an equilateral one) show the slivers that slicers choke on.
+
+- **A surface turned inside out is found and repaired:** a negative volume is reported as such (`Problem::InsideOut`), `meshcheck::flipped` turns every triangle the other way and `mesh-check --repair OUT.stl|.obj|.3mf [--overwrite]` writes the file with the inside-out solids turned right (never over a file that exists unless told to).
+
+- **The radii of gyration about the principal axes are told:** the tensor of inertia of the solid is brought to its principal axes by the Jacobi method (`meshcheck::principal_axes`, the same bits on every computer) and the report gives the three radii of gyration, smallest first; an inside-out solid gives the same ones.
+
+- **`mesh-check --weld TOLERANCE` merges the vertices that share a place:** `meshcheck::weld` merges the exactly equal vertices (tolerance 0) or those in one cell of a grid of the tolerance, drops the triangles that lose a corner, takes away the vertices that nothing uses and says how many; it closes the seams that a file which repeats its corners leaves open.
+
+- **`mesh-check --bed X:Y:Z` checks the build volume:** `meshcheck::fits` says whether each solid fits as it is, fits only when turned by quarter turns, or does not fit, and the exit code is 1 for the last.
+
+- **Inches in the fractions of a workshop:** `convert::format_inches_fraction` writes a length as a whole number and a fraction of a power of two up to 128, in lowest terms and rounded half away from zero (`1 1/2 in`, `3/16 in`, `-2 in`), the inverse of the mixed numbers that were already read.
+
+- **Angles in degrees, minutes and seconds:** `convert::parse_dms` reads `12°30'15"`, `12d30m15s`, `30'` or `-0°0'36"` (each part once and in order, only the last with decimals) and `convert::format_dms` writes them with up to six decimals of the second, so that six decimals read back to the same angle.
+
+- **`convert VALUE [--to UNIT] [--decimals N] [--fraction N]` converts a value:** a length in `nm`, `um`, `mm`, `cm`, `m`, `in` (also as a fraction with `--fraction`) or `mil`, an angle in `deg`, `dms`, `rad` or `gon`; a value written with the signs of degrees, minutes and seconds is an angle without more.
+
+- **`bolt-circle --count N --diameter LENGTH [--start DEGREES] [--center X:Y] [--text]` lists the holes of a bolt circle:** the angle and the place of each hole in whole nano-degrees and nanometres (the step is rounded one hole at a time, so the holes never drift) as comma separated values, or with `--text` the distance between neighbours too.
+
+- **`bom-costs PROJECT` shows where the money goes:** the lines of the bill from the dearest to the cheapest with their share of the subtotal and the share of the running sum (`bomcosts::shares`), the first N of them with `--top N`, as comma separated values or as text in the eight languages.
+
+- **A tax can be put on the bill:** `bom-costs --tax PERCENT` (up to two decimals, up to 100 %) works the tax out on the total with the markup, rounded half away from zero to a thousandth of the currency, and adds the rows `tax` and `total_with_tax`.
+
+- **New projects start from templates:** `templates` lists the four projects that ship with the program (box, plate, frame and assembly) with a description in the eight languages, and `new --template NAME --out FILE.phoenixproj [--overwrite]` writes one, never over a file that exists unless told to; the templates are the sample projects byte for byte and open like any project.
+
+- **`measure distance|angle POINT...` measures from the command line:** points are written `X:Y:Z` (each coordinate a length with its unit or bare millimetres); the distance between two points, from a point to an edge or between two edges, and the angle at a vertex or between two edges, with the measurements of the window.
+
+- **`config-diff FILE` compares a settings file with the defaults:** every key of the file next to its value in the shipped files, as changed, same or extra (not a key of the defaults, a typing mistake or a price of a material), as comma separated values or text; the exit code is 1 when a key is extra.
+
+- **`sketch-info FILE.phoenixsketch` summarises a sketch:** the points, lines, circles and arcs, the construction geometry, the constraints (dimensions and switched off), and the size and drawn length of what is drawn (an arc counts the extreme points it passes through).
+
+- **Random checks with a fixed seed:** boxes of random sizes keep their volume, area, shells and radii of gyration when moved and turned, are welded back from their split corners and are told inside out and repaired; random lengths and angles are written as fractions and as degrees, minutes and seconds and read back within half a step; random bills keep their shares ordered and the running share reaching the whole; random bolt circles have every hole on the circle and neighbours a chord apart.
+
+- **The documents and the counts are up to date:** `docs/EXPORT.md` has a chapter on the small tools of the command line, the help of the program lists them, every sentence they print exists in the eight languages, and the README tells the real count of tests.
+
 ## [0.1.1] - Sheet of views as a PDF, scale bar, shared client for the project store, enclosure features for the server station, tangent and angle mates and richer constraints
 
 - **The documents tell the PDF sheet, the scale bar, the contract and the link metrics, and the test counts are up to date:** `docs/EXPORT.md` has the new chapter on the PDF sheet and the scale bar and its setting, `docs/SERVER.md` the section `[contract]`, the card of the kinds proposed to the server, `server-contract` and `server-status --metrics`, `docs/STATUS.md` and `docs/ERROR_CODES.md` the new things and the mixed numbers, and the eight READMEs say that the Rust library has 1294 tests (the ones `cargo test` runs: the library, the six files of command tests and the examples of the documentation).
