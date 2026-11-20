@@ -14,3 +14,6 @@
 
 # the library files are text with their own line ends: no conversion
 *.phoenixlib -text
+
+# the tolerance table is read by a test that edits its lines: no line-end conversion
+crates/eh3d-phoenix-cad/phoenix-cad-iso286.default.cfg -text
