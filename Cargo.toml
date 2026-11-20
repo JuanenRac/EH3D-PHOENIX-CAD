@@ -1,6 +1,6 @@
 [workspace]
-# the mechanical model of the design tool; the solid operations, the export to STEP and the assemblies join it once their contracts are accepted
-members = ["crates/eh3d-phoenix-cad"]
+# the mechanical model of the design tool and the numeric engine of the solver of its sketches; the solid operations, the export to STEP and the assemblies join it once their contracts are accepted
+members = ["crates/eh3d-phoenix-cad", "crates/eh3d-phoenix-cad-solver"]
 resolver = "2"
 
 [workspace.package]

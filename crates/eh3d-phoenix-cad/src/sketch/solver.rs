@@ -29,6 +29,9 @@ use super::settings::SketchSettings;
 use super::{Constraint, ConstraintEntry, ConstraintId, Element, ElementId, Sketch};
 use crate::units::Angle;
 use crate::{CadError, Length};
+use eh3d_phoenix_cad_solver::{
+    self as engine, Problem, Settings as EngineSettings, SolverError, Verdict,
+};
 
 /// What the solver found.
 #[derive(Debug, Clone, PartialEq)]
@@ -483,24 +486,19 @@ impl<'a> Model<'a> {
         }
         out
     }
+}
 
-    /// The Jacobian by central differences: one row for each residual.
-    fn jacobian(&self, x: &[f64], h: f64) -> Vec<Vec<f64>> {
-        let rows = self.owners.len();
-        let mut j = vec![vec![0.0f64; self.n]; rows];
-        let mut probe = x.to_vec();
-        for col in 0..self.n {
-            let keep = probe[col];
-            probe[col] = keep + h;
-            let plus = self.residuals(&probe);
-            probe[col] = keep - h;
-            let minus = self.residuals(&probe);
-            probe[col] = keep;
-            for (row, (p, m)) in j.iter_mut().zip(plus.iter().zip(minus.iter())) {
-                row[col] = (p - m) / (2.0 * h);
-            }
-        }
-        j
+impl Problem for Model<'_> {
+    fn unknowns(&self) -> usize {
+        self.n
+    }
+
+    fn residuals(&self, x: &[f64]) -> Vec<f64> {
+        Model::residuals(self, x)
+    }
+
+    fn owners(&self) -> &[Option<usize>] {
+        &self.owners
     }
 }
 
@@ -519,145 +517,30 @@ fn side(p: Pt, a: Pt, b: Pt) -> f64 {
     (d.0 * (p.1 - a.1) - d.1 * (p.0 - a.0)) / norm(d)
 }
 
-fn max_abs(v: &[f64]) -> f64 {
-    v.iter().fold(0.0f64, |m, e| m.max(e.abs()))
+/// The settings of the engine that the settings of the sketch stand for. The limits of the engine
+/// follow the limits of the sketch (an element brings at most two unknowns, a constraint at most
+/// four rows), so the sketch is refused for its own size before the engine ever is.
+fn engine_settings(s: &SketchSettings) -> EngineSettings {
+    EngineSettings {
+        tolerance: s.tolerance,
+        max_iterations: s.max_iterations,
+        max_step: s.max_step,
+        fd_step: s.fd_step,
+        rank_tolerance: s.rank_tolerance,
+        damping_start: s.damping_start,
+        damping_factor: s.damping_factor,
+        damping_max: s.damping_max,
+        stall_tolerance: s.stall_tolerance,
+        max_unknowns: 2 * s.max_elements + 2,
+        max_rows: 4 * s.max_constraints + s.max_elements + 4,
+    }
 }
 
-fn dot(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b).map(|(p, q)| p * q).sum()
-}
-
-/// Solves `(a + lambda I) d = -g` by Cholesky; `None` when the matrix is not positive.
-fn solve_damped(a: &[Vec<f64>], lambda: f64, g: &[f64]) -> Option<Vec<f64>> {
-    let n = g.len();
-    let mut l = vec![vec![0.0f64; n]; n];
-    for i in 0..n {
-        for j in 0..=i {
-            let mut sum = a[i][j];
-            if i == j {
-                sum += lambda;
-            }
-            sum -= dot(&l[i][..j], &l[j][..j]);
-            if i == j {
-                if sum.is_nan() || sum <= 0.0 {
-                    return None;
-                }
-                let root: f64 = sum.sqrt();
-                l[i][i] = root;
-            } else {
-                l[i][j] = sum / l[j][j];
-            }
-        }
+fn engine_error(e: SolverError) -> CadError {
+    match e {
+        SolverError::TooLarge(_) => CadError::ValueOutOfRange("size of the sketch"),
+        other => CadError::Config(other.to_string()),
     }
-    let mut y = vec![0.0f64; n];
-    for i in 0..n {
-        let sum = -g[i] - dot(&l[i][..i], &y[..i]);
-        y[i] = sum / l[i][i];
-    }
-    let mut d = vec![0.0f64; n];
-    for i in (0..n).rev() {
-        let below: f64 = l
-            .iter()
-            .zip(&d)
-            .skip(i + 1)
-            .map(|(row, dk)| row[i] * dk)
-            .sum();
-        d[i] = (y[i] - below) / l[i][i];
-    }
-    Some(d)
-}
-
-/// The rows of the Jacobian that add nothing to the rows before them, and the rank. A row is
-/// compared with an orthonormal basis of the rows before it (Gram and Schmidt, twice).
-fn dependent_rows(j: &[Vec<f64>], rank_tol: f64) -> (usize, Vec<bool>) {
-    let mut basis: Vec<Vec<f64>> = Vec::new();
-    let mut dependent = vec![false; j.len()];
-    for (i, row) in j.iter().enumerate() {
-        let original: f64 = dot(row, row).sqrt();
-        let mut v = row.clone();
-        for _ in 0..2 {
-            for b in &basis {
-                let c = dot(&v, b);
-                for (e, f) in v.iter_mut().zip(b) {
-                    *e -= c * f;
-                }
-            }
-        }
-        let rest: f64 = dot(&v, &v).sqrt();
-        if rest <= rank_tol * original.max(1.0) {
-            dependent[i] = true;
-        } else {
-            for e in &mut v {
-                *e /= rest;
-            }
-            basis.push(v);
-        }
-    }
-    (basis.len(), dependent)
-}
-
-/// Whether the row `target` is a combination of the `rows`.
-fn in_span(rows: &[&Vec<f64>], target: &[f64], rank_tol: f64) -> bool {
-    let mut basis: Vec<Vec<f64>> = Vec::new();
-    for row in rows {
-        let mut v = (*row).clone();
-        for _ in 0..2 {
-            for b in &basis {
-                let c = dot(&v, b);
-                for (e, f) in v.iter_mut().zip(b) {
-                    *e -= c * f;
-                }
-            }
-        }
-        let rest: f64 = dot(&v, &v).sqrt();
-        if rest > rank_tol {
-            for e in &mut v {
-                *e /= rest;
-            }
-            basis.push(v);
-        }
-    }
-    let original: f64 = dot(target, target).sqrt();
-    let mut v = target.to_vec();
-    for _ in 0..2 {
-        for b in &basis {
-            let c = dot(&v, b);
-            for (e, f) in v.iter_mut().zip(b) {
-                *e -= c * f;
-            }
-        }
-    }
-    let rest: f64 = dot(&v, &v).sqrt();
-    rest <= rank_tol * original.max(1.0)
-}
-
-/// The constraints that add nothing, each with the earlier constraints that it depends on, as a
-/// sorted list of identifiers.
-fn culprits(model: &Model, j: &[Vec<f64>], dependent: &[bool], rank_tol: f64) -> Vec<ConstraintId> {
-    let mut out: Vec<ConstraintId> = Vec::new();
-    for (row, is_dependent) in dependent.iter().enumerate() {
-        let Some(owner) = model.owners[row].filter(|_| *is_dependent) else {
-            continue;
-        };
-        out.push(model.active[owner].id);
-        // the independent rows before it
-        let before: Vec<usize> = (0..row).filter(|r| !dependent[*r]).collect();
-        for skip in &before {
-            let others: Vec<&Vec<f64>> = before
-                .iter()
-                .filter(|r| *r != skip)
-                .map(|r| &j[*r])
-                .collect();
-            if !in_span(&others, &j[row], rank_tol) {
-                if let Some(o) = model.owners[*skip] {
-                    out.push(model.active[o].id);
-                }
-            }
-        }
-    }
-    out.sort();
-    out.dedup();
-    out
 }
 
 fn to_length(v: f64) -> Option<Length> {
@@ -686,90 +569,40 @@ impl Sketch {
     pub fn solve(&mut self, s: &SketchSettings) -> Result<Outcome, CadError> {
         self.check_size(s)?;
         let (model, x0) = Model::new(self);
-        let mut x = x0;
-        let mut r = model.residuals(&x);
-        let mut lambda = s.damping_start;
-        let mut iterations = 0u32;
-        let mut stuck = false;
-        while max_abs(&r) > s.tolerance && iterations < s.max_iterations {
-            iterations += 1;
-            let jac = model.jacobian(&x, s.fd_step);
-            let mut a = vec![vec![0.0f64; model.n]; model.n];
-            let mut g = vec![0.0f64; model.n];
-            for (row, ri) in jac.iter().zip(&r) {
-                for (c1, v1) in row.iter().enumerate() {
-                    if *v1 == 0.0 {
-                        continue;
-                    }
-                    g[c1] += v1 * ri;
-                    for (c2, v2) in row.iter().enumerate() {
-                        a[c1][c2] += v1 * v2;
-                    }
-                }
-            }
-            let cost = dot(&r, &r);
-            let mut accepted = false;
-            while lambda <= s.damping_max {
-                if let Some(mut step) = solve_damped(&a, lambda, &g) {
-                    let biggest = max_abs(&step);
-                    if biggest > s.max_step {
-                        let scale = s.max_step / biggest;
-                        for e in &mut step {
-                            *e *= scale;
-                        }
-                    }
-                    let next: Vec<f64> = x.iter().zip(&step).map(|(p, d)| p + d).collect();
-                    let rn = model.residuals(&next);
-                    let cost_next = dot(&rn, &rn);
-                    if cost_next.is_finite() && cost_next < cost {
-                        x = next;
-                        r = rn;
-                        lambda = (lambda / s.damping_factor).max(1e-18);
-                        accepted = true;
-                        break;
-                    }
-                }
-                lambda *= s.damping_factor;
-            }
-            if !accepted {
-                stuck = true;
-                break;
-            }
-        }
-        let residual = max_abs(&r);
-        let converged = residual <= s.tolerance;
-        let jac = model.jacobian(&x, s.fd_step);
-        let (rank, dependent) = dependent_rows(&jac, s.rank_tolerance);
-        let any_dependent = dependent
-            .iter()
-            .enumerate()
-            .any(|(i, d)| *d && model.owners[i].is_some());
-        if converged {
-            if any_dependent {
+        let solution = engine::solve(&model, &x0, &engine_settings(s)).map_err(engine_error)?;
+        let x = solution.x;
+        let (iterations, residual, dof) = match solution.verdict {
+            Verdict::OverConstrained {
+                redundant,
+                conflicting,
+            } => {
+                let ids = |v: Vec<usize>| {
+                    let mut ids: Vec<ConstraintId> =
+                        v.into_iter().map(|k| model.active[k].id).collect();
+                    ids.sort();
+                    ids.dedup();
+                    ids
+                };
                 return Ok(Outcome::OverConstrained {
-                    redundant: culprits(&model, &jac, &dependent, s.rank_tolerance),
-                    conflicting: Vec::new(),
+                    redundant: ids(redundant),
+                    conflicting: ids(conflicting),
                 });
             }
-        } else {
-            let mut g = vec![0.0f64; model.n];
-            for (row, ri) in jac.iter().zip(&r) {
-                for (c, v) in row.iter().enumerate() {
-                    g[c] += v * ri;
-                }
-            }
-            let at_minimum = stuck && max_abs(&g) <= s.stall_tolerance;
-            if at_minimum && any_dependent {
-                return Ok(Outcome::OverConstrained {
-                    redundant: Vec::new(),
-                    conflicting: culprits(&model, &jac, &dependent, s.rank_tolerance),
-                });
-            }
-            return Ok(Outcome::NotConverged {
+            Verdict::NotConverged {
                 iterations,
                 residual,
-            });
-        }
+            } => {
+                return Ok(Outcome::NotConverged {
+                    iterations,
+                    residual,
+                })
+            }
+            Verdict::Solved {
+                dof,
+                iterations,
+                residual,
+            } => (iterations, residual, dof),
+        };
         // a solution: round it, and keep it only if it is a sketch
         let mut points: Vec<(ElementId, Length, Length)> = Vec::new();
         let mut radii: Vec<(ElementId, Length)> = Vec::new();
@@ -795,7 +628,6 @@ impl Sketch {
                 }
             }
         }
-        let dof = model.n - rank;
         for (id, px, py) in points {
             self.set_point_exact(id, px, py);
         }
@@ -815,9 +647,7 @@ impl Sketch {
     pub fn degrees_of_freedom(&self, s: &SketchSettings) -> Result<usize, CadError> {
         self.check_size(s)?;
         let (model, x) = Model::new(self);
-        let jac = model.jacobian(&x, s.fd_step);
-        let (rank, _) = dependent_rows(&jac, s.rank_tolerance);
-        Ok(model.n - rank)
+        engine::degrees_of_freedom(&model, &x, &engine_settings(s)).map_err(engine_error)
     }
 
     /// The angle between two lines as they are drawn now: from the direction of the first to the

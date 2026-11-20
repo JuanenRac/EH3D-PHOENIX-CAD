@@ -8,6 +8,8 @@ repository.workspace = true
 description = "The mechanical model of the design: lengths in integer nanometres with their own range, a parametric enclosure, structured change operations that report conflicts and leave the model unchanged, an OpenSCAD-style script, a fit check against the envelope of a board and 2D sketches with constraints whose outlines can be raised from a face or cut into it"
 
 [dependencies]
+# the numeric engine of the solver of the sketches (the contract is in that crate: unknowns, residual rows, degrees of freedom, redundant and conflicting constraints)
+eh3d-phoenix-cad-solver = { version = ">=0.1.2", path = "../eh3d-phoenix-cad-solver" }
 # the object identity (UUID v7) is the one of the shared repository, next to this one; the CI checks out the tag named in SIBLING_REFS
 eh3d-container = { version = ">=0.0.1", path = "../../../EH3D-COMMON/crates/container" }
 # the link to EH3D-SERVER (projects kept on it, reports sent to it) is the client every program of the suite uses; no dependency of its own

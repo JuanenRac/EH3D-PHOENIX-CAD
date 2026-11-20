@@ -1,0 +1,11 @@
+[package]
+name = "eh3d-phoenix-cad-solver"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The numeric engine that solves the constraints of a 2D sketch: damped least squares over any set of residuals, the degrees of freedom left, and the constraints that repeat or contradict the others, with no dependency"
+
+[lib]
+path = "src/lib.rs"
