@@ -514,6 +514,8 @@ pub struct DrawingSettings {
     pub cut_label: [u8; 3],
     /// Whether the paper is turned to stand upright (1) or lies across (0).
     pub paper_portrait: bool,
+    /// The divisions of the scale bar under the views (a bar of a round length in millimetres of the model): 0 draws none, 2 to 10 divide it.
+    pub scale_bar: u8,
 }
 
 impl DrawingSettings {
@@ -661,6 +663,12 @@ impl DrawingSettings {
         }
         let mut cut_label = [0u8; 3];
         cut_label[..label.len()].copy_from_slice(label.as_bytes());
+        let scale_bar = c.number("drawing.scale_bar")?;
+        if scale_bar == 1 || scale_bar > 10 {
+            return Err(CadError::Config(
+                "drawing.scale_bar must be 0 (none) or 2 to 10 (the divisions of the bar)".into(),
+            ));
+        }
         let sheet_symbol_size = c.length("drawing.sheet_symbol_size")?;
         if sheet_symbol_size.get() < 4_000_000 || sheet_symbol_size.get() > 50_000_000 {
             return Err(CadError::Config(
@@ -692,6 +700,7 @@ impl DrawingSettings {
             paper: paper as u8,
             paper_margin,
             paper_portrait: flag("drawing.paper_portrait")?,
+            scale_bar: scale_bar as u8,
             cut_line: cut_line as u8,
             cut_at,
             cut_label,
@@ -1817,6 +1826,7 @@ markup_percent = 1000
                 paper: 0,
                 paper_margin: Length::new(10_000_000).unwrap(),
                 paper_portrait: false,
+                scale_bar: 0,
                 cut_line: 0,
                 cut_at: Length::new(0).unwrap(),
                 cut_label: [b'A', 0, 0],

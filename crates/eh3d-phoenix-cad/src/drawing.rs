@@ -158,6 +158,12 @@ const DIM_STEP: f64 = 6.0;
 /// The height of the text of a dimension in the DXF file, in millimetres.
 const DIM_TEXT: f64 = 2.5;
 
+/// The room between everything a drawing holds and its scale bar, in millimetres.
+const SCALE_BAR_GAP: f64 = 6.0;
+
+/// The height of the scale bar, in millimetres.
+const SCALE_BAR_HEIGHT: f64 = 2.0;
+
 /// The layer of the dimensions in the DXF file.
 pub const DIMENSION_LAYER: &str = "COTAS";
 
@@ -620,6 +626,75 @@ impl Drawing {
                 Entity::Line(at(0.0, centre), at(3.1 * size + 0.2 * size, centre)),
             ),
         ]);
+    }
+
+    /// The longest round length (1, 2 or 5 times a power of ten) that is at most `limit` millimetres, or `None` below one millimetre and for a limit that is
+    /// not a number.
+    fn round_length(limit: f64) -> Option<f64> {
+        if !limit.is_finite() || limit < 1.0 {
+            return None;
+        }
+        let limit = limit.min(1.0e9);
+        let mut best = 1.0;
+        let mut decade = 1.0;
+        while decade <= limit {
+            for k in [1.0, 2.0, 5.0] {
+                if decade * k <= limit {
+                    best = decade * k;
+                }
+            }
+            decade *= 10.0;
+        }
+        Some(best)
+    }
+
+    /// Draws a scale bar under everything the drawing holds, from its left edge: a bar of the longest round length (1, 2 or 5 times a power of ten, in
+    /// millimetres of the model) that is at most two fifths of the width, cut into `divisions` (2 to 10) with every other one hatched, on the layer of
+    /// the frame, with the figure 0 under its left end and its length to the right of it. The bar is a length of the model, so it is true at any scale and
+    /// paper. False, and nothing drawn, for a number of divisions out of 2 to 10, for a drawing with nothing in it and for one narrower than 25 mm.
+    pub fn add_scale_bar(&mut self, divisions: u32) -> bool {
+        if self.entities.is_empty() || !(2..=10).contains(&divisions) {
+            return false;
+        }
+        let (lo, hi) = self.bounds();
+        if hi.0 - lo.0 < 25.0 {
+            return false;
+        }
+        let Some(length) = Drawing::round_length(0.4 * (hi.0 - lo.0)) else {
+            return false;
+        };
+        let top = lo.1 - self.dimension_room() - SCALE_BAR_GAP;
+        let bottom = top - SCALE_BAR_HEIGHT;
+        let step = length / f64::from(divisions);
+        let line = |a: (f64, f64), b: (f64, f64)| (Layer::Frame, Entity::Line(a, b));
+        self.entities.extend(rect_lines(
+            Layer::Frame,
+            (lo.0, bottom),
+            (lo.0 + length, top),
+        ));
+        for i in 1..divisions {
+            let x = lo.0 + step * f64::from(i);
+            self.entities.push(line((x, bottom), (x, top)));
+        }
+        for i in (1..divisions).step_by(2) {
+            for quarter in [0.25, 0.5, 0.75] {
+                let x = lo.0 + step * (f64::from(i) + quarter);
+                self.entities.push(line((x, bottom), (x, top)));
+            }
+        }
+        let label = |at: (f64, f64), text: String| Note {
+            at,
+            text,
+            measures: None,
+            level: 0,
+        };
+        self.notes
+            .push(label((lo.0 - 0.7, bottom - DIM_TEXT - 1.0), "0".to_owned()));
+        self.notes.push(label(
+            (lo.0 + length + 2.0, bottom),
+            format!("{} mm", length as i64),
+        ));
+        true
     }
 
     /// Draws the cutting line of a plane across `axis` at `at` from the outer face of the box, the
@@ -3497,5 +3572,237 @@ frame_margin = 1001 mm
         assert_eq!(text(Format::SvgTop, &on), text(Format::SvgTop, &off));
         // the flag takes 0 or 1 only
         assert!(Settings::with_user_config("[drawing]\nsheet_section = 2\n").is_err());
+    }
+
+    #[test]
+    fn the_scale_bar_is_a_round_length_of_the_model_chosen_to_fit_the_width() {
+        for (limit, want) in [
+            (1.0, Some(1.0)),
+            (1.99, Some(1.0)),
+            (2.0, Some(2.0)),
+            (4.9, Some(2.0)),
+            (5.0, Some(5.0)),
+            (9.99, Some(5.0)),
+            (10.0, Some(10.0)),
+            (41.6, Some(20.0)),
+            (50.0, Some(50.0)),
+            (1234.0, Some(1000.0)),
+            (0.99, None),
+            (-5.0, None),
+            (f64::NAN, None),
+            (f64::INFINITY, None),
+        ] {
+            assert_eq!(Drawing::round_length(limit), want, "{limit}");
+        }
+        // a limit past a billion millimetres is held at it
+        assert_eq!(Drawing::round_length(1.0e300), Some(1.0e9));
+    }
+
+    #[test]
+    fn a_scale_bar_is_drawn_under_the_views_with_every_other_division_hatched() {
+        let e = model();
+        let mut d = Drawing::of(&e, View::Top, &settings()).unwrap();
+        let before = (d.entities.len(), d.notes.len(), d.bounds());
+        assert!(d.add_scale_bar(5));
+        let added: Vec<_> = d.entities[before.0..].to_vec();
+        // the outline of four lines, four ticks and three hatching lines in each of the two hatched divisions
+        assert_eq!(added.len(), 4 + 4 + 2 * 3);
+        assert!(added.iter().all(|(l, _)| *l == Layer::Frame));
+        // the box is 104 wide: the bar is 20 mm (two fifths of 104 is 41.6) and starts at the left edge
+        let xs: Vec<f64> = added
+            .iter()
+            .flat_map(|(_, e)| match *e {
+                Entity::Line(a, b) => vec![a.0, b.0],
+                _ => Vec::new(),
+            })
+            .collect();
+        let (min, max) = xs
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(lo, hi), x| (lo.min(*x), hi.max(*x)));
+        assert_eq!((min, max), (before.2 .0 .0, before.2 .0 .0 + 20.0));
+        // it lies under everything the drawing had, with the room of the dimensions between
+        let top = added
+            .iter()
+            .flat_map(|(_, e)| match *e {
+                Entity::Line(a, b) => vec![a.1, b.1],
+                _ => Vec::new(),
+            })
+            .fold(f64::MIN, f64::max);
+        assert!(top <= before.2 .0 .1 - SCALE_BAR_GAP, "{top}");
+        // the figure 0 and the length, as notes with no dimension
+        let labels: Vec<_> = d.notes[before.1..].iter().collect();
+        assert_eq!(labels.len(), 2);
+        assert_eq!(
+            (labels[0].text.as_str(), labels[1].text.as_str()),
+            ("0", "20 mm")
+        );
+        assert!(labels.iter().all(|n| n.measures.is_none()));
+        // the files carry it on the layer of the frame
+        let svg = d.to_svg(&settings());
+        assert!(svg.contains("<g id=\"MARCO\"") && svg.contains(">20 mm</text>"));
+        let dxf = d.to_dxf();
+        assert!(dxf.contains("0\nLINE\n8\nMARCO\n") && dxf.contains("1\n20 mm\n"));
+        // two divisions are a bar of two halves with one hatched
+        let mut two = Drawing::of(&e, View::Top, &settings()).unwrap();
+        let n = two.entities.len();
+        assert!(two.add_scale_bar(2));
+        assert_eq!(two.entities.len() - n, 4 + 1 + 3);
+    }
+
+    #[test]
+    fn a_scale_bar_that_cannot_be_drawn_leaves_the_drawing_as_it_was() {
+        let e = model();
+        let plain = Drawing::of(&e, View::Top, &settings()).unwrap();
+        for divisions in [0, 1, 11, 100] {
+            let mut d = plain.clone();
+            assert!(!d.add_scale_bar(divisions), "{divisions}");
+            assert_eq!(d, plain);
+        }
+        let mut empty = plain.clone();
+        empty.entities.clear();
+        let before = empty.clone();
+        assert!(!empty.add_scale_bar(4));
+        assert_eq!(empty, before);
+        // a drawing narrower than 25 mm has no room for a bar worth reading
+        let mut narrow = Drawing {
+            view: View::Top,
+            entities: vec![(Layer::Outline, Entity::Line((0.0, 0.0), (24.0, 0.0)))],
+            notes: Vec::new(),
+            extent: (24.0, 0.0),
+            dxf_dimensions: false,
+        };
+        let before = narrow.clone();
+        assert!(!narrow.add_scale_bar(4));
+        assert_eq!(narrow, before);
+    }
+
+    #[test]
+    fn the_scale_bar_follows_the_setting_in_every_file_and_the_value_is_checked() {
+        use crate::export::{render, Format};
+        let e = model();
+        let off = crate::config::Settings::defaults();
+        let on = crate::config::Settings::with_user_config("[drawing]\nscale_bar = 4\n").unwrap();
+        assert_eq!(on.drawing.scale_bar, 4);
+        for format in [
+            Format::SvgTop,
+            Format::DxfFront,
+            Format::SvgSheet,
+            Format::PdfSheet,
+        ] {
+            let plain = render(format, &e, "", &off).unwrap();
+            let barred = render(format, &e, "", &on).unwrap();
+            assert_ne!(plain, barred, "{format:?}");
+            // the same setting gives the same bytes
+            assert_eq!(barred, render(format, &e, "", &on).unwrap(), "{format:?}");
+        }
+        // the sheet is wider than a view: its bar is longer
+        let sheet = String::from_utf8(render(Format::SvgSheet, &e, "", &on).unwrap()).unwrap();
+        let view = String::from_utf8(render(Format::SvgTop, &e, "", &on).unwrap()).unwrap();
+        assert!(view.contains(">20 mm</text>"));
+        assert!(sheet.contains(" mm</text>") && !sheet.contains(">20 mm</text>"));
+        for bad in ["1", "11", "-1", "x"] {
+            let r = crate::config::Settings::with_user_config(&format!(
+                "[drawing]\nscale_bar = {bad}\n"
+            ));
+            let message = r.unwrap_err().to_string();
+            assert!(message.contains("drawing.scale_bar"), "{bad}: {message}");
+        }
+        for good in ["0", "2", "10"] {
+            assert!(crate::config::Settings::with_user_config(&format!(
+                "[drawing]\nscale_bar = {good}\n"
+            ))
+            .is_ok());
+        }
+    }
+
+    /// A small generator with a fixed seed (xorshift), so that a failure can be repeated.
+    struct BarRng(u64);
+
+    impl BarRng {
+        fn draw(&mut self, below: u64) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0 % below
+        }
+    }
+
+    #[test]
+    fn scale_bars_under_random_views_are_round_and_inside_two_fifths_of_the_width_with_a_fixed_seed(
+    ) {
+        for seed in 1..=60u64 {
+            let mut rng = BarRng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let e = Enclosure::new(EnclosureParams {
+                inner_length: mmv(30 + rng.draw(400) as i64),
+                inner_width: mmv(30 + rng.draw(300) as i64),
+                inner_height: mmv(10 + rng.draw(200) as i64),
+                wall: mmv(2),
+                floor: mmv(2),
+                lid: mmv(3),
+                edge_margin: mmv(3),
+                min_web: mmv(2),
+            })
+            .unwrap();
+            let view = [View::Top, View::Front, View::Side][rng.draw(3) as usize];
+            let mut d = Drawing::of(&e, view, &settings()).unwrap();
+            let (lo, hi) = d.bounds();
+            let width = hi.0 - lo.0;
+            let divisions = 2 + rng.draw(9) as u32;
+            let n = d.entities.len();
+            assert!(
+                d.add_scale_bar(divisions),
+                "seed {seed}: {width} {divisions}"
+            );
+            let bar = &d.entities[n..];
+            // the outline, the ticks between the divisions and three lines in each hatched division
+            let hatched = divisions / 2;
+            assert_eq!(
+                bar.len() as u32,
+                4 + (divisions - 1) + 3 * hatched,
+                "seed {seed}"
+            );
+            let xs: Vec<f64> = bar
+                .iter()
+                .filter_map(|(_, e)| match *e {
+                    Entity::Line(a, b) => Some([a.0, b.0]),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            let min = xs.iter().copied().fold(f64::MAX, f64::min);
+            let max = xs.iter().copied().fold(f64::MIN, f64::max);
+            let length = max - min;
+            assert_eq!(min, lo.0, "seed {seed}");
+            assert!(
+                length <= 0.4 * width + 1e-9 && length >= 1.0,
+                "seed {seed}: {length} of {width}"
+            );
+            // 1, 2 or 5 times a power of ten
+            let mut mantissa = length;
+            while mantissa >= 10.0 {
+                mantissa /= 10.0;
+            }
+            assert!(
+                [1.0, 2.0, 5.0].iter().any(|m| (mantissa - m).abs() < 1e-9),
+                "seed {seed}: {length}"
+            );
+            // the next round length up would not fit
+            assert!(
+                Drawing::round_length(length * 1.0001).unwrap() == length,
+                "seed {seed}"
+            );
+            // under everything, and every file can be written
+            assert!(
+                bar.iter()
+                    .all(|(_, e)| matches!(*e, Entity::Line(a, b) if a.1 < lo.1 && b.1 < lo.1)),
+                "seed {seed}"
+            );
+            assert!(d.to_svg(&settings()).contains("MARCO"), "seed {seed}");
+            assert!(d.to_dxf().contains("MARCO"), "seed {seed}");
+            assert!(
+                crate::pdf::check(&d.to_pdf_with(&settings(), None, "bar")).is_some(),
+                "seed {seed}"
+            );
+        }
     }
 }

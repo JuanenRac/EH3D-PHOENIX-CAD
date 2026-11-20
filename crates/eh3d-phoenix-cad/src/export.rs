@@ -279,6 +279,9 @@ pub fn render_titled(
                     settings.drawing.sheet_symbol_size.get() as f64 / 1_000_000.0,
                 );
             }
+            if settings.drawing.scale_bar > 0 {
+                drawing.add_scale_bar(u32::from(settings.drawing.scale_bar));
+            }
             if settings.drawing.legend {
                 if format.is_sheet() && settings.drawing.sheet_legends {
                     drawing.add_sheet_legend(enclosure, &settings.drawing, lang);
