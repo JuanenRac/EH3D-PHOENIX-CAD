@@ -1,4 +1,4 @@
-//! A project store in memory that answers like the store of the EH3D server (`/api/v1/apps/cad/projects`), for the tests of this program and of the people
+//! A project store in memory that answers like the store of the EH3D server (`/api/v1/apps/phoenix-cad/projects`), for the tests of this program and of the people
 //! who write a program that talks to it. It is not a server: it has no accounts, one token is the only login, and the checksum that tags a version is
 //! not a SHA-256. What it does keep from the real one is the rules that the client has to follow: a write over a file that exists says which version it
 //! was made from (`428` without it, `412` when it is not the current one), the same bytes make no version, and a project that is not the caller's does
@@ -6,6 +6,11 @@
 //!
 //! [`MemoryStore`] is a `Transport` of the client of the suite, and [`serve`] puts it behind a socket of this computer so that the plain HTTP of the
 //! program (and its command line) is tried too.
+//!
+//! It also answers the routes of the jobs of the station `cad` (`/api/v1/work/jobs`) the way the plugin of the server does: a job is made with
+//! a `check` or a `report` of the project it carries, starts, and ends `done` with the document of the station
+//! (`servercad::station_answer`). Three machines are special so that the failures can be tried: `broken` ends its jobs `failed`, `slow`
+//! never ends them and `missing` is not a machine of the server.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -40,7 +45,15 @@ struct Project {
     files: BTreeMap<String, Vec<String>>,
 }
 
+struct Job {
+    id: String,
+    state: &'static str,
+    machine: String,
+    result: String,
+}
+
 struct State {
+    jobs: Vec<Job>,
     token: String,
     require_if_match: bool,
     projects: Vec<Project>,
@@ -129,7 +142,7 @@ fn project_json(p: &Project) -> String {
         })
         .collect();
     format!(
-        "{{\"id\":{},\"app\":\"cad\",\"name\":{},\"owner\":\"token\",\"etag\":\"{}\",\"files\":[{}]}}",
+        "{{\"id\":{},\"app\":\"phoenix-cad\",\"name\":{},\"owner\":\"token\",\"etag\":\"{}\",\"files\":[{}]}}",
         quote(&p.id),
         quote(&p.name),
         p.files.len(),
@@ -139,7 +152,7 @@ fn project_json(p: &Project) -> String {
 
 fn summary_json(p: &Project) -> String {
     format!(
-        "{{\"id\":{},\"app\":\"cad\",\"name\":{},\"owner\":\"token\",\"etag\":\"{}\",\"files\":{}}}",
+        "{{\"id\":{},\"app\":\"phoenix-cad\",\"name\":{},\"owner\":\"token\",\"etag\":\"{}\",\"files\":{}}}",
         quote(&p.id),
         quote(&p.name),
         p.files.len(),
@@ -165,6 +178,7 @@ impl MemoryStore {
         MemoryStore(Arc::new(Mutex::new(State {
             token: token.to_string(),
             require_if_match: true,
+            jobs: Vec::new(),
             projects: Vec::new(),
             next: 1,
             seen: Vec::new(),
@@ -250,7 +264,10 @@ impl MemoryStore {
         if bearer != Some(st.token.as_str()) {
             return error(401, "unauthorized");
         }
-        let Some(rest) = path.strip_prefix("/api/v1/apps/cad/projects") else {
+        if let Some(rest) = path.strip_prefix("/api/v1/work/jobs") {
+            return jobs(&mut st, method, rest, body);
+        }
+        let Some(rest) = path.strip_prefix("/api/v1/apps/phoenix-cad/projects") else {
             return error(404, "not_found");
         };
         if rest.is_empty() {
@@ -276,6 +293,96 @@ impl MemoryStore {
             ("GET", "files/content") => read(&st.projects[index], query),
             _ => error(404, "not_found"),
         }
+    }
+}
+
+fn job_json(j: &Job) -> String {
+    let view = if j.state == "done" {
+        format!(",\"view\":{{\"result\":{}}}", j.result)
+    } else {
+        String::new()
+    };
+    let message = if j.state == "failed" {
+        "the station is out of order"
+    } else {
+        ""
+    };
+    format!(
+        "{{\"id\":{},\"machine\":{},\"plugin\":\"cad\",\"state\":{},\"message\":{}{view}}}",
+        quote(&j.id),
+        quote(&j.machine),
+        quote(j.state),
+        quote(message)
+    )
+}
+
+/// The jobs of the station `cad`: made with a request, started, read.
+fn jobs(st: &mut State, method: &str, rest: &str, body: &str) -> (u16, String) {
+    if rest.is_empty() {
+        if method != "POST" {
+            return error(404, "not_found");
+        }
+        let Ok(request) = eh3d_serverclient::Json::parse(body) else {
+            return error(400, "bad_request");
+        };
+        let machine = request
+            .get("machine")
+            .and_then(|m| m.as_str())
+            .unwrap_or("");
+        if machine.is_empty() {
+            return error(422, "bad_request");
+        }
+        if machine == "missing" {
+            return error(404, "unknown_machine");
+        }
+        let (Some(kind), Some(project)) = (
+            request
+                .get("request")
+                .and_then(|r| r.get("kind"))
+                .and_then(|k| k.as_str()),
+            request.get("request").and_then(|r| r.get("project")),
+        ) else {
+            return error(400, "bad_request");
+        };
+        let result = match crate::servercad::station_answer(kind, project) {
+            Ok(text) => text,
+            Err(why) => {
+                return (
+                    422,
+                    format!("{{\"error\":\"bad_request\",\"detail\":{}}}", quote(&why)),
+                )
+            }
+        };
+        let id = format!("j-{:04}", st.jobs.len() + 1);
+        st.jobs.push(Job {
+            id,
+            state: "queued",
+            machine: machine.to_string(),
+            result,
+        });
+        return (201, st.jobs.last().map(job_json).unwrap_or_default());
+    }
+    let Some(rest) = rest.strip_prefix('/') else {
+        return error(404, "not_found");
+    };
+    let (id, action) = rest.split_once('/').unwrap_or((rest, ""));
+    let Some(job) = st.jobs.iter_mut().find(|j| j.id == id) else {
+        return error(404, "unknown_job");
+    };
+    match (method, action) {
+        ("GET", "") => (200, job_json(job)),
+        ("POST", "start") => {
+            if job.state != "queued" {
+                return error(409, "bad_state");
+            }
+            job.state = match job.machine.as_str() {
+                "broken" => "failed",
+                "slow" => "running",
+                _ => "done",
+            };
+            (200, job_json(job))
+        }
+        _ => error(404, "not_found"),
     }
 }
 

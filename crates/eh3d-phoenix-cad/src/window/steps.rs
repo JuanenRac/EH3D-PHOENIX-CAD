@@ -4,6 +4,7 @@
 //! are kept is the setting `undo.depth`; how many the list shows is `panels.history_shown`.
 
 use super::*;
+use crate::changes::{changed_fields, FieldKind, How};
 
 impl Window {
     /// The text of the history panel in the language of the window: how many changes are kept
@@ -31,11 +32,14 @@ impl Window {
         if hidden > 0 {
             lines.push(fill(Msg::HistoryOlder.tr(lang), &[&hidden.to_string()]));
         }
+        let states = self.history.states(&self.mech);
+        let fields = |i: usize| self.history_fields_line(states.get(i), states.get(i + 1));
         for (i, name) in done.iter().enumerate().skip(hidden) {
             lines.push(fill(
                 Msg::HistoryRow.tr(lang),
                 &[&(i + 1).to_string(), name],
             ));
+            lines.extend(fields(i));
         }
         lines.push(Msg::HistoryHere.tr(lang).to_string());
         for (k, name) in undone.iter().rev().take(shown).enumerate() {
@@ -43,6 +47,7 @@ impl Window {
                 Msg::HistoryRow.tr(lang),
                 &[&(done.len() + k + 1).to_string(), name],
             ));
+            lines.extend(fields(done.len() + k));
         }
         if undone.len() > shown {
             lines.push(fill(
@@ -51,6 +56,59 @@ impl Window {
             ));
         }
         lines.join("\n")
+    }
+
+    /// The fields that differ between two states of the recipe, one by one: what the change from
+    /// `before` to `after` touched (a parameter, a variable, a step, the tip, the board, a sketch),
+    /// at most `panels.history_fields` of them and then how many more there are.
+    pub fn history_fields_of(&self, before: &Mechanical, after: &Mechanical) -> Vec<String> {
+        let lang = self.lang;
+        let changes = changed_fields(before, after, &self.settings.mechanical);
+        let shown = self.ui.panels.history_fields as usize;
+        let mut out: Vec<String> = changes
+            .iter()
+            .take(shown)
+            .map(|c| {
+                let subject = match c.kind {
+                    FieldKind::Parameter => Msg::ChangeParameter,
+                    FieldKind::Variable => Msg::ChangeVariable,
+                    FieldKind::Step => Msg::ChangeStep,
+                    FieldKind::Tip => Msg::ChangeTip,
+                    FieldKind::Board => Msg::ChangeBoard,
+                    FieldKind::Sketch => Msg::ChangeSketch,
+                };
+                let verb = match c.how {
+                    How::Added => Msg::ChangeAdded,
+                    How::Removed => Msg::ChangeRemoved,
+                    How::Changed => Msg::ChangeChanged,
+                };
+                fill(verb.tr(lang), &[&fill(subject.tr(lang), &[&c.name])])
+            })
+            .collect();
+        if changes.len() > shown {
+            out.push(fill(
+                Msg::ChangeMore.tr(lang),
+                &[&(changes.len() - shown).to_string()],
+            ));
+        }
+        out
+    }
+
+    /// The line under a change of the history panel that names its fields; none when the setting
+    /// is 0 or the change touched nothing that the recipe keeps.
+    fn history_fields_line(
+        &self,
+        before: Option<&&Mechanical>,
+        after: Option<&&Mechanical>,
+    ) -> Option<String> {
+        if self.ui.panels.history_fields == 0 {
+            return None;
+        }
+        let names = self.history_fields_of(before?, after?);
+        if names.is_empty() {
+            return None;
+        }
+        Some(fill(Msg::HistoryFields.tr(self.lang), &[&names.join(", ")]))
     }
 
     /// How many changes the project has gone through that are kept, and how many of those are

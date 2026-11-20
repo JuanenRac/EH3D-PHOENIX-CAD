@@ -410,6 +410,28 @@ impl<'a> Model<'a> {
                     dist(self.pt(x, *a), self.pt(x, *b)) - dist(self.pt(x, *c), self.pt(x, *d)),
                 );
             }
+            Constraint::Proportional { a, b, num, den } => {
+                let ratio = f64::from(*num) / f64::from(*den);
+                if self.is_line(*a) {
+                    let ((p1, q1), (p2, q2)) = (self.line_ends(x, *a), self.line_ends(x, *b));
+                    out.push(dist(p1, q1) - ratio * dist(p2, q2));
+                } else {
+                    out.push(self.radius(x, *a) - ratio * self.radius(x, *b));
+                }
+            }
+            Constraint::Bisector { bisector, a, b } => {
+                let ((p1, q1), (p2, q2)) = (self.line_ends(x, *a), self.line_ends(x, *bisector));
+                let ((p3, q3), (p4, q4)) = (self.line_ends(x, *bisector), self.line_ends(x, *b));
+                let (d1, d2) = ((q1.0 - p1.0, q1.1 - p1.1), (q2.0 - p2.0, q2.1 - p2.1));
+                let (d3, d4) = ((q3.0 - p3.0, q3.1 - p3.1), (q4.0 - p4.0, q4.1 - p4.1));
+                let (cross1, dot1) = (d1.0 * d2.1 - d1.1 * d2.0, d1.0 * d2.0 + d1.1 * d2.1);
+                let (cross2, dot2) = (d3.0 * d4.1 - d3.1 * d4.0, d3.0 * d4.0 + d3.1 * d4.1);
+                // the sine of the difference of the two angles, times the mean length of the
+                // lines that end each angle, so that the row is a length like the others
+                let sine =
+                    (cross1 * dot2 - dot1 * cross2) / (norm(d1) * norm(d2) * norm(d3) * norm(d4));
+                out.push(sine * (norm(d2) + norm(d4)) / 2.0);
+            }
             Constraint::Equidistant { point, a, b } => {
                 let p = self.pt(x, *point);
                 out.push(dist(p, self.pt(x, *a)) - dist(p, self.pt(x, *b)));
@@ -1557,6 +1579,139 @@ mod tests {
         // the solver finds a solution for nearly all of them (a line that collapses to a point is
         // not an angle and is not counted)
         assert!(checked >= 150, "{checked} of {tried}");
+    }
+
+    #[test]
+    fn two_lines_are_put_in_a_ratio_and_so_are_two_circles() {
+        let mut k = sketch();
+        let p0 = k.add_point(mm(0), mm(0)).unwrap();
+        let p1 = k.add_point(mm(12), mm(0)).unwrap();
+        let p2 = k.add_point(mm(0), mm(5)).unwrap();
+        let p3 = k.add_point(mm(5), mm(5)).unwrap();
+        for p in [p0, p1, p2] {
+            k.fix_point(p).unwrap();
+        }
+        let l1 = k.add_line(p0, p1).unwrap();
+        let l2 = k.add_line(p2, p3).unwrap();
+        k.add_constraint(Constraint::Horizontal(l2)).unwrap();
+        k.add_constraint(Constraint::Proportional {
+            a: l1,
+            b: l2,
+            num: 3,
+            den: 2,
+        })
+        .unwrap();
+        // 12 = 3/2 of the second line, which is therefore 8 mm
+        assert_eq!(solved(&mut k), 0);
+        let (x, y) = k.point(p3).unwrap();
+        assert!((x.get() - 8_000_000).abs() <= 4, "{}", x.get());
+        assert_eq!(y, mm(5));
+        let mut m = sketch();
+        let c0 = m.add_point(mm(0), mm(0)).unwrap();
+        let c1 = m.add_point(mm(30), mm(0)).unwrap();
+        let o1 = m.add_circle(c0, mm(9)).unwrap();
+        let o2 = m.add_circle(c1, mm(2)).unwrap();
+        m.fix_point(c0).unwrap();
+        m.fix_point(c1).unwrap();
+        m.add_constraint(Constraint::Radius {
+            round: o1,
+            dim: Dim::fixed(mm(9)),
+        })
+        .unwrap();
+        m.add_constraint(Constraint::Proportional {
+            a: o1,
+            b: o2,
+            num: 3,
+            den: 1,
+        })
+        .unwrap();
+        assert_eq!(solved(&mut m), 0);
+        let radius = |m: &Sketch, id: ElementId| match m.element(id) {
+            Some(Element::Circle { radius, .. }) => radius.get(),
+            other => panic!("{other:?}"),
+        };
+        assert!(
+            (radius(&m, o2) - 3_000_000).abs() <= 4,
+            "{}",
+            radius(&m, o2)
+        );
+    }
+
+    #[test]
+    fn a_line_halves_the_angle_between_two_others() {
+        let mut k = sketch();
+        let p0 = k.add_point(mm(0), mm(0)).unwrap();
+        let p1 = k.add_point(mm(10), mm(0)).unwrap();
+        let p2 = k.add_point(mm(0), mm(10)).unwrap();
+        let p3 = k.add_point(mm(7), mm(3)).unwrap();
+        for p in [p0, p1, p2] {
+            k.fix_point(p).unwrap();
+        }
+        let a = k.add_line(p0, p1).unwrap();
+        let b = k.add_line(p0, p2).unwrap();
+        let bis = k.add_line(p0, p3).unwrap();
+        k.add_constraint(Constraint::Bisector {
+            bisector: bis,
+            a,
+            b,
+        })
+        .unwrap();
+        // the end of the bisector slides along the diagonal: one degree of freedom
+        assert_eq!(solved(&mut k), 1);
+        let (x, y) = k.point(p3).unwrap();
+        assert!((y.get() - x.get()).abs() <= 20, "{} {}", x.get(), y.get());
+        assert!(x.get() > 0);
+        // once the length is given it is the diagonal of the square of 5 mm
+        k.add_constraint(Constraint::LineLength {
+            line: bis,
+            dim: Dim::fixed(um(7071)),
+        })
+        .unwrap();
+        assert_eq!(solved(&mut k), 0);
+        let (x, y) = k.point(p3).unwrap();
+        assert!((x.get() - 5_000_000).abs() <= 2_000, "{}", x.get());
+        assert!((y.get() - 5_000_000).abs() <= 2_000, "{}", y.get());
+    }
+
+    #[test]
+    fn random_ratios_of_two_lines_hold_with_a_fixed_seed() {
+        let mut state = 0x9A71_0016_0B15_EC70u64;
+        let mut next = |n: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % n
+        };
+        for round in 0..60 {
+            let (num, den) = (1 + next(4) as u32, 1 + next(4) as u32);
+            let first = 10 + next(20) as i64;
+            let mut k = sketch();
+            let p0 = k.add_point(mm(0), mm(0)).unwrap();
+            let p1 = k.add_point(mm(first), mm(0)).unwrap();
+            let p2 = k.add_point(mm(0), mm(7)).unwrap();
+            let p3 = k.add_point(mm(3), mm(7)).unwrap();
+            for p in [p0, p1, p2] {
+                k.fix_point(p).unwrap();
+            }
+            let l1 = k.add_line(p0, p1).unwrap();
+            let l2 = k.add_line(p2, p3).unwrap();
+            k.add_constraint(Constraint::Horizontal(l2)).unwrap();
+            k.add_constraint(Constraint::Proportional {
+                a: l1,
+                b: l2,
+                num,
+                den,
+            })
+            .unwrap();
+            assert_eq!(solved(&mut k), 0, "round {round}");
+            // first : second = num : den
+            let second = k.point(p3).unwrap().0.get() as f64;
+            let want = first as f64 * 1e6 * f64::from(den) / f64::from(num);
+            assert!(
+                (second - want).abs() <= 20.0,
+                "round {round}: {second} {want}"
+            );
+        }
     }
 
     #[test]

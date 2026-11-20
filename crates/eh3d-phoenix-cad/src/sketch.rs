@@ -296,6 +296,28 @@ pub enum Constraint {
         /// The second line of the second pair.
         d: ElementId,
     },
+    /// The length of the line `a` is to the length of the line `b` as `num` is to `den` (the
+    /// radius of a circle or an arc, for two of those): `a * den = b * num`.
+    Proportional {
+        /// The first line, circle or arc.
+        a: ElementId,
+        /// The second line, circle or arc.
+        b: ElementId,
+        /// The part of the ratio that belongs to `a` (1 to 1000).
+        num: u32,
+        /// The part of the ratio that belongs to `b` (1 to 1000).
+        den: u32,
+    },
+    /// The line `bisector` halves the angle from the line `a` to the line `b`: the angle from `a`
+    /// to the bisector is the angle from the bisector to `b`.
+    Bisector {
+        /// The line that halves the angle.
+        bisector: ElementId,
+        /// The first side of the angle.
+        a: ElementId,
+        /// The second side of the angle.
+        b: ElementId,
+    },
     /// Two points are mirror images across a line.
     SymmetricLine {
         /// The first point.
@@ -451,6 +473,8 @@ impl Constraint {
             Constraint::EqualDistance { .. } => "equal_distance",
             Constraint::Equidistant { .. } => "equidistant",
             Constraint::EqualAngle { .. } => "equal_angle",
+            Constraint::Proportional { .. } => "proportional",
+            Constraint::Bisector { .. } => "bisector",
             Constraint::SymmetricLine { .. } => "symmetric_line",
             Constraint::SymmetricLines { .. } => "symmetric_lines",
             Constraint::SymmetricCircles { .. } => "symmetric_circles",
@@ -484,6 +508,7 @@ impl Constraint {
             | Constraint::Distance { a, b, .. }
             | Constraint::DistanceX { a, b, .. }
             | Constraint::DistanceY { a, b, .. }
+            | Constraint::Proportional { a, b, .. }
             | Constraint::AngleBetween { a, b, .. } => vec![*a, *b],
             Constraint::PointOnObject { point, object } => vec![*point, *object],
             Constraint::CollinearPoints(a, b, c) => vec![*a, *b, *c],
@@ -491,6 +516,7 @@ impl Constraint {
                 vec![*a, *b, *c, *d]
             }
             Constraint::Equidistant { point, a, b } => vec![*point, *a, *b],
+            Constraint::Bisector { bisector, a, b } => vec![*bisector, *a, *b],
             Constraint::Horizontal(l) | Constraint::Vertical(l) => vec![*l],
             Constraint::SymmetricLine { a, b, axis }
             | Constraint::SymmetricLines { a, b, axis }
@@ -1266,6 +1292,30 @@ impl Sketch {
                     return Err(bad_constraint(
                         "equal ties two lines or two circles or arcs, not one of each",
                     ));
+                }
+            }
+            Constraint::Proportional { a, b, num, den } => {
+                Self::check_distinct(*a, *b)?;
+                let ka = self.need(*a, &[Line, Circle, Arc], "a line, a circle or an arc")?;
+                let kb = self.need(*b, &[Line, Circle, Arc], "a line, a circle or an arc")?;
+                if (ka == Line) != (kb == Line) {
+                    return Err(bad_constraint(
+                        "a proportion ties two lines or two circles or arcs, not one of each",
+                    ));
+                }
+                if !(1..=1000).contains(num) || !(1..=1000).contains(den) {
+                    return Err(bad_constraint(
+                        "the two parts of a proportion are whole numbers from 1 to 1000"
+                            .to_string(),
+                    ));
+                }
+            }
+            Constraint::Bisector { bisector, a, b } => {
+                Self::check_distinct(*a, *b)?;
+                Self::check_distinct(*bisector, *a)?;
+                Self::check_distinct(*bisector, *b)?;
+                for id in [bisector, a, b] {
+                    self.need(*id, &[Line], "a line")?;
                 }
             }
             Constraint::Concentric(a, b) => {
@@ -2445,6 +2495,94 @@ mod tests {
             vec![
                 (eq, "equidistant", 3, false),
                 (ang, "equal_angle", 4, false)
+            ]
+        );
+    }
+
+    #[test]
+    fn proportional_and_bisector_are_checked_when_they_are_added() {
+        let mut s = sketch();
+        let a = s.add_point(mm(0), mm(0)).unwrap();
+        let b = s.add_point(mm(10), mm(0)).unwrap();
+        let c = s.add_point(mm(0), mm(10)).unwrap();
+        let l1 = s.add_line(a, b).unwrap();
+        let l2 = s.add_line(a, c).unwrap();
+        let l3 = s.add_line(b, c).unwrap();
+        let o1 = s.add_circle(a, mm(3)).unwrap();
+        let o2 = s.add_circle(b, mm(2)).unwrap();
+        let ratio = |a: ElementId, b: ElementId, num: u32, den: u32| Constraint::Proportional {
+            a,
+            b,
+            num,
+            den,
+        };
+        for bad in [
+            ratio(l1, l1, 2, 1),
+            ratio(l1, l2, 0, 1),
+            ratio(l1, l2, 1, 0),
+            ratio(l1, l2, 1001, 1),
+            ratio(l1, l2, 1, 1001),
+            ratio(l1, o1, 2, 1),
+            ratio(o1, l1, 2, 1),
+            ratio(a, l1, 2, 1),
+            ratio(l1, b, 2, 1),
+            Constraint::Bisector {
+                bisector: l1,
+                a: l1,
+                b: l2,
+            },
+            Constraint::Bisector {
+                bisector: l1,
+                a: l2,
+                b: l1,
+            },
+            Constraint::Bisector {
+                bisector: l3,
+                a: l2,
+                b: l2,
+            },
+            Constraint::Bisector {
+                bisector: a,
+                a: l2,
+                b: l3,
+            },
+            Constraint::Bisector {
+                bisector: l1,
+                a: o1,
+                b: l3,
+            },
+        ] {
+            let err = s.add_constraint(bad.clone()).unwrap_err();
+            assert_eq!(err.code(), "PHOENIX-CAD-032", "{bad:?}");
+        }
+        assert!(s.constraints().is_empty());
+        let p = s.add_constraint(ratio(l1, l2, 3, 2)).unwrap();
+        let q = s.add_constraint(ratio(o1, o2, 1000, 1)).unwrap();
+        let r = s
+            .add_constraint(Constraint::Bisector {
+                bisector: l3,
+                a: l1,
+                b: l2,
+            })
+            .unwrap();
+        let kinds: Vec<_> = s
+            .constraints()
+            .iter()
+            .map(|c| {
+                (
+                    c.id,
+                    c.constraint.kind_name(),
+                    c.constraint.elements(),
+                    c.constraint.is_dimension(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                (p, "proportional", vec![l1, l2], false),
+                (q, "proportional", vec![o1, o2], false),
+                (r, "bisector", vec![l3, l1, l2], false),
             ]
         );
     }

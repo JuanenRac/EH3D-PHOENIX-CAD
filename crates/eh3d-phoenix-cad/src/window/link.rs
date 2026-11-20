@@ -68,6 +68,77 @@ impl Window {
     }
 
     // -----------------------------------------------------------------------------------------
+    // The title block of the drawings
+    // -----------------------------------------------------------------------------------------
+
+    /// The five texts of the title block (organisation, title, number, revision and author), as
+    /// the settings hold them: what the panel starts with.
+    pub fn title_block_fields(&self) -> [String; 5] {
+        let t = &self.settings.title_block;
+        [
+            t.organisation.clone(),
+            t.title.clone(),
+            t.number.clone(),
+            t.revision.clone(),
+            t.author.clone(),
+        ]
+    }
+
+    /// The text of the title block panel in the language of the window: whether the drawings carry
+    /// it and its five texts (an empty title is the name of the project).
+    pub fn title_block_panel_text(&self) -> String {
+        let lang = self.lang;
+        let t = &self.settings.title_block;
+        let state = if t.enabled {
+            Msg::TitleBlockOn
+        } else {
+            Msg::TitleBlockOff
+        };
+        let title = if t.title.is_empty() {
+            Msg::TitleBlockEmptyTitle.tr(lang)
+        } else {
+            t.title.as_str()
+        };
+        let mut lines = vec![fill(Msg::TitleBlockHead.tr(lang), &[state.tr(lang)])];
+        for (msg, value) in [
+            (Msg::TbOrganisation, t.organisation.as_str()),
+            (Msg::TbTitle, title),
+            (Msg::TbNumber, t.number.as_str()),
+            (Msg::TbRevision, t.revision.as_str()),
+            (Msg::TbAuthor, t.author.as_str()),
+        ] {
+            lines.push(format!("{}: {value}", msg.tr(lang)));
+        }
+        lines.join("\n")
+    }
+
+    /// Keeps a title block for the drawings of this window: whether it is drawn and its five
+    /// texts, each checked like the same key of the settings (at most 80 characters on one line).
+    /// All or nothing: when one text is refused the status says which and the title block stays
+    /// as it was. It is not kept in the project file.
+    pub fn apply_title_block(&mut self, enabled: bool, fields: &[String; 5]) -> bool {
+        let mut block = self.settings.title_block.clone();
+        for (key, value) in ["organisation", "title", "number", "revision", "author"]
+            .iter()
+            .zip(fields)
+        {
+            if let Err(e) = block.set_field(key, value.trim()) {
+                self.status = Status::Error(e);
+                return false;
+            }
+        }
+        block.enabled = enabled;
+        self.settings.title_block = block;
+        let state = if enabled {
+            Msg::TitleBlockOn
+        } else {
+            Msg::TitleBlockOff
+        };
+        self.status = Status::Done(Msg::TitleBlockSaved, vec![state.tr(self.lang).to_string()]);
+        true
+    }
+
+    // -----------------------------------------------------------------------------------------
     // The project on the server
     // -----------------------------------------------------------------------------------------
 
@@ -163,6 +234,68 @@ impl Window {
             Err(status) => {
                 self.status = status;
                 false
+            }
+        }
+    }
+
+    /// The project of this window as the station `cad` of the server reads it (unsaved changes
+    /// included), under the name it has on the server.
+    pub fn station_project_text(&self, name: &str) -> Result<String, CadError> {
+        let mut document = self.document.clone();
+        document.set_mechanical(&self.mech, &self.settings.mechanical)?;
+        document.set_sketches(&self.mech.sketches, &self.sketch_settings)?;
+        crate::servercad::project_json(&document, name)
+    }
+
+    /// Asks the station of the server for a `check` or a `report` of the project and tells the
+    /// answer in the language of the window (or why there is none). The status says the verdict.
+    pub fn server_station_with(&mut self, store: &mut Store, kind: &str, typed: &str) -> String {
+        let Some(name) = self.server_name_for(typed) else {
+            let text = Msg::ServerBadName.tr(self.lang).replace("{0}", "");
+            self.server_problem(text.clone());
+            return text;
+        };
+        let project = match self.station_project_text(&name) {
+            Ok(p) => p,
+            Err(e) => {
+                let text = e.to_string();
+                self.status = Status::Error(e);
+                return text;
+            }
+        };
+        match store.station(kind, &name, &project) {
+            Ok(answer) => {
+                let v = &answer.verdict;
+                let word = if v.pass {
+                    Msg::ServerPass
+                } else {
+                    Msg::ServerFail
+                };
+                self.status = Status::Done(
+                    Msg::ServerCheckHead,
+                    vec![
+                        name.clone(),
+                        word.tr(self.lang).to_string(),
+                        v.errors.to_string(),
+                        v.warnings.to_string(),
+                    ],
+                );
+                crate::server_cli::describe(self.lang, &name, &answer)
+            }
+            Err(e) => {
+                self.server_problem(e.text.clone());
+                e.text
+            }
+        }
+    }
+
+    /// [`Window::server_station_with`] over the link of the settings.
+    pub fn server_station_now(&mut self, kind: &str, typed: &str) -> String {
+        match self.server_store() {
+            Ok(mut store) => self.server_station_with(&mut store, kind, typed),
+            Err(text) => {
+                self.server_problem(text.clone());
+                text
             }
         }
     }
@@ -434,5 +567,188 @@ mod tests {
             }
         }
         assert!(saved > 20 && turned_down > 0, "{saved} {turned_down}");
+    }
+
+    const PLATE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/plate.phoenixproj");
+
+    fn station_over(mem: &MemoryStore, lang: Lang, machine: &str) -> Store {
+        let mut link = sc::Settings::default();
+        link.set("server_address", "memory:1").unwrap();
+        link.set("server_token", TOKEN).unwrap();
+        link.set("server_retries", "0").unwrap();
+        link.set("server_machine", machine).unwrap();
+        link.set("server_timeout_s", "5").unwrap();
+        Store::over(sc::Client::new(link, Box::new(mem.clone())), lang, 1 << 22)
+    }
+
+    #[test]
+    fn the_title_block_panel_says_what_the_drawings_carry_and_keeps_a_new_one_all_or_nothing() {
+        use crate::export::Format;
+        let mut w = fresh(Lang::En);
+        assert!(w.open(&frame()), "{:?}", w.status);
+        assert_eq!(
+            w.title_block_panel_text(),
+            "Title block: off\nOrganisation: \nTitle: (the name of the project)\nDrawing number: \nRevision: A\nAuthor: "
+        );
+        // the shipped settings start the revision at A
+        assert_eq!(
+            w.title_block_fields(),
+            ["", "", "", "A", ""].map(str::to_string)
+        );
+        let plain = w.export_text(Format::DxfTop).unwrap();
+        assert!(!plain.contains("ROTULO"));
+        let fields = [
+            " Electro Hobby 3D ".to_string(),
+            "Frame".to_string(),
+            "EH-001".to_string(),
+            "B".to_string(),
+            "Ana".to_string(),
+        ];
+        assert!(w.apply_title_block(true, &fields), "{:?}", w.status);
+        assert_eq!(
+            w.status,
+            Status::Done(Msg::TitleBlockSaved, vec!["on".to_string()])
+        );
+        let text = w.title_block_panel_text();
+        assert!(
+            text.starts_with("Title block: on\nOrganisation: Electro Hobby 3D\nTitle: Frame\n"),
+            "{text}"
+        );
+        assert_eq!(w.title_block_fields()[0], "Electro Hobby 3D");
+        // the drawings carry it now
+        let dxf = w.export_text(Format::DxfTop).unwrap();
+        assert!(
+            dxf.contains("ROTULO") && dxf.contains("1\nEH-001\n"),
+            "{dxf}"
+        );
+        // a text that is too long, or on two lines, refuses all of them and leaves the block as it was
+        let before = (w.title_block_panel_text(), w.settings.title_block.clone());
+        for bad in ["x".repeat(81), "two\nlines".to_string()] {
+            let mut other = fields.clone();
+            other[3] = bad;
+            other[0] = "Changed".to_string();
+            assert!(!w.apply_title_block(false, &other));
+            assert!(matches!(w.status, Status::Error(_)), "{:?}", w.status);
+            assert_eq!(
+                (w.title_block_panel_text(), w.settings.title_block.clone()),
+                before
+            );
+        }
+        // switched off, it keeps its texts and the drawings go back to having none
+        assert!(w.apply_title_block(false, &fields));
+        assert!(w.title_block_panel_text().starts_with("Title block: off\n"));
+        assert!(!w.export_text(Format::DxfTop).unwrap().contains("ROTULO"));
+        // the panel is listed, with its title, in the eight languages
+        assert!(crate::panels::Panel::ALL.contains(&crate::panels::Panel::TitleBlock));
+        for lang in Lang::ALL {
+            let mut w = fresh(lang);
+            assert!(!w.apply_title_block(
+                true,
+                &[
+                    "x".repeat(81),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new()
+                ]
+            ));
+            assert!(w.title_block_panel_text().contains(Msg::TbAuthor.tr(lang)));
+            for m in [
+                Msg::PanelTitleBlock,
+                Msg::TitleBlockHead,
+                Msg::TitleBlockOn,
+                Msg::TitleBlockOff,
+                Msg::TitleBlockEmptyTitle,
+                Msg::TitleBlockSaved,
+                Msg::TitleBlockApplyDo,
+                Msg::TitleBlockUse,
+                Msg::ServerCheckDo,
+                Msg::ServerReportDo,
+            ] {
+                assert!(!m.tr(lang).is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn the_station_of_the_server_checks_the_project_of_the_window_as_it_is_now() {
+        let mem = MemoryStore::new(TOKEN);
+        let mut w = fresh(Lang::En);
+        assert!(w.open(&PathBuf::from(PLATE)), "{:?}", w.status);
+        let mut store = station_over(&mem, Lang::En, "cad1");
+        let told = w.server_station_with(&mut store, "check", "");
+        assert!(
+            told.starts_with("plate: pass (0 errors, 0 warnings)\n"),
+            "{told}"
+        );
+        assert_eq!(
+            w.status,
+            Status::Done(
+                Msg::ServerCheckHead,
+                vec!["plate".into(), "pass".into(), "0".into(), "0".into()]
+            )
+        );
+        let told = w.server_station_with(&mut store, "report", "Other name");
+        assert!(told.starts_with("Other name: pass"), "{told}");
+        assert!(told.contains("1 parts, 1 sketches, 1 features"), "{told}");
+        // what the window has now is what is sent, with no save: a suppressed extrusion is not a feature
+        assert!(w
+            .station_project_text("plate")
+            .unwrap()
+            .contains("\"kind\":\"extrude\""));
+        w.mech.steps.last_mut().unwrap().suppressed = true;
+        let text = w.station_project_text("plate").unwrap();
+        assert!(!text.contains("extrude"), "{text}");
+        let told = w.server_station_with(&mut store, "report", "");
+        assert!(told.contains("0 parts, 1 sketches, 0 features"), "{told}");
+        assert!(!w.dirty || w.path.is_some());
+    }
+
+    #[test]
+    fn the_station_that_is_not_there_is_told_in_the_language_of_the_window() {
+        // no address: the sentence of the link, as the status and as the text
+        for lang in Lang::ALL {
+            let mut w = fresh(lang);
+            assert!(w.open(&PathBuf::from(PLATE)));
+            let told = w.server_station_now("check", "");
+            assert_eq!(told, Msg::ServerNotSet.tr(lang));
+            assert!(
+                matches!(w.status, Status::Problem(Msg::ServerText, _)),
+                "{:?}",
+                w.status
+            );
+            // an address but no machine
+            let mem = MemoryStore::new(TOKEN);
+            let mut store = station_over(&mem, lang, "");
+            let told = w.server_station_with(&mut store, "check", "");
+            assert_eq!(told, Msg::ServerNoMachine.tr(lang));
+        }
+        // no name to give the project, and a station that fails
+        let mem = MemoryStore::new(TOKEN);
+        let mut w = fresh(Lang::Es);
+        let mut store = station_over(&mem, Lang::Es, "cad1");
+        let told = w.server_station_with(&mut store, "check", "");
+        assert!(told.starts_with("El nombre") || !told.is_empty(), "{told}");
+        assert!(matches!(w.status, Status::Problem(Msg::ServerText, _)));
+        assert!(w.open(&PathBuf::from(PLATE)));
+        let mut broken = station_over(&mem, Lang::Es, "broken");
+        let told = w.server_station_with(&mut broken, "check", "");
+        assert!(
+            told.starts_with("La estación no terminó el trabajo check"),
+            "{told}"
+        );
+        // a project the station finds wrong is a verdict, not a failure, and the status says it
+        w.mech.sketches.clear();
+        let mut ok = station_over(&mem, Lang::Es, "cad1");
+        let told = w.server_station_with(&mut ok, "check", "");
+        assert!(
+            told.starts_with("plate: con fallos (1 errores, 0 avisos)\n"),
+            "{told}"
+        );
+        assert!(
+            told.contains("  error: 018bcfe5-6800-7008-8000-000000001008 apunta a algo"),
+            "{told}"
+        );
+        assert!(matches!(w.status, Status::Done(Msg::ServerCheckHead, _)));
     }
 }

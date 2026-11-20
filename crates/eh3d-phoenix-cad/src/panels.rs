@@ -64,11 +64,13 @@ pub enum Panel {
     Server,
     /// What changed from another version of the project to the one that is open.
     Compare,
+    /// The title block of the drawings: whether it is drawn and its five texts.
+    TitleBlock,
 }
 
 impl Panel {
     /// Every panel, in the order of the menu.
-    pub const ALL: [Panel; 17] = [
+    pub const ALL: [Panel; 18] = [
         Panel::CutPlan,
         Panel::Holes,
         Panel::Clearance,
@@ -86,6 +88,7 @@ impl Panel {
         Panel::Units,
         Panel::Server,
         Panel::Compare,
+        Panel::TitleBlock,
     ];
 
     /// The title of the panel, which is also the text of its menu entry.
@@ -108,6 +111,7 @@ impl Panel {
             Panel::Units => Msg::PanelUnits,
             Panel::Server => Msg::PanelServer,
             Panel::Compare => Msg::PanelCompare,
+            Panel::TitleBlock => Msg::PanelTitleBlock,
         }
     }
 }
@@ -300,6 +304,10 @@ pub struct PanelState {
     pub history_goto: String,
     /// The unit being typed in the units panel; empty keeps the one shown now.
     pub units_unit: String,
+    /// Whether the title block is drawn, being typed in the title block panel.
+    pub title_enabled: bool,
+    /// The organisation, title, number, revision and author being typed in the title block panel.
+    pub title_fields: [String; 5],
     /// The decimals being typed in the units panel; empty keeps the ones shown now.
     pub units_decimals: String,
     /// The name being typed in the server panel; empty means the name of the file.
@@ -348,6 +356,8 @@ impl PanelState {
             part_pattern: PartPatternDraft::default(),
             history_goto: String::new(),
             units_unit: String::new(),
+            title_enabled: false,
+            title_fields: Default::default(),
             units_decimals: String::new(),
             server_name: String::new(),
             server_comment: String::new(),

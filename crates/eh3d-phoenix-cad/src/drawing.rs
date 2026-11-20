@@ -691,6 +691,34 @@ impl Drawing {
         true
     }
 
+    /// Puts the drawing of a section beside the sheet: moved to the right of everything the sheet
+    /// holds, `gap` millimetres from it, with its bottom on the ground line of the front view, and
+    /// the letters of the cutting line twice (`label`, as in `A-A`) over it. False, and nothing
+    /// drawn, when the section has no line.
+    pub fn add_section_view(&mut self, section: Drawing, label: &str, gap: f64) -> bool {
+        if section.entities.is_empty() {
+            return false;
+        }
+        let (lo, hi) = section.bounds();
+        let right = if self.entities.is_empty() {
+            0.0
+        } else {
+            self.bounds().1 .0
+        };
+        let (dx, dy) = (right + gap - lo.0, -lo.1);
+        let moved = section.shifted(dx, dy);
+        self.entities.extend(moved.entities);
+        self.notes.push(Note {
+            at: (lo.0 + dx, hi.1 + dy + DIM_TEXT),
+            text: label.to_owned(),
+            measures: None,
+            level: 0,
+        });
+        let (_, top_right) = self.bounds();
+        self.extent = top_right;
+        true
+    }
+
     /// Writes the lines of a legend, one under the other, to the right of the box.
     fn put_legend(&mut self, lines: Vec<String>, settings: &DrawingSettings) {
         let left = self.extent.0 + mm(settings.legend_gap.get());
@@ -827,7 +855,19 @@ impl Drawing {
     /// `PHOENIX-CAD-050` when the three views together have more entities than
     /// `drawing.max_entities`.
     pub fn sheet(enclosure: &Enclosure, settings: &DrawingSettings) -> Result<Drawing, CadError> {
-        let mut views = Drawing::placed(enclosure, settings)?.into_iter();
+        Drawing::sheet_cut(enclosure, settings, None)
+    }
+
+    /// The sheet of [`Drawing::sheet`] with a cutting line (the plane across `axis` at a position,
+    /// with its letters) on the first view that shows that plane edge-on: the front when it does
+    /// (the planes across `x` and `z`), else the plan (across `y`). The views are tried in that
+    /// order and the line is drawn once. Without a cut it is the plain sheet.
+    pub fn sheet_cut(
+        enclosure: &Enclosure,
+        settings: &DrawingSettings,
+        cut: Option<(Dim, Length, &str)>,
+    ) -> Result<Drawing, CadError> {
+        let mut views = Drawing::placed(enclosure, settings, cut)?.into_iter();
         let mut sheet = views.next().expect("a sheet has a front");
         for part in views {
             sheet.entities.extend(part.entities);
@@ -846,10 +886,19 @@ impl Drawing {
     }
 
     /// The front, the plan and the side, each moved to its place on the sheet.
-    fn placed(enclosure: &Enclosure, settings: &DrawingSettings) -> Result<Vec<Drawing>, CadError> {
-        let front = Drawing::of(enclosure, View::Front, settings)?;
-        let top = Drawing::of(enclosure, View::Top, settings)?;
-        let side = Drawing::of(enclosure, View::Side, settings)?;
+    fn placed(
+        enclosure: &Enclosure,
+        settings: &DrawingSettings,
+        cut: Option<(Dim, Length, &str)>,
+    ) -> Result<Vec<Drawing>, CadError> {
+        let mut front = Drawing::of(enclosure, View::Front, settings)?;
+        let mut top = Drawing::of(enclosure, View::Top, settings)?;
+        let mut side = Drawing::of(enclosure, View::Side, settings)?;
+        if let Some((axis, at, label)) = cut {
+            let _ = front.add_cut_line(axis, at, label)
+                || top.add_cut_line(axis, at, label)
+                || side.add_cut_line(axis, at, label);
+        }
         let gap = mm(settings.sheet_gap.get());
         let (top_at, side_at) = if settings.sheet_angle == 3 {
             (
@@ -2998,7 +3047,7 @@ frame_margin = 1001 mm
         hole(&mut e, 2, Face::Front, 30, 17, 4, HoleStyle::Plain);
         hole(&mut e, 3, Face::Top, 10, 10, 3, HoleStyle::Plain);
         for settings in [settings(), third_angle()] {
-            let views = Drawing::placed(&e, &settings).unwrap();
+            let views = Drawing::placed(&e, &settings, None).unwrap();
             assert_eq!(views.len(), 3);
             for (i, a) in views.iter().enumerate() {
                 // what the view needs: its drawing and the dimension lines under and to the left
@@ -3149,5 +3198,132 @@ frame_margin = 1001 mm
             }
         }
         assert!(drawn > 50 && left_out > 50, "{drawn} {left_out}");
+    }
+
+    #[test]
+    fn the_sheet_carries_the_cutting_line_once_on_the_first_view_that_shows_the_plane() {
+        let e = model();
+        let plain = Drawing::sheet(&e, &bare()).unwrap();
+        for (axis, at) in [(Dim::X, 40), (Dim::Y, 10), (Dim::Z, 2)] {
+            let cut = Drawing::sheet_cut(&e, &bare(), Some((axis, mmv(at), "A"))).unwrap();
+            // one line, a mark and an arrow at each end, and the letters at both ends
+            assert_eq!(cut.entities.len(), plain.entities.len() + 9, "{axis:?}");
+            assert_eq!(cut.notes.len(), plain.notes.len() + 2, "{axis:?}");
+        }
+        // the plane across x is edge-on in the front, which is at the origin of the sheet
+        let cut = Drawing::sheet_cut(&e, &bare(), Some((Dim::X, mmv(40), "A"))).unwrap();
+        assert!(cut.entities.iter().any(|(l, e)| *l == Layer::Axes
+            && matches!(*e, Entity::Line(a, b) if a.0 == 40.0 && b.0 == 40.0 && a.1 < 0.0)));
+        // a plane outside the box, and no cut at all, leave the sheet as it was
+        let out = Drawing::sheet_cut(&e, &bare(), Some((Dim::X, mmv(500), "A"))).unwrap();
+        assert_eq!(out.entities, plain.entities);
+        assert_eq!(out.notes.len(), plain.notes.len());
+        let none = Drawing::sheet_cut(&e, &bare(), None).unwrap();
+        assert_eq!(none.entities, plain.entities);
+    }
+
+    #[test]
+    fn a_section_view_is_put_beside_the_sheet_under_its_letters() {
+        let e = model();
+        let mut sheet = Drawing::sheet(&e, &bare()).unwrap();
+        let (_, hi) = sheet.bounds();
+        let line = |a: (f64, f64), b: (f64, f64)| (Layer::Outline, Entity::Line(a, b));
+        let section = Drawing {
+            view: View::Top,
+            entities: vec![
+                line((3.0, 5.0), (33.0, 5.0)),
+                line((33.0, 5.0), (33.0, 25.0)),
+            ],
+            notes: Vec::new(),
+            extent: (30.0, 20.0),
+            dxf_dimensions: false,
+        };
+        let before = sheet.entities.len();
+        assert!(sheet.add_section_view(section.clone(), "A-A", 20.0));
+        assert_eq!(sheet.entities.len(), before + 2);
+        // 20 mm to the right of the sheet, the bottom of the section on the ground line
+        assert_eq!(
+            sheet.entities[before].1,
+            Entity::Line((hi.0 + 20.0, 0.0), (hi.0 + 50.0, 0.0))
+        );
+        assert_eq!(
+            sheet.entities[before + 1].1,
+            Entity::Line((hi.0 + 50.0, 0.0), (hi.0 + 50.0, 20.0))
+        );
+        let note = sheet.notes.last().unwrap();
+        assert_eq!(note.text, "A-A");
+        assert_eq!(note.at, (hi.0 + 20.0, 20.0 + DIM_TEXT));
+        assert!(note.measures.is_none());
+        // the sheet now reaches to the right of the view, where the legend is put
+        assert_eq!(sheet.extent, sheet.bounds().1);
+        assert!(sheet.extent.0 >= hi.0 + 50.0);
+        // a section with no line adds nothing
+        let empty = Drawing {
+            entities: Vec::new(),
+            ..section
+        };
+        let (n, m) = (sheet.entities.len(), sheet.notes.len());
+        assert!(!sheet.add_section_view(empty, "A-A", 20.0));
+        assert_eq!((sheet.entities.len(), sheet.notes.len()), (n, m));
+    }
+
+    #[test]
+    fn the_sheet_has_the_cutting_line_and_the_section_only_when_the_settings_ask_for_both() {
+        use crate::config::Settings;
+        use crate::export::{render, Format};
+        let e = model();
+        let text = |format: Format, s: &Settings| {
+            String::from_utf8(render(format, &e, "", s).unwrap()).unwrap()
+        };
+        let user = |extra: &str| {
+            Settings::with_user_config(&format!(
+                "[drawing]\ncut_line = 1\ncut_at = 40 mm\ncut_label = S1\n{extra}"
+            ))
+            .unwrap()
+        };
+        assert!(!Settings::defaults().drawing.sheet_section);
+        let off = user("");
+        let on = user("sheet_section = 1\n");
+        assert!(on.drawing.sheet_section);
+        // off: the sheet is as it always was
+        let svg_off = text(Format::SvgSheet, &off);
+        assert!(!svg_off.contains("S1-S1") && !svg_off.contains(">S1</text>"));
+        // on: the letters at both ends of the line and over the section
+        let svg = text(Format::SvgSheet, &on);
+        assert_eq!(svg.matches(">S1</text>").count(), 2);
+        assert_eq!(svg.matches(">S1-S1</text>").count(), 1);
+        let dxf = text(Format::DxfSheet, &on);
+        assert_eq!(dxf.matches("\nS1\n").count(), 2);
+        assert_eq!(dxf.matches("\nS1-S1\n").count(), 1);
+        assert!(dxf.len() > text(Format::DxfSheet, &off).len());
+        // the same bytes every time, and with the hatching by material too
+        assert_eq!(svg, text(Format::SvgSheet, &on));
+        let by_material = user("sheet_section = 1\nhatch_by_material = 1\n");
+        assert_eq!(
+            text(Format::SvgSheet, &by_material)
+                .matches(">S1-S1</text>")
+                .count(),
+            1
+        );
+        // a plane outside the box draws neither the line nor the view
+        let outside = Settings::with_user_config(
+            "[drawing]\nsheet_section = 1\ncut_line = 1\ncut_at = 900 mm\n",
+        )
+        .unwrap();
+        let base = Settings::with_user_config("[drawing]\n").unwrap();
+        assert_eq!(
+            text(Format::SvgSheet, &outside),
+            text(Format::SvgSheet, &base)
+        );
+        // the section counts against the limit of entities
+        // room for the sheet and its cutting line but not for the lines of the section
+        let room = Drawing::sheet(&e, &off.drawing).unwrap().entities.len() + 10;
+        let tight = user(&format!("sheet_section = 1\nmax_entities = {room}\n"));
+        let limited = render(Format::SvgSheet, &e, "", &tight);
+        assert!(limited.is_err(), "{:?}", limited.map(|b| b.len()));
+        // the single views are as they were
+        assert_eq!(text(Format::SvgTop, &on), text(Format::SvgTop, &off));
+        // the flag takes 0 or 1 only
+        assert!(Settings::with_user_config("[drawing]\nsheet_section = 2\n").is_err());
     }
 }

@@ -104,12 +104,16 @@ struct App {
     report_open: bool,
     /// The panels of the Reports menu: which one is open and what is chosen in it.
     panels: PanelState,
+    /// The panel of the settings of the server, made the first time the server panel opens.
+    link: Option<crate::linkpane::LinkPane>,
 }
 
 impl App {
     fn new(win: Window, sketch: SketchEditor, workspace: StartView) -> App {
         let mut panels = PanelState::new(&win.ui.panels, win.ui.export.overwrite);
         panels.mate = win.mate_draft_new();
+        panels.title_enabled = win.settings.title_block.enabled;
+        panels.title_fields = win.title_block_fields();
         panels.part_pattern = win.part_pattern_draft_new();
         App {
             win,
@@ -125,6 +129,7 @@ impl App {
             new_value: String::new(),
             ignore_drag: false,
             report_open: false,
+            link: None,
         }
     }
 
@@ -906,6 +911,9 @@ impl App {
         let mut server_save = false;
         let mut server_open = false;
         let mut server_list = false;
+        let mut server_check = false;
+        let mut server_report = false;
+        let mut title_apply = false;
         let mut compare_file = false;
         let mut compare_server = false;
         let choices: Vec<String> = self
@@ -1028,6 +1036,8 @@ impl App {
                                 ("inset", Msg::MateInset),
                                 ("proportion", Msg::MateProportion),
                                 ("overlap", Msg::MateOverlap),
+                                ("tangent", Msg::MateTangent),
+                                ("angle", Msg::MateAngle),
                             ] {
                                 ui.selectable_value(
                                     &mut draft.kind,
@@ -1037,7 +1047,7 @@ impl App {
                             }
                         });
                         let kind = draft.kind.clone();
-                        if kind == "gap" || kind == "overlap" {
+                        if kind == "gap" || kind == "overlap" || kind == "tangent" {
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(Msg::FieldMateDirection.tr(lang));
                                 for a in catalog::Axis::ALL {
@@ -1049,8 +1059,15 @@ impl App {
                                 }
                             });
                         }
-                        if ["align", "offset", "symmetric", "inset", "proportion"]
-                            .contains(&kind.as_str())
+                        if [
+                            "align",
+                            "offset",
+                            "symmetric",
+                            "inset",
+                            "proportion",
+                            "angle",
+                        ]
+                        .contains(&kind.as_str())
                         {
                             ui.horizontal(|ui| {
                                 ui.label(Msg::FieldMateAxis.tr(lang));
@@ -1106,7 +1123,7 @@ impl App {
                                 );
                             });
                         }
-                        if kind == "turn" {
+                        if kind == "turn" || kind == "angle" {
                             ui.horizontal(|ui| {
                                 ui.label(Msg::FieldMateTurn.tr(lang));
                                 for degrees in ["0", "90", "180", "270"] {
@@ -1450,6 +1467,27 @@ impl App {
                             }
                         });
                     }
+                    Panel::TitleBlock => {
+                        ui.checkbox(&mut self.panels.title_enabled, Msg::TitleBlockUse.tr(lang));
+                        for (msg, value) in [
+                            Msg::TbOrganisation,
+                            Msg::TbTitle,
+                            Msg::TbNumber,
+                            Msg::TbRevision,
+                            Msg::TbAuthor,
+                        ]
+                        .into_iter()
+                        .zip(self.panels.title_fields.iter_mut())
+                        {
+                            ui.horizontal(|ui| {
+                                ui.label(msg.tr(lang));
+                                ui.add(egui::TextEdit::singleline(value).desired_width(300.0));
+                            });
+                        }
+                        if ui.button(Msg::TitleBlockApplyDo.tr(lang)).clicked() {
+                            title_apply = true;
+                        }
+                    }
                     Panel::Compare => {
                         ui.horizontal(|ui| {
                             ui.label(Msg::FieldCompareFile.tr(lang));
@@ -1500,6 +1538,14 @@ impl App {
                                 server_list = true;
                             }
                         });
+                        ui.horizontal(|ui| {
+                            if ui.button(Msg::ServerCheckDo.tr(lang)).clicked() {
+                                server_check = true;
+                            }
+                            if ui.button(Msg::ServerReportDo.tr(lang)).clicked() {
+                                server_report = true;
+                            }
+                        });
                         if !self.panels.server_list.is_empty() {
                             let mut shown: &str = self.panels.server_list.as_str();
                             ui.add(
@@ -1507,6 +1553,19 @@ impl App {
                                     .font(egui::TextStyle::Monospace)
                                     .desired_width(f32::INFINITY),
                             );
+                        }
+                        // the panel of the settings of the server that every program of the suite shows
+                        ui.separator();
+                        let pane = self.link.get_or_insert_with(|| {
+                            crate::linkpane::LinkPane::new(&self.win.settings.server)
+                        });
+                        pane.refresh();
+                        if let Some(action) = eh3d_view::server_gui::show(
+                            ui,
+                            &mut pane.panel,
+                            crate::linkpane::view_lang(lang),
+                        ) {
+                            pane.handle(action, &mut self.win.settings.server);
                         }
                     }
                     _ => {}
@@ -1632,6 +1691,16 @@ impl App {
         if server_list {
             let query = self.panels.server_query.clone();
             self.panels.server_list = self.win.server_list_now(&query);
+        }
+        if server_check || server_report {
+            let kind = if server_check { "check" } else { "report" };
+            let name = self.panels.server_name.clone();
+            self.panels.server_list = self.win.server_station_now(kind, &name);
+        }
+        if title_apply {
+            let fields = self.panels.title_fields.clone();
+            self.win
+                .apply_title_block(self.panels.title_enabled, &fields);
         }
         if choose {
             self.open_dxf_dialog();

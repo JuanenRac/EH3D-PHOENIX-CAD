@@ -221,8 +221,21 @@ pub fn render_titled(
             }
         }
         _ => {
+            let sheet_cut = (format.is_sheet()
+                && settings.drawing.sheet_section
+                && settings.drawing.cut_line != 0)
+                .then(|| {
+                    (
+                        Dim::ALL[usize::from(settings.drawing.cut_line) - 1],
+                        settings.drawing.cut_at,
+                        settings.drawing.cut_letters(),
+                    )
+                });
             let mut drawing = if format.is_sheet() {
-                Drawing::sheet(enclosure, &settings.drawing)?
+                let cut = sheet_cut
+                    .as_ref()
+                    .map(|(axis, at, label)| (*axis, *at, label.as_str()));
+                Drawing::sheet_cut(enclosure, &settings.drawing, cut)?
             } else {
                 let view = format.view().unwrap_or(View::Top);
                 Drawing::of(enclosure, view, &settings.drawing)?
@@ -234,6 +247,26 @@ pub fn render_titled(
                     settings.drawing.cut_at,
                     &settings.drawing.cut_letters(),
                 );
+            }
+            if let Some((axis, at, label)) = &sheet_cut {
+                let bodies = solid::bodies(enclosure, &settings.mesh)?;
+                let section = crate::section::cut(&bodies, *axis, *at);
+                // a plane that cuts nothing leaves the sheet without the view
+                if !section.contours.is_empty() {
+                    let view = crate::section::hatched_drawing(&section, &settings.drawing)?;
+                    drawing.add_section_view(
+                        view,
+                        &format!("{label}-{label}"),
+                        settings.drawing.sheet_gap.get() as f64 / 1_000_000.0,
+                    );
+                    if drawing.entities.len() > settings.drawing.max_entities as usize {
+                        return Err(CadError::ExportLimit(format!(
+                            "the sheet has {} entities and the settings allow {}",
+                            drawing.entities.len(),
+                            settings.drawing.max_entities
+                        )));
+                    }
+                }
             }
             if format.is_sheet() && settings.drawing.sheet_symbol {
                 drawing.add_projection_symbol(

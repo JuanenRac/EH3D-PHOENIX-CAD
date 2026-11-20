@@ -150,6 +150,13 @@ impl NewStepDefaults {
                 axis: self.mate_axis,
                 permille: self.mate_permille,
             }),
+            "tangent" => Some(MateKind::Tangent {
+                direction: self.mate_direction,
+            }),
+            "angle" => Some(MateKind::Angle {
+                about: self.mate_axis,
+                quarters: self.mate_quarters,
+            }),
             _ => None,
         }
     }
@@ -219,6 +226,8 @@ pub struct PanelSettings {
     pub section_max_planes: u32,
     /// The most changes on each side of the present that the history panel lists.
     pub history_shown: u32,
+    /// The most fields the history panel names under each change (0 names none).
+    pub history_fields: u32,
     /// The side, in pixels, of the small picture of each plane of the section panel.
     pub section_preview_size: u32,
     /// The margin, in pixels, between the outline and the edge of that picture.
@@ -346,11 +355,13 @@ impl NewStepDefaults {
             "inset",
             "proportion",
             "overlap",
+            "tangent",
+            "angle",
         ]
         .contains(&mate_kind)
         {
             return Err(CadError::Config(format!(
-                "new_step.mate_kind: {mate_kind} is not gap, align, stack, offset, symmetric, turn, inset, proportion or overlap"
+                "new_step.mate_kind: {mate_kind} is not gap, align, stack, offset, symmetric, turn, inset, proportion, overlap, tangent or angle"
             )));
         }
         let mate_direction = word(c, "new_step.mate_direction")?;
@@ -535,6 +546,7 @@ impl PanelSettings {
             section_position: c.length("panels.section_position")?,
             section_max_planes: count(c, "panels.section_max_planes", 1, 64)?,
             history_shown: count(c, "panels.history_shown", 1, 10_000)?,
+            history_fields: count(c, "panels.history_fields", 0, 100)?,
             section_preview_size: count(c, "panels.section_preview_size", 60, 1000)?,
             section_preview_margin: count(c, "panels.section_preview_margin", 0, 100)?,
             part_pattern_shown: count(c, "panels.part_pattern_shown", 1, 10_000)?,
@@ -1078,5 +1090,53 @@ marker = big
             let error = UiSettings::with_user_config(text).unwrap_err();
             assert_eq!(error.code(), "PHOENIX-CAD-011", "{text:?}: {error}");
         }
+    }
+
+    #[test]
+    fn the_fields_of_the_history_and_the_new_kinds_of_mate_are_read_and_refused_by_their_keys() {
+        let shipped = UiSettings::defaults();
+        assert_eq!(shipped.panels.history_fields, 6);
+        let n = &shipped.new_step;
+        assert_eq!(
+            n.mate_of("tangent"),
+            Some(MateKind::Tangent {
+                direction: n.mate_direction
+            })
+        );
+        assert_eq!(
+            n.mate_of("angle"),
+            Some(MateKind::Angle {
+                about: n.mate_axis,
+                quarters: n.mate_quarters
+            })
+        );
+        assert_eq!(n.mate_of("rotate"), None);
+        // the number of fields named under a change goes from 0 (none) to 100
+        for (value, ok) in [
+            ("0", true),
+            ("100", true),
+            ("101", false),
+            ("-1", false),
+            ("x", false),
+        ] {
+            let r = UiSettings::with_user_config(&format!("[panels]\nhistory_fields = {value}\n"));
+            assert_eq!(r.is_ok(), ok, "{value}");
+            if let Err(e) = r {
+                assert!(
+                    e.to_string().contains("panels.history_fields"),
+                    "{value}: {e}"
+                );
+            }
+        }
+        // the kinds a new mate can start as
+        for kind in ["tangent", "angle", "stack", "overlap"] {
+            let s =
+                UiSettings::with_user_config(&format!("[new_step]\nmate_kind = {kind}\n")).unwrap();
+            assert_eq!(s.new_step.mate_kind, kind);
+        }
+        let e = UiSettings::with_user_config("[new_step]\nmate_kind = rotate\n")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("overlap, tangent or angle"), "{e}");
     }
 }

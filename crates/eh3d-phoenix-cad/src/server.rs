@@ -4,7 +4,7 @@
 //!
 //! The link itself is the one client of the suite (`eh3d-serverclient` of EH3D-COMMON): the same keys with the same ranges, a token that cannot be
 //! printed by mistake, retries with growing pauses (a `POST` is never sent twice), the state of the link and the refusals of the server by their code in
-//! the language of the person. What is this program's own is here: the project store of the server (`/api/v1/apps/cad/projects`), the way a project is
+//! the language of the person. What is this program's own is here: the project store of the server (`/api/v1/apps/phoenix-cad/projects`), the way a project is
 //! found by its name, saved as a new version of its file and read back, and the reports written next to it.
 //!
 //! The server keeps the versions of every file and refuses a write over a file that exists unless it says which version it was made from (`If-Match`), so
@@ -24,10 +24,11 @@ use sc::{Json, Reply, Request, Transport, TransportError};
 use crate::config::Config;
 use crate::lang::{fill, Lang, Msg};
 use crate::project::Document;
+use crate::servercad::{self, Answer, CONTRACT_FILE};
 use crate::CadError;
 
 /// The name this program gives the server when it logs in, and the folder of its projects in the store.
-pub const APP: &str = "cad";
+pub const APP: &str = "phoenix-cad";
 /// The file of the store that holds the project.
 pub const PROJECT_FILE: &str = "project.phoenixproj";
 /// The folder of the store where the reports of a project are written.
@@ -551,7 +552,95 @@ impl Store {
             return Err(self.own(Msg::ServerBadName, &[name]));
         }
         let text = self.project_text(name, bytes)?;
-        self.write_in_project(name, PROJECT_FILE, text, comment)
+        let written = self.write_in_project(name, PROJECT_FILE, text, comment)?;
+        // the project as the station of the server reads it, next to the file of the program
+        let doc = Document::from_bytes(bytes, self.max_bytes)
+            .map_err(|e| self.own(Msg::ServerBadFile, &[name, &e.to_string()]))?;
+        let contract = servercad::project_json(&doc, name)
+            .map_err(|e| self.own(Msg::ServerBadFile, &[name, &e.to_string()]))?;
+        self.write_in_project(name, CONTRACT_FILE, &contract, comment)?;
+        Ok(written)
+    }
+
+    /// The project of this name as the station reads it (`project.json` of the store): the text the
+    /// last save from this program wrote, checked to be JSON.
+    pub fn load_contract(&mut self, name: &str) -> Result<String, ServerError> {
+        let project = self
+            .find(name)?
+            .ok_or_else(|| self.own(Msg::ServerNoProject, &[name]))?;
+        let has = self
+            .files(&project.id)?
+            .iter()
+            .any(|f| f.name == CONTRACT_FILE);
+        if !has {
+            return Err(self.own(Msg::ServerNoContract, &[name]));
+        }
+        let text = self.read_file(&project.id, CONTRACT_FILE)?;
+        Json::parse(&text).map_err(|e| self.bad_answer(&e))?;
+        Ok(text)
+    }
+
+    /// Asks the station `cad` of the server (the machine of `server_machine`) for a `check` or a
+    /// `report` of a project, given as the text of the contract (`servercad::project_json`): makes
+    /// the job, starts it and reads it until it ends, for at most `server_timeout_s`. The answer is
+    /// checked to have the keys of the contract.
+    pub fn station(
+        &mut self,
+        kind: &str,
+        name: &str,
+        project: &str,
+    ) -> Result<Answer, ServerError> {
+        let settings = self.client.settings();
+        let machine = settings.server_machine.clone();
+        let limit = Duration::from_secs(settings.server_timeout_s.max(1));
+        if machine.is_empty() {
+            return Err(self.own(Msg::ServerNoMachine, &[]));
+        }
+        if !matches!(kind, "check" | "report") {
+            return Err(self.bad_answer("kind"));
+        }
+        Json::parse(project).map_err(|e| self.bad_answer(&e))?;
+        let body = format!(
+            "{{\"machine\":{},\"name\":{},\"app\":{},\"request\":{{\"kind\":{},\"project\":{}}}}}",
+            sc::json::quote(&machine),
+            sc::json::quote(&format!("{kind} {name}")),
+            sc::json::quote(APP),
+            sc::json::quote(kind),
+            project
+        );
+        let made = self.call("POST", "/api/v1/work/jobs", Some(&body))?;
+        let made = self.json_of(&made)?;
+        let id = made
+            .get("id")
+            .and_then(Json::as_str)
+            .filter(|i| safe_segment(i))
+            .ok_or_else(|| self.bad_answer("id"))?
+            .to_string();
+        self.call("POST", &format!("/api/v1/work/jobs/{id}/start"), None)?;
+        let started = std::time::Instant::now();
+        loop {
+            let reply = self.call("GET", &format!("/api/v1/work/jobs/{id}"), None)?;
+            let job = self.json_of(&reply)?;
+            match job.get("state").and_then(Json::as_str) {
+                Some("done") => {
+                    let result = job
+                        .get("view")
+                        .and_then(|v| v.get("result"))
+                        .ok_or_else(|| self.bad_answer("view.result"))?;
+                    return servercad::parse_answer(result).map_err(|e| self.bad_answer(&e));
+                }
+                Some("failed" | "cancelled") => {
+                    let why = job.get("message").and_then(Json::as_str).unwrap_or("");
+                    return Err(self.own(Msg::ServerJobFailed, &[kind, why]));
+                }
+                Some(_) => {}
+                None => return Err(self.bad_answer("state")),
+            }
+            if started.elapsed() >= limit {
+                return Err(self.own(Msg::ServerJobTimeout, &[&limit.as_secs().to_string()]));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 
     /// Reads the project of this name from the server: the bytes of its file, checked to be a project file.
@@ -712,7 +801,8 @@ server_max_answer_mib = 16
         assert_eq!(store.load("front panel").unwrap(), bytes);
         assert_eq!(mem.project_names(), vec!["front panel".to_string()]);
         let found = store.find("front panel").unwrap().unwrap();
-        assert_eq!((found.id, found.files), (w.project, 1));
+        // the file of the program and the project as the station reads it
+        assert_eq!((found.id, found.files), (w.project, 2));
         assert!(store.find("front").unwrap().is_none());
         let e = store.load("front").unwrap_err();
         assert_eq!(e.text, "The server has no project named front");
@@ -730,9 +820,12 @@ server_max_answer_mib = 16
             .into_iter()
             .filter(|s| s.method == "PUT")
             .collect();
-        assert_eq!(puts.len(), 2);
-        assert_eq!(puts[0].if_match, None);
-        assert!(puts[1].if_match.as_deref().is_some_and(|t| t.len() == 32));
+        // each save writes two files: the project of the program and the one of the station
+        assert_eq!(puts.len(), 4);
+        assert_eq!((&puts[0].if_match, &puts[1].if_match), (&None, &None));
+        for p in &puts[2..] {
+            assert!(p.if_match.as_deref().is_some_and(|t| t.len() == 32));
+        }
         let w3 = store.save("p", &project_bytes(2), "").unwrap();
         assert_eq!((w3.version, w3.unchanged), (2, true));
         assert_eq!(mem.versions("p", PROJECT_FILE), 2);
@@ -949,12 +1042,12 @@ server_max_answer_mib = 16
             .into_iter()
             .filter(|s| s.method == "PUT")
             .collect();
-        assert_eq!(puts.len(), 2);
+        assert_eq!(puts.len(), 4);
         for p in &puts {
             assert_eq!(p.content_type.as_deref(), Some("application/octet-stream"));
         }
-        assert_eq!(puts[0].if_match, None);
-        assert!(puts[1].if_match.is_some());
+        assert_eq!((&puts[0].if_match, &puts[1].if_match), (&None, &None));
+        assert!(puts[2].if_match.is_some() && puts[3].if_match.is_some());
         // the creation of the project is JSON
         let post = mem.seen().into_iter().find(|s| s.method == "POST").unwrap();
         assert_eq!(post.content_type.as_deref(), Some("application/json"));
@@ -1102,5 +1195,165 @@ server_max_answer_mib = 16
             }
         }
         assert!(refused > 20 && unchanged > 5, "{refused} {unchanged}");
+    }
+
+    const PLATE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/plate.phoenixproj");
+    const ASSEMBLY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/assembly.phoenixproj");
+
+    fn station_over(mem: &MemoryStore, lang: Lang, machine: &str, timeout: &str) -> Store {
+        let mut link = link_to("memory:1");
+        link.set("server_machine", machine).unwrap();
+        link.set("server_timeout_s", timeout).unwrap();
+        Store::over(sc::Client::new(link, Box::new(mem.clone())), lang, 1 << 22)
+    }
+
+    fn contract_of(path: &str, name: &str) -> String {
+        let doc = Document::from_bytes(&std::fs::read(path).unwrap(), 1 << 22).unwrap();
+        servercad::project_json(&doc, name).unwrap()
+    }
+
+    #[test]
+    fn a_save_also_writes_the_project_as_the_station_reads_it_and_the_same_save_makes_no_version() {
+        let mem = MemoryStore::new(TOKEN);
+        let mut store = station_over(&mem, Lang::En, "cad1", "5");
+        let bytes = std::fs::read(PLATE).unwrap();
+        let w = store.save("plate", &bytes, "first").unwrap();
+        assert_eq!((w.version, w.unchanged, w.created), (1, false, true));
+        // both files are in the project: the one of the program and the one of the station
+        assert_eq!(mem.versions("plate", PROJECT_FILE), 1);
+        assert_eq!(mem.versions("plate", CONTRACT_FILE), 1);
+        let contract = mem.file("plate", CONTRACT_FILE).unwrap();
+        assert_eq!(contract, contract_of(PLATE, "plate"));
+        let json = Json::parse(&contract).unwrap();
+        assert!(servercad::check_json(&json).pass);
+        // the same bytes again make no version of either file
+        let again = store.save("plate", &bytes, "again").unwrap();
+        assert!(again.unchanged);
+        assert_eq!(mem.versions("plate", PROJECT_FILE), 1);
+        assert_eq!(mem.versions("plate", CONTRACT_FILE), 1);
+        // and the store is the one of the application of the server
+        assert!(mem.seen().iter().all(|s| s.path == "/api/v1/health"
+            || s.path.starts_with("/api/v1/apps/phoenix-cad/projects")));
+        // what was stored comes back as the text the station is given
+        assert_eq!(store.load_contract("plate").unwrap(), contract);
+    }
+
+    #[test]
+    fn a_project_with_no_file_for_the_station_is_told_so_in_the_language() {
+        let mem = MemoryStore::new(TOKEN);
+        let mut store = station_over(&mem, Lang::Es, "cad1", "5");
+        // a project that another program made, with only the file of the program
+        let id = store.create("old").unwrap().id;
+        store.write_file(&id, PROJECT_FILE, "x", "", None).unwrap();
+        let e = store.load_contract("old").unwrap_err();
+        assert_eq!(e.text, fill(Msg::ServerNoContract.tr(Lang::Es), &["old"]));
+        let e = store.load_contract("none").unwrap_err();
+        assert_eq!(e.text, fill(Msg::ServerNoProject.tr(Lang::Es), &["none"]));
+        // a file that is not JSON is refused before it is sent
+        store
+            .write_file(&id, CONTRACT_FILE, "not json", "", None)
+            .unwrap();
+        let e = store.load_contract("old").unwrap_err();
+        assert!(
+            e.text.starts_with("La respuesta del servidor"),
+            "{}",
+            e.text
+        );
+    }
+
+    #[test]
+    fn the_station_checks_and_reports_a_project_and_the_job_goes_through_its_routes() {
+        let mem = MemoryStore::new(TOKEN);
+        let mut store = station_over(&mem, Lang::En, "cad1", "5");
+        let contract = contract_of(PLATE, "plate");
+        let check = store.station("check", "plate", &contract).unwrap();
+        assert_eq!(check.kind, "check");
+        assert!(check.verdict.pass && check.counts.is_none());
+        assert_eq!(check.evidence, "simulator");
+        let report = store.station("report", "plate", &contract).unwrap();
+        let counts = report.counts.unwrap();
+        assert_eq!((counts.parts, counts.sketches, counts.features), (1, 1, 1));
+        let routes: Vec<String> = mem
+            .seen()
+            .iter()
+            .map(|s| format!("{} {}", s.method, s.path))
+            .collect();
+        assert_eq!(
+            routes,
+            vec![
+                "POST /api/v1/work/jobs",
+                "POST /api/v1/work/jobs/j-0001/start",
+                "GET /api/v1/work/jobs/j-0001",
+                "POST /api/v1/work/jobs",
+                "POST /api/v1/work/jobs/j-0002/start",
+                "GET /api/v1/work/jobs/j-0002",
+            ]
+        );
+        // a project with a structure that is wrong fails the check, and the issues come back
+        let broken = contract.replace("\"sketch\":\"plate\"", "\"sketch\":\"gone\"");
+        let answer = store.station("check", "plate", &broken).unwrap();
+        assert!(!answer.verdict.pass);
+        assert_eq!(answer.verdict.errors, 1);
+        assert_eq!(answer.verdict.issues[0].code, "missing_ref");
+        // the assembly has parts with no feature: a pass with warnings
+        let assembly = contract_of(ASSEMBLY, "assembly");
+        let answer = store.station("check", "assembly", &assembly).unwrap();
+        assert!(answer.verdict.pass);
+        assert_eq!((answer.verdict.errors, answer.verdict.warnings), (0, 6));
+    }
+
+    #[test]
+    fn a_station_that_is_not_set_that_fails_or_that_never_answers_is_told_in_each_language() {
+        let mem = MemoryStore::new(TOKEN);
+        let contract = contract_of(PLATE, "plate");
+        for lang in Lang::ALL {
+            let mut none = station_over(&mem, lang, "", "5");
+            let e = none.station("check", "plate", &contract).unwrap_err();
+            assert_eq!(e.text, Msg::ServerNoMachine.tr(lang));
+            assert!(!e.needs_login);
+            let mut broken = station_over(&mem, lang, "broken", "5");
+            let e = broken.station("report", "plate", &contract).unwrap_err();
+            assert_eq!(
+                e.text,
+                fill(
+                    Msg::ServerJobFailed.tr(lang),
+                    &["report", "the station is out of order"]
+                )
+            );
+        }
+        // a machine the server does not have, a kind it does not know, a project that is not JSON
+        let mut missing = station_over(&mem, Lang::En, "missing", "5");
+        assert!(missing.station("check", "plate", &contract).is_err());
+        let mut ok = station_over(&mem, Lang::En, "cad1", "5");
+        assert!(ok.station("export", "plate", &contract).is_err());
+        assert!(ok.station("check", "plate", "not json").is_err());
+        // a station that never ends is given up after the time of the link
+        let mut slow = station_over(&mem, Lang::Pt, "slow", "1");
+        let started = std::time::Instant::now();
+        let e = slow.station("check", "plate", &contract).unwrap_err();
+        assert_eq!(e.text, fill(Msg::ServerJobTimeout.tr(Lang::Pt), &["1"]));
+        assert!(started.elapsed() >= Duration::from_secs(1));
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn the_jobs_also_go_over_plain_http_with_the_token() {
+        let mem = MemoryStore::new(TOKEN);
+        let served = serve(&mem).unwrap();
+        let mut link = link_to(&served.address);
+        link.set("server_machine", "cad1").unwrap();
+        let mut store = Store::connect(&link, Lang::En, 1 << 22).unwrap();
+        let answer = store
+            .station("report", "plate", &contract_of(PLATE, "plate"))
+            .unwrap();
+        assert!(answer.verdict.pass);
+        assert_eq!(answer.counts.unwrap().sketches, 1);
+        // a wrong token is a login to do, not a job
+        link.set("server_token", "other").unwrap();
+        let mut wrong = Store::connect(&link, Lang::En, 1 << 22).unwrap();
+        let e = wrong
+            .station("check", "plate", &contract_of(PLATE, "plate"))
+            .unwrap_err();
+        assert!(e.needs_login, "{}", e.text);
     }
 }

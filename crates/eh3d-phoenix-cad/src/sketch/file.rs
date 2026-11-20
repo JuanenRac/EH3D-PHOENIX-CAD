@@ -113,6 +113,8 @@ fn constraint_text(c: &Constraint) -> String {
             format!("{name} {a} {b} {c} {d}")
         }
         Constraint::Equidistant { point, a, b } => format!("{name} {point} {a} {b}"),
+        Constraint::Bisector { bisector, a, b } => format!("{name} {bisector} {a} {b}"),
+        Constraint::Proportional { a, b, num, den } => format!("{name} {a} {b} {num} {den}"),
         Constraint::Horizontal(l) | Constraint::Vertical(l) => format!("{name} {l}"),
         Constraint::SymmetricLine { a, b, axis }
         | Constraint::SymmetricLines { a, b, axis }
@@ -296,6 +298,35 @@ fn parse_constraint(
                 b: id(1)?,
                 c: id(2)?,
                 d: id(3)?,
+            }
+        }
+        "bisector" => {
+            exactly(line, kind, words, 3)?;
+            Constraint::Bisector {
+                bisector: id(0)?,
+                a: id(1)?,
+                b: id(2)?,
+            }
+        }
+        "proportional" => {
+            exactly(line, kind, words, 4)?;
+            let part = |i: usize| -> Result<u32, CadError> {
+                words[i]
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|n| n.to_string() == words[i] && (1..=1000).contains(n))
+                    .ok_or_else(|| {
+                        bad(
+                            line,
+                            format!("{:?} is not a whole number from 1 to 1000", words[i]),
+                        )
+                    })
+            };
+            Constraint::Proportional {
+                a: id(0)?,
+                b: id(1)?,
+                num: part(2)?,
+                den: part(3)?,
             }
         }
         "equidistant" => {
@@ -990,6 +1021,57 @@ mod tests {
             "c1 on equal_angle e4 e5 e4\n",
             "c1 on equal_angle e4 e5 e4 e6 e4\n",
             "c1 on equal_angle e4 e5 e4 x\n",
+        ] {
+            let broken = text
+                .lines()
+                .take_while(|l| !l.starts_with("c1 "))
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n"
+                + bad;
+            assert!(from_text(&broken).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn proportional_and_bisector_are_written_and_read_back() {
+        let mut k = sketch();
+        let a = k.add_point(mm(0), mm(0)).unwrap();
+        let b = k.add_point(mm(10), mm(0)).unwrap();
+        let c = k.add_point(mm(5), mm(5)).unwrap();
+        let l1 = k.add_line(a, b).unwrap();
+        let l2 = k.add_line(a, c).unwrap();
+        let l3 = k.add_line(b, c).unwrap();
+        k.add_constraint(Constraint::Proportional {
+            a: l1,
+            b: l2,
+            num: 3,
+            den: 2,
+        })
+        .unwrap();
+        k.add_constraint(Constraint::Bisector {
+            bisector: l3,
+            a: l1,
+            b: l2,
+        })
+        .unwrap();
+        let text = to_text(&k);
+        assert!(text.contains("c1 on proportional e4 e5 3 2\n"), "{text}");
+        assert!(text.contains("c2 on bisector e6 e4 e5\n"), "{text}");
+        let back = from_text(&text).unwrap();
+        assert_eq!(back, k);
+        assert_eq!(to_text(&back), text);
+        for bad in [
+            "c1 on proportional e4 e5 3\n",
+            "c1 on proportional e4 e5 3 2 1\n",
+            "c1 on proportional e4 e5 0 2\n",
+            "c1 on proportional e4 e5 3 1001\n",
+            "c1 on proportional e4 e5 03 2\n",
+            "c1 on proportional e4 e5 -3 2\n",
+            "c1 on proportional e4 e5 x 2\n",
+            "c1 on bisector e6 e4\n",
+            "c1 on bisector e6 e4 e5 e4\n",
+            "c1 on bisector e6 e4 x\n",
         ] {
             let broken = text
                 .lines()

@@ -1695,7 +1695,7 @@ impl Enclosure {
                     )));
                 }
                 mate.check(limits.catalog.max_dimension)?;
-                if matches!(mate.kind, MateKind::Turn { .. })
+                if matches!(mate.kind, MateKind::Turn { .. } | MateKind::Angle { .. })
                     && (self.is_body(&mate.a) || self.is_body(&mate.b))
                 {
                     return Err(CadError::Mate(

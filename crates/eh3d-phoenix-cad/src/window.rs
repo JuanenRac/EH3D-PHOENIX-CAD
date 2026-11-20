@@ -1658,6 +1658,8 @@ impl Window {
                     ("inset", Msg::MateInset),
                     ("proportion", Msg::MateProportion),
                     ("overlap", Msg::MateOverlap),
+                    ("tangent", Msg::MateTangent),
+                    ("angle", Msg::MateAngle),
                 ],
             ),
         ];
@@ -1751,6 +1753,25 @@ impl Window {
                     writable,
                 ));
             }
+            MateKind::Tangent { direction } => {
+                out.push(text(
+                    Key::MateDirection,
+                    Msg::FieldMateDirection,
+                    direction.name().to_string(),
+                ));
+            }
+            MateKind::Angle { about, quarters } => {
+                out.push(text(
+                    Key::MateAxis,
+                    Msg::FieldMateAxis,
+                    about.name().to_string(),
+                ));
+                out.push(text(
+                    Key::MateTurn,
+                    Msg::FieldMateTurn,
+                    (u32::from(quarters) * 90).to_string(),
+                ));
+            }
             MateKind::Proportion { axis, permille } => {
                 out.push(text(
                     Key::MateAxis,
@@ -1792,7 +1813,9 @@ impl Window {
             }
             (
                 Key::MateDirection,
-                MateKind::Gap { direction, .. } | MateKind::Overlap { direction, .. },
+                MateKind::Gap { direction, .. }
+                | MateKind::Overlap { direction, .. }
+                | MateKind::Tangent { direction },
             ) => {
                 *direction =
                     Axis::from_name(word).ok_or_else(|| CadError::Reference(word.to_string()))?;
@@ -1811,7 +1834,8 @@ impl Window {
                 | MateKind::Offset { axis, .. }
                 | MateKind::Symmetric { axis, .. }
                 | MateKind::Inset { axis, .. }
-                | MateKind::Proportion { axis, .. },
+                | MateKind::Proportion { axis, .. }
+                | MateKind::Angle { about: axis, .. },
             ) => {
                 *axis =
                     Dim::from_name(word).ok_or_else(|| CadError::Reference(word.to_string()))?;
@@ -1829,7 +1853,7 @@ impl Window {
                     .filter(|p| *p <= 1000)
                     .ok_or(CadError::ValueOutOfRange("proportion"))?;
             }
-            (Key::MateTurn, MateKind::Turn { quarters }) => {
+            (Key::MateTurn, MateKind::Turn { quarters } | MateKind::Angle { quarters, .. }) => {
                 let degrees = word
                     .parse::<u32>()
                     .map_err(|_| CadError::ValueOutOfRange("roll"))?;
@@ -2520,6 +2544,7 @@ impl Window {
             Panel::History => Ok(self.history_text()),
             Panel::Units => Ok(self.units_panel_text()),
             Panel::Server => Ok(self.server_panel_text()),
+            Panel::TitleBlock => Ok(self.title_block_panel_text()),
             Panel::SketchExport | Panel::Revolve => Ok(if self.mech.sketches.is_empty() {
                 Msg::PanelNoSketch.tr(lang).to_string()
             } else {
@@ -9608,6 +9633,8 @@ mass: "
     fn the_history_panel_lists_the_changes_marks_the_present_and_goes_to_any_of_them() {
         use crate::panels::{Panel, PanelOptions};
         let mut w = fresh();
+        // the layout of the list alone: the fields of each change have a test of their own
+        w.ui.panels.history_fields = 0;
         assert_eq!(w.history_text(), "No change has been made yet.");
         assert_eq!(w.history_counts(), (0, 0));
         for _ in 0..3 {
@@ -9663,6 +9690,91 @@ mass: "
         w.lang = Lang::Es;
         assert!(w.history_text().contains("--- el proyecto está aquí ---"));
         w.lang = Lang::En;
+    }
+
+    #[test]
+    fn the_history_panel_names_the_fields_each_change_touched() {
+        let mut w = fresh();
+        w.add_step(NewStep::Hole);
+        w.add_step(NewStep::Hole);
+        let t = w.history_text();
+        let lines: Vec<&str> = t.lines().collect();
+        // every change is followed by the line of the fields it touched
+        assert!(lines[1].starts_with("1. "), "{t}");
+        assert!(lines[2].starts_with("    fields: step "), "{t}");
+        assert!(
+            lines[2].contains(" added") && lines[2].contains("the tip changed"),
+            "{t}"
+        );
+        assert!(
+            lines[3].starts_with("2. ") && lines[4].starts_with("    fields: "),
+            "{t}"
+        );
+        assert_eq!(lines[5], "--- the project is here ---");
+        // the undone changes name theirs too
+        w.undo();
+        let t = w.history_text();
+        let lines: Vec<&str> = t.lines().collect();
+        assert_eq!(lines[3], "--- the project is here ---", "{t}");
+        assert!(
+            lines[4].starts_with("2. ") && lines[5].starts_with("    fields: "),
+            "{t}"
+        );
+        // the setting says how many fields are named and how many are left out
+        w.ui.panels.history_fields = 1;
+        let t = w.history_text();
+        assert!(
+            t.contains("(and 1 more)") && !t.contains("the tip changed"),
+            "{t}"
+        );
+        w.ui.panels.history_fields = 0;
+        let t = w.history_text();
+        assert!(!t.contains("fields:") && !t.contains("added"), "{t}");
+        // the words come in the language of the window
+        w.ui.panels.history_fields = 6;
+        w.lang = Lang::Es;
+        let t = w.history_text();
+        assert!(t.contains("campos: paso ") && t.contains("añadido"), "{t}");
+        assert!(t.contains("la punta cambiado"), "{t}");
+        w.lang = Lang::Pt;
+        assert!(w.history_text().contains("a ponta alterado"));
+        // a state against itself names nothing
+        let same = w.mech.clone();
+        assert!(w.history_fields_of(&same, &same).is_empty());
+    }
+
+    #[test]
+    fn every_word_of_the_fields_of_a_change_is_in_the_eight_languages() {
+        for l in Lang::ALL {
+            for m in [
+                Msg::HistoryFields,
+                Msg::ChangeAdded,
+                Msg::ChangeRemoved,
+                Msg::ChangeChanged,
+                Msg::ChangeParameter,
+                Msg::ChangeVariable,
+                Msg::ChangeStep,
+                Msg::ChangeSketch,
+                Msg::ChangeTip,
+                Msg::ChangeBoard,
+                Msg::ChangeMore,
+            ] {
+                assert!(!m.tr(l).is_empty(), "{m:?} in {}", l.code());
+            }
+            for m in [
+                Msg::ChangeAdded,
+                Msg::ChangeRemoved,
+                Msg::ChangeChanged,
+                Msg::ChangeParameter,
+                Msg::ChangeVariable,
+                Msg::ChangeStep,
+                Msg::ChangeSketch,
+                Msg::HistoryFields,
+                Msg::ChangeMore,
+            ] {
+                assert!(m.tr(l).contains("{0}"), "{m:?} in {}", l.code());
+            }
+        }
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! The commands that talk to the EH3D server: `server-status`, `server-list`, `server-save`, `server-load` and `server-report`. They read the `[server]`
+//! The commands that talk to the EH3D server: `server-status`, `server-list`, `server-save`, `server-load`, `server-report` and `server-check`. They read the `[server]`
 //! section of the settings file given with `--config` (with no address, or with no file, nothing is sent anywhere), print their answer in the language of
 //! `--lang` (English without it) and never touch a local file unless they were asked to: `server-load` writes the project it read only to the file given
 //! with `--out`, and not over a file that exists unless `--overwrite` is given.
@@ -11,19 +11,22 @@ use std::path::{Path, PathBuf};
 
 use crate::config::Settings;
 use crate::lang::{fill, Lang, Msg};
+use crate::project::Document;
 use crate::server::Store;
+use crate::servercad::{self, Answer, Issue};
 use crate::store;
 
 /// The variable that holds the password for `--user`.
 pub const PASSWORD_VARIABLE: &str = "PHOENIX_CAD_SERVER_PASSWORD";
 
 /// The commands of this module, as the line of the command gives them.
-pub const COMMANDS: [&str; 5] = [
+pub const COMMANDS: [&str; 6] = [
     "server-status",
     "server-list",
     "server-save",
     "server-load",
     "server-report",
+    "server-check",
 ];
 
 #[derive(Default)]
@@ -35,6 +38,8 @@ struct Options {
     out: Option<PathBuf>,
     report: Option<String>,
     from: Option<PathBuf>,
+    stored: Option<String>,
+    kind: Option<String>,
     comment: String,
     overwrite: bool,
     words: Vec<String>,
@@ -60,6 +65,8 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--out" => o.out = Some(PathBuf::from(value("a file")?)),
             "--report" => o.report = Some(value("the name of the report")?),
             "--from" => o.from = Some(PathBuf::from(value("a file")?)),
+            "--stored" => o.stored = Some(value("the name of a project of the server")?),
+            "--kind" => o.kind = Some(value("check or report")?),
             "--comment" => o.comment = value("a text")?,
             "--overwrite" => o.overwrite = true,
             other if other.starts_with("--") => return Err(format!("unknown option {other}")),
@@ -207,8 +214,106 @@ pub fn run(command: &str, args: &[String]) -> Result<String, String> {
                 )
             ))
         }
+        "server-check" => {
+            let kind = o.kind.clone().unwrap_or_else(|| "check".to_string());
+            if !matches!(kind.as_str(), "check" | "report") {
+                return Err("--kind is check or report".to_string());
+            }
+            let (name, project) = match (&o.stored, o.words.as_slice()) {
+                (Some(name), []) => (name.clone(), store.load_contract(name).map_err(failed)?),
+                (Some(_), _) => {
+                    return Err("give a project file or --stored NAME, not both".to_string())
+                }
+                (None, _) => {
+                    let file = PathBuf::from(one_word(&o, "project file")?);
+                    let name = o
+                        .name
+                        .clone()
+                        .or_else(|| stem(&file))
+                        .ok_or("the project needs a name: give --name")?;
+                    let bytes = store::load_limited(&file, settings.mechanical.max_bytes as u64)
+                        .map_err(|e| format!("{}: {e}", file.display()))?;
+                    let doc = Document::from_bytes(&bytes, settings.mechanical.max_bytes)
+                        .map_err(|e| format!("{}: {e}", file.display()))?;
+                    let text = servercad::project_json(&doc, &name).map_err(|e| e.to_string())?;
+                    (name, text)
+                }
+            };
+            let answer = store.station(&kind, &name, &project).map_err(failed)?;
+            Ok(describe(lang, &name, &answer))
+        }
         other => Err(format!("{other}: not a command of the server")),
     }
+}
+
+/// The sentence of an issue in the language: the text of its code with the id it is about, or the
+/// sentence the station gave when the code is one this program does not know.
+pub fn issue_text(lang: Lang, issue: &Issue) -> String {
+    let known = match issue.code.as_str() {
+        "bad_schema" => Some(Msg::ServerIssueBadSchema),
+        "unknown_units" => Some(Msg::ServerIssueUnknownUnits),
+        "missing_id" => Some(Msg::ServerIssueMissingId),
+        "duplicate_id" => Some(Msg::ServerIssueDuplicateId),
+        "missing_ref" => Some(Msg::ServerIssueMissingRef),
+        "unknown_kind" => Some(Msg::ServerIssueUnknownKind),
+        "empty_part" => Some(Msg::ServerIssueEmptyPart),
+        _ => None,
+    };
+    match known {
+        Some(m) => fill(m.tr(lang), &[&issue.id]),
+        None => issue.message.clone(),
+    }
+}
+
+/// What the station answered, in the language: the verdict with its counts, one line for each
+/// thing it found, the counts of a report and a line that says the evidence is a simulator.
+pub fn describe(lang: Lang, name: &str, answer: &Answer) -> String {
+    let v = &answer.verdict;
+    let word = if v.pass {
+        Msg::ServerPass
+    } else {
+        Msg::ServerFail
+    };
+    let mut out = format!(
+        "{}\n",
+        fill(
+            Msg::ServerCheckHead.tr(lang),
+            &[
+                name,
+                word.tr(lang),
+                &v.errors.to_string(),
+                &v.warnings.to_string()
+            ]
+        )
+    );
+    for i in &v.issues {
+        let severity = if i.severity == "error" {
+            Msg::ServerSeverityError
+        } else {
+            Msg::ServerSeverityWarning
+        };
+        out.push_str(&format!(
+            "  {}: {}\n",
+            severity.tr(lang),
+            issue_text(lang, i)
+        ));
+    }
+    if let Some(c) = &answer.counts {
+        out.push_str(&fill(
+            Msg::ServerReportCounts.tr(lang),
+            &[
+                &c.parts.to_string(),
+                &c.sketches.to_string(),
+                &c.features.to_string(),
+            ],
+        ));
+        out.push('\n');
+    }
+    if answer.evidence == "simulator" {
+        out.push_str(Msg::ServerSimulator.tr(lang));
+        out.push('\n');
+    }
+    out
 }
 
 fn stem_with_extension(path: &Path) -> Option<String> {
@@ -303,7 +408,7 @@ mod tests {
         let renamed = run("server-save", &with(vec![BOX, "--name", "Box two"])).unwrap();
         assert_eq!(renamed, "Box two saved on the server (version 1)\n");
         let list = run("server-list", &with(vec!["BOX"])).unwrap();
-        assert_eq!(list, "p-0002  Box two  (1 files)\np-0001  box  (1 files)\n");
+        assert_eq!(list, "p-0002  Box two  (2 files)\np-0001  box  (2 files)\n");
         let target = dir.file("back.phoenixproj");
         let loaded = run("server-load", &with(vec!["box", "--out", target.as_str()])).unwrap();
         let size = fs::read(BOX).unwrap().len();
@@ -442,5 +547,154 @@ mod tests {
         let e = run("server-save", &with(vec![text.as_str()])).unwrap_err();
         assert!(e.contains("is not a project of this program"), "{e}");
         assert!(mem.project_names().is_empty());
+    }
+
+    fn config_with_station(dir: &Scratch, address: &str, machine: &str) -> String {
+        let path = dir.file("station.cfg");
+        fs::write(
+            &path,
+            format!(
+                "[server]\nserver_address = {address}\nserver_token = tok\nserver_machine = {machine}\nserver_retries = 0\nserver_timeout_s = 5\n"
+            ),
+        )
+        .unwrap();
+        path
+    }
+
+    const PLATE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/plate.phoenixproj");
+    const ASSEMBLY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/assembly.phoenixproj");
+
+    #[test]
+    fn server_check_asks_the_station_and_tells_the_answer_in_the_language() {
+        let mem = MemoryStore::new("tok");
+        let served = serve(&mem).unwrap();
+        let dir = Scratch::new("check");
+        let cfg = config_with_station(&dir, &served.address, "cad1");
+        let with = |list: Vec<&str>| {
+            let mut all = words(&list);
+            all.extend(words(&["--config", cfg.as_str()]));
+            all
+        };
+        let out = run("server-check", &with(vec![PLATE])).unwrap();
+        assert_eq!(
+            out,
+            "plate: pass (0 errors, 0 warnings)\nEvidence: simulator (the station checks the structure of the file; it has no geometry kernel)\n"
+        );
+        let out = run("server-check", &with(vec![PLATE, "--kind", "report"])).unwrap();
+        assert!(out.contains("1 parts, 1 sketches, 1 features\n"), "{out}");
+        // the assembly passes with a warning for each part that has no feature, told in Spanish
+        let out = run("server-check", &with(vec![ASSEMBLY, "--lang", "es"])).unwrap();
+        assert!(
+            out.starts_with("assembly: correcto (0 errores, 6 avisos)\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "  aviso: la pieza 018bcfe5-6800-7000-8000-000000001000 no tiene operaciones
+"
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn server_check_can_take_the_project_the_last_save_wrote_and_refuses_what_does_not_fit() {
+        let mem = MemoryStore::new("tok");
+        let served = serve(&mem).unwrap();
+        let dir = Scratch::new("stored");
+        let cfg = config_with_station(&dir, &served.address, "cad1");
+        let with = |list: Vec<&str>| {
+            let mut all = words(&list);
+            all.extend(words(&["--config", cfg.as_str()]));
+            all
+        };
+        // nothing was saved yet
+        let e = run("server-check", &with(vec!["--stored", "plate"])).unwrap_err();
+        assert_eq!(e, fill(Msg::ServerNoProject.tr(Lang::En), &["plate"]));
+        run("server-save", &with(vec![PLATE])).unwrap();
+        let out = run(
+            "server-check",
+            &with(vec!["--stored", "plate", "--lang", "de"]),
+        )
+        .unwrap();
+        assert!(
+            out.starts_with("plate: bestanden (0 Fehler, 0 Warnungen)\n"),
+            "{out}"
+        );
+        // a file and a name together, a kind that is not one, a file that is not a project
+        assert!(run("server-check", &with(vec![PLATE, "--stored", "plate"])).is_err());
+        let e = run("server-check", &with(vec![PLATE, "--kind", "export"])).unwrap_err();
+        assert_eq!(e, "--kind is check or report");
+        let e = run("server-check", &with(vec![])).unwrap_err();
+        assert!(e.contains("project file"), "{e}");
+        let junk = dir.file("junk.phoenixproj");
+        fs::write(&junk, "not a project").unwrap();
+        assert!(run("server-check", &with(vec![junk.as_str()])).is_err());
+        // a station that is not set is told in the language
+        let none = config_with_station(&dir, &served.address, "");
+        for lang in Lang::ALL {
+            let e = run(
+                "server-check",
+                &words(&[PLATE, "--config", none.as_str(), "--lang", lang.code()]),
+            )
+            .unwrap_err();
+            assert_eq!(e, Msg::ServerNoMachine.tr(lang));
+        }
+    }
+
+    #[test]
+    fn every_code_of_the_station_has_its_sentence_in_the_eight_languages() {
+        for lang in Lang::ALL {
+            for code in [
+                "bad_schema",
+                "unknown_units",
+                "missing_id",
+                "duplicate_id",
+                "missing_ref",
+                "unknown_kind",
+                "empty_part",
+            ] {
+                let issue = Issue {
+                    severity: "error".to_string(),
+                    code: code.to_string(),
+                    id: "THE-ID".to_string(),
+                    message: "english from the server".to_string(),
+                };
+                let text = issue_text(lang, &issue);
+                assert!(
+                    !text.is_empty() && text != "english from the server",
+                    "{code}"
+                );
+                if matches!(
+                    code,
+                    "duplicate_id" | "missing_ref" | "unknown_kind" | "empty_part"
+                ) {
+                    assert!(text.contains("THE-ID"), "{code} in {}: {text}", lang.code());
+                }
+            }
+            // a code this program does not know keeps the sentence of the station
+            let other = Issue {
+                severity: "warning".to_string(),
+                code: "new_code".to_string(),
+                id: String::new(),
+                message: "a new thing".to_string(),
+            };
+            assert_eq!(issue_text(lang, &other), "a new thing");
+            for m in [
+                Msg::ServerNoMachine,
+                Msg::ServerJobFailed,
+                Msg::ServerJobTimeout,
+                Msg::ServerCheckHead,
+                Msg::ServerPass,
+                Msg::ServerFail,
+                Msg::ServerSeverityError,
+                Msg::ServerSeverityWarning,
+                Msg::ServerReportCounts,
+                Msg::ServerSimulator,
+                Msg::ServerNoContract,
+            ] {
+                assert!(!m.tr(lang).is_empty());
+            }
+        }
     }
 }

@@ -68,6 +68,17 @@ impl<T> History<T> {
         self.redo.iter().map(|(n, _)| n.as_str()).collect()
     }
 
+    /// The states the changes lead through, oldest first: the state before each change that can be
+    /// undone, then `current`, then the states that undoing left to be redone, the next one
+    /// first. The change `i` of the lists of names is the one from the state `i` to the state
+    /// `i + 1`.
+    pub fn states<'a>(&'a self, current: &'a T) -> Vec<&'a T> {
+        let mut out: Vec<&T> = self.undo.iter().map(|(_, state)| state).collect();
+        out.push(current);
+        out.extend(self.redo.iter().rev().map(|(_, state)| state));
+        out
+    }
+
     /// Forgets every change (a project was opened or started).
     pub fn clear(&mut self) {
         self.undo.clear();
@@ -127,6 +138,22 @@ mod tests {
         let mut none: History<i32> = History::new(0);
         none.record("x", 1);
         assert!(!none.can_undo());
+    }
+
+    #[test]
+    fn the_states_run_from_the_oldest_before_to_the_last_that_can_be_redone() {
+        let mut h: History<i32> = History::new(10);
+        assert_eq!(h.states(&7), vec![&7]);
+        h.record("a", 1);
+        h.record("b", 2);
+        h.record("c", 3);
+        assert_eq!(h.states(&4), vec![&1, &2, &3, &4]);
+        // undoing moves the present back and keeps the states ahead of it
+        let (_, back) = h.undo(4).unwrap();
+        assert_eq!(h.states(&back), vec![&1, &2, &3, &4]);
+        let (_, back) = h.undo(back).unwrap();
+        assert_eq!(h.states(&back), vec![&1, &2, &3, &4]);
+        assert_eq!(h.undo_names().len() + 1 + h.redo_names().len(), 4);
     }
 
     #[test]

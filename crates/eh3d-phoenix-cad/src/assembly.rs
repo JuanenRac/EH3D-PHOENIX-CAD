@@ -261,6 +261,22 @@ pub enum MateKind {
         /// How far the near face of `b` goes into `a`, from zero up.
         distance: Length,
     },
+    /// The shanks of two screws touch along a line: both screws run along the same axis, `b` lies on
+    /// the side of `a` that the direction names (across that axis) and the distance between the two
+    /// axes is the sum of the two radii. Only a screw has a cylinder, so only screws take it.
+    Tangent {
+        /// The side of `a` that `b` lies on; across the axes of the screws.
+        direction: Axis,
+    },
+    /// The length axis of `b` is the length axis of `a` turned `quarters` quarter turns about the
+    /// axis `about` of the model. Only the axes are mated: the roll of `b` and its position are
+    /// not touched.
+    Angle {
+        /// The axis of the model the axis of `a` is turned about.
+        about: Dim,
+        /// The quarter turns, counter-clockwise looking down the axis (0 to 3).
+        quarters: u8,
+    },
 }
 
 /// A part placed relative to another, along one axis.
@@ -300,6 +316,8 @@ impl MateKind {
             MateKind::Inset { .. } => "inset",
             MateKind::Proportion { .. } => "proportion",
             MateKind::Overlap { .. } => "overlap",
+            MateKind::Tangent { .. } => "tangent",
+            MateKind::Angle { .. } => "angle",
         }
     }
 
@@ -314,6 +332,8 @@ impl MateKind {
                 | MateKind::Inset { .. }
                 | MateKind::Proportion { .. }
                 | MateKind::Overlap { .. }
+                | MateKind::Tangent { .. }
+                | MateKind::Angle { .. }
         )
     }
 
@@ -321,16 +341,16 @@ impl MateKind {
     /// which places `b` along no axis.
     pub fn axis_index(self) -> usize {
         match self {
-            MateKind::Gap { direction, .. } | MateKind::Overlap { direction, .. } => {
-                direction_of(direction).0
-            }
+            MateKind::Gap { direction, .. }
+            | MateKind::Overlap { direction, .. }
+            | MateKind::Tangent { direction } => direction_of(direction).0,
             MateKind::Align { axis, .. }
             | MateKind::Offset { axis, .. }
             | MateKind::Symmetric { axis, .. }
             | MateKind::Inset { axis, .. }
             | MateKind::Proportion { axis, .. } => axis.index(),
             MateKind::Stack => 2,
-            MateKind::Turn { .. } => 3,
+            MateKind::Turn { .. } | MateKind::Angle { .. } => 3,
         }
     }
 }
@@ -391,6 +411,15 @@ impl Mate {
                 out.push(direction.name().to_string());
                 out.push(distance.get().to_string());
             }
+            MateKind::Tangent { direction } => {
+                out.push("tangent".to_string());
+                out.push(direction.name().to_string());
+            }
+            MateKind::Angle { about, quarters } => {
+                out.push("angle".to_string());
+                out.push(about.name().to_string());
+                out.push(quarters.to_string());
+            }
         }
         out
     }
@@ -442,6 +471,18 @@ impl Mate {
                     .ok_or("the direction of an overlap is not known")?,
                 distance: length_word(distance, "distance of an overlap")?,
             },
+            [_, _, "tangent", direction] => MateKind::Tangent {
+                direction: Axis::from_name(direction)
+                    .ok_or("the direction of a tangent is not known")?,
+            },
+            [_, _, "angle", about, quarters] => MateKind::Angle {
+                about: Dim::from_name(about).ok_or("the axis of an angle is not known")?,
+                quarters: ["0", "1", "2", "3"]
+                    .iter()
+                    .position(|q| q == quarters)
+                    .and_then(|q| u8::try_from(q).ok())
+                    .ok_or("the quarter turns of an angle are not 0, 1, 2 or 3")?,
+            },
             _ => return Err("a mate is not understood".to_string()),
         };
         Ok(Mate {
@@ -479,6 +520,11 @@ impl Mate {
         if let MateKind::Turn { quarters } = self.kind {
             if quarters > 3 {
                 return Err(mate_error("the quarter turns of a turn are 0, 1, 2 or 3"));
+            }
+        }
+        if let MateKind::Angle { quarters, .. } = self.kind {
+            if quarters > 3 {
+                return Err(mate_error("the quarter turns of an angle are 0, 1, 2 or 3"));
             }
         }
         if let MateKind::Proportion { permille, .. } = self.kind {
@@ -593,9 +639,120 @@ fn mated_position(kind: MateKind, a_min: i64, a_size: i64, b_size: i64) -> Resul
             twice / 2
         }
         // a turn places nothing along an axis; `place` never asks for a position
-        MateKind::Turn { .. } => a_min,
+        MateKind::Turn { .. } | MateKind::Angle { .. } => a_min,
+        // a tangent needs the shapes of the parts, which `tangent_position` reads
+        MateKind::Tangent { .. } => {
+            return Err(mate_error(
+                "a tangent is placed from the shanks of the two screws",
+            ))
+        }
     };
     i64::try_from(v)
+        .ok()
+        .filter(|v| Length::new(*v).is_ok())
+        .ok_or_else(|| mate_error("a part is placed outside the range of lengths"))
+}
+
+/// The direction `axis` points along after a turn of `quarters` quarter turns about the axis
+/// `about` of the model, counter-clockwise looking down that axis (a turn about the direction
+/// itself leaves it as it is).
+pub fn turned_axis(axis: Axis, about: Dim, quarters: u8) -> Axis {
+    let (index, sign) = direction_of(axis);
+    let mut v = [0i8; 3];
+    v[index] = sign;
+    for _ in 0..quarters % 4 {
+        v = match about.index() {
+            0 => [v[0], -v[2], v[1]],
+            1 => [v[2], v[1], -v[0]],
+            _ => [-v[1], v[0], v[2]],
+        };
+    }
+    let at = v.iter().position(|c| *c != 0).unwrap_or(2);
+    match (at, v[at] > 0) {
+        (0, true) => Axis::PlusX,
+        (0, false) => Axis::MinusX,
+        (1, true) => Axis::PlusY,
+        (1, false) => Axis::MinusY,
+        (_, true) => Axis::PlusZ,
+        (_, false) => Axis::MinusZ,
+    }
+}
+
+/// Applies the mates that orient a part (`apply` changes `b` from `a`), parts that others orient
+/// first: up the chain to a part that no mate orients, then down. A cycle is refused.
+fn solve_orientations(
+    oriented: &BTreeMap<Id, &Mate>,
+    parts: &BTreeMap<Id, PartInstance>,
+    placed: &mut BTreeMap<Id, PartInstance>,
+    apply: impl Fn(&mut BTreeMap<Id, PartInstance>, &Mate),
+) -> Result<(), CadError> {
+    let mut done: BTreeSet<Id> = BTreeSet::new();
+    for start in oriented.keys() {
+        let mut chain: Vec<Id> = Vec::new();
+        let mut seen: BTreeSet<Id> = BTreeSet::new();
+        let mut current = *start;
+        while let Some(mate) = oriented.get(&current) {
+            if done.contains(&current) {
+                break;
+            }
+            if !seen.insert(current) {
+                return Err(mate_error(format!(
+                    "{}: the mates turn each other in a cycle",
+                    parts[&current].name
+                )));
+            }
+            chain.push(current);
+            current = mate.a;
+        }
+        for b in chain.into_iter().rev() {
+            apply(placed, oriented[&b]);
+            done.insert(b);
+        }
+    }
+    Ok(())
+}
+
+/// The position along the axis of `direction` that `b` takes when the shanks of the two screws touch: the
+/// distance between their axes is the sum of the radii, on the side of `a` that the direction names.
+fn tangent_position(
+    a: &PartInstance,
+    b: &PartInstance,
+    direction: Axis,
+    a_min: i64,
+    a_size: i64,
+    b_size: i64,
+) -> Result<i64, CadError> {
+    let (Shape::Screw { diameter: da, .. }, Shape::Screw { diameter: db, .. }) =
+        (&a.part.shape, &b.part.shape)
+    else {
+        return Err(mate_error(
+            "a tangent joins two screws: only a screw has a cylinder",
+        ));
+    };
+    let (index, sign) = direction_of(direction);
+    if direction_of(a.orientation.axis).0 != direction_of(b.orientation.axis).0 {
+        return Err(mate_error(
+            "a tangent needs the two screws to run along the same axis",
+        ));
+    }
+    if direction_of(a.orientation.axis).0 == index {
+        return Err(mate_error(
+            "a tangent is placed across the axes of the screws, not along them",
+        ));
+    }
+    let reach = i128::from(da.get()) + i128::from(db.get());
+    let (a_min, a_size, b_size) = (i128::from(a_min), i128::from(a_size), i128::from(b_size));
+    let twice = if sign > 0 {
+        2 * a_min + a_size + reach - b_size
+    } else {
+        2 * a_min + a_size - reach - b_size
+    };
+    if twice % 2 != 0 {
+        return Err(mate_error(
+            "the screws cannot touch: their axes differ by half a nanometre",
+        ));
+    }
+    i64::try_from(twice / 2)
         .ok()
         .filter(|v| Length::new(*v).is_ok())
         .ok_or_else(|| mate_error("a part is placed outside the range of lengths"))
@@ -619,6 +776,8 @@ pub fn place(
         [BTreeMap::new(), BTreeMap::new(), BTreeMap::new()];
     // the mates that turn a part, which place it along no axis
     let mut turns: BTreeMap<Id, &Mate> = BTreeMap::new();
+    // the mates that point the length axis of a part, which place it along no axis either
+    let mut angles: BTreeMap<Id, &Mate> = BTreeMap::new();
     for mate in mates.values() {
         let name = |id: &Id| parts.get(id).map(|p| p.name.clone());
         let (Some(a), Some(b)) = (name(&mate.a), name(&mate.b)) else {
@@ -635,6 +794,12 @@ pub fn place(
             }
             continue;
         }
+        if let MateKind::Angle { .. } = mate.kind {
+            if angles.insert(mate.b, mate).is_some() {
+                return Err(mate_error(format!("{b} is pointed by two mates")));
+            }
+            continue;
+        }
         let axis = mate.kind.axis_index();
         if by_target[axis].insert(mate.b, mate).is_some() {
             return Err(mate_error(format!(
@@ -643,35 +808,23 @@ pub fn place(
             )));
         }
     }
-    // the turns first: the size of a part along the axes depends on its roll
-    let mut turned: BTreeSet<Id> = BTreeSet::new();
-    for start in turns.keys() {
-        let mut chain: Vec<Id> = Vec::new();
-        let mut seen: BTreeSet<Id> = BTreeSet::new();
-        let mut current = *start;
-        while let Some(mate) = turns.get(&current) {
-            if turned.contains(&current) {
-                break;
+    // the axes first and then the turns: the size of a part along the axes depends on both
+    solve_orientations(&angles, parts, &mut placed, |placed, mate| {
+        if let MateKind::Angle { about, quarters } = mate.kind {
+            let axis = turned_axis(placed[&mate.a].orientation.axis, about, quarters);
+            if let Some(p) = placed.get_mut(&mate.b) {
+                p.orientation.axis = axis;
             }
-            if !seen.insert(current) {
-                return Err(mate_error(format!(
-                    "{}: the mates turn each other in a cycle",
-                    parts[&current].name
-                )));
-            }
-            chain.push(current);
-            current = mate.a;
         }
-        for b in chain.into_iter().rev() {
-            if let MateKind::Turn { quarters } = turns[&b].kind {
-                let roll = (placed[&turns[&b].a].orientation.roll + quarters) % 4;
-                if let Some(p) = placed.get_mut(&b) {
-                    p.orientation.roll = roll;
-                }
+    })?;
+    solve_orientations(&turns, parts, &mut placed, |placed, mate| {
+        if let MateKind::Turn { quarters } = mate.kind {
+            let roll = (placed[&mate.a].orientation.roll + quarters) % 4;
+            if let Some(p) = placed.get_mut(&mate.b) {
+                p.orientation.roll = roll;
             }
-            turned.insert(b);
         }
-    }
+    })?;
     let sizes: BTreeMap<Id, [i64; 3]> = placed.iter().map(|(id, p)| (*id, p.extent().0)).collect();
     for (axis, targets) in by_target.iter().enumerate() {
         let mut done: BTreeSet<Id> = BTreeSet::new();
@@ -697,8 +850,18 @@ pub fn place(
             for b in chain.into_iter().rev() {
                 let mate = targets[&b];
                 let a_min = placed[&mate.a].at[axis].get();
-                let value =
-                    mated_position(mate.kind, a_min, sizes[&mate.a][axis], sizes[&b][axis])?;
+                let value = if let MateKind::Tangent { direction } = mate.kind {
+                    tangent_position(
+                        &placed[&mate.a],
+                        &placed[&b],
+                        direction,
+                        a_min,
+                        sizes[&mate.a][axis],
+                        sizes[&b][axis],
+                    )?
+                } else {
+                    mated_position(mate.kind, a_min, sizes[&mate.a][axis], sizes[&b][axis])?
+                };
                 if let Some(p) = placed.get_mut(&b) {
                     p.at[axis] = Length::new(value)?;
                 }
@@ -2729,6 +2892,348 @@ interference_tolerance = thick
             assert_eq!(pos(&placed, 1), pos(&set_of_parts, 1));
             // placing the placed parts again changes nothing
             assert_eq!(place(&placed, &mate_map).unwrap(), placed, "round {round}");
+        }
+    }
+
+    #[test]
+    fn two_screws_touch_along_their_shanks_in_a_tangent() {
+        // the shanks are 3 mm and 5 mm wide and the heads 5.5 mm: the axes are 2.75 mm from the
+        // lower corners, so across x the axes are 1.5 + 2.5 = 4 mm apart
+        let a = screw("a", [mm(0), mm(0), mm(0)], Axis::PlusZ, mm(3));
+        let b = screw("b", [mm(100), mm(100), mm(0)], Axis::PlusZ, mm(5));
+        let parts = set(vec![(1, a), (2, b)]);
+        let run = |direction: Axis| {
+            let kind = MateKind::Tangent { direction };
+            place(&parts, &mates(vec![(9, kind_mate(1, 2, kind))]))
+        };
+        // axis of a at 2.75 mm; the axis of b at 6.75 mm puts its corner at 4 mm
+        assert_eq!(pos(&run(Axis::PlusX).unwrap(), 2), [4 * MM, 100 * MM, 0]);
+        // on the other side: 2.75 - 4 = -1.25 mm for the axis, -4 mm for the corner
+        assert_eq!(pos(&run(Axis::MinusX).unwrap(), 2), [-4 * MM, 100 * MM, 0]);
+        assert_eq!(pos(&run(Axis::PlusY).unwrap(), 2), [100 * MM, 4 * MM, 0]);
+        // along the axes of the screws there is no tangent
+        assert!(run(Axis::PlusZ).is_err());
+        assert!(run(Axis::MinusZ).is_err());
+    }
+
+    #[test]
+    fn a_tangent_needs_two_screws_along_the_same_axis_and_a_whole_nanometre() {
+        let tangent = |parts: &BTreeMap<Id, PartInstance>| {
+            let kind = MateKind::Tangent {
+                direction: Axis::PlusX,
+            };
+            place(parts, &mates(vec![(9, kind_mate(1, 2, kind))]))
+        };
+        let a = screw("a", [mm(0), mm(0), mm(0)], Axis::PlusZ, mm(3));
+        // a bar has no cylinder
+        let with_bar = set(vec![(1, a.clone()), (2, bar("b", [10, 10, 10], 20))]);
+        let e = tangent(&with_bar).unwrap_err().to_string();
+        assert!(e.contains("two screws"), "{e}");
+        // screws that run along different axes
+        let turned = screw("b", [mm(50), mm(0), mm(0)], Axis::PlusY, mm(3));
+        let e = tangent(&set(vec![(1, a.clone()), (2, turned)]))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("same axis"), "{e}");
+        // a screw that points the other way along the same axis is still parallel
+        let down = screw("b", [mm(50), mm(0), mm(0)], Axis::MinusZ, mm(3));
+        let placed = tangent(&set(vec![(1, a.clone()), (2, down)])).unwrap();
+        assert_eq!(pos(&placed, 2)[0], 3 * MM);
+        // shanks that make an odd number of nanometres put the axes half a nanometre off
+        let odd = screw(
+            "b",
+            [mm(50), mm(0), mm(0)],
+            Axis::PlusZ,
+            Length::new(3_000_001).unwrap(),
+        );
+        let e = tangent(&set(vec![(1, a), (2, odd)]))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("half a nanometre"), "{e}");
+    }
+
+    #[test]
+    fn an_angle_points_the_axis_of_a_part_from_the_axis_of_another() {
+        for (axis, about, quarters, expected) in [
+            (Axis::PlusZ, Dim::X, 1, Axis::MinusY),
+            (Axis::PlusZ, Dim::X, 2, Axis::MinusZ),
+            (Axis::PlusZ, Dim::X, 3, Axis::PlusY),
+            (Axis::PlusZ, Dim::Y, 1, Axis::PlusX),
+            (Axis::PlusX, Dim::Z, 1, Axis::PlusY),
+            (Axis::PlusX, Dim::Z, 2, Axis::MinusX),
+            (Axis::MinusY, Dim::X, 1, Axis::MinusZ),
+            (Axis::PlusZ, Dim::Z, 1, Axis::PlusZ),
+            (Axis::PlusX, Dim::X, 3, Axis::PlusX),
+            (Axis::PlusZ, Dim::X, 0, Axis::PlusZ),
+        ] {
+            assert_eq!(
+                turned_axis(axis, about, quarters),
+                expected,
+                "{axis:?} {about:?} {quarters}"
+            );
+        }
+        // four quarters is no turn and a turn and its opposite undo each other
+        for axis in Axis::ALL {
+            for about in Dim::ALL {
+                assert_eq!(turned_axis(axis, about, 4), axis);
+                let there = turned_axis(axis, about, 1);
+                assert_eq!(turned_axis(there, about, 3), axis);
+            }
+        }
+    }
+
+    #[test]
+    fn an_angle_mate_turns_only_the_axis_and_the_size_follows() {
+        let parts = set(vec![
+            (1, bar("a", [0, 0, 0], 100)),
+            (2, bar("b", [50, 50, 50], 40)),
+            (3, bar("c", [70, 70, 70], 40)),
+        ]);
+        let angle = |a: u64, b: u64, about: Dim, quarters: u8| {
+            kind_mate(a, b, MateKind::Angle { about, quarters })
+        };
+        let placed = place(&parts, &mates(vec![(9, angle(1, 2, Dim::X, 1))])).unwrap();
+        assert_eq!(placed[&id(2)].orientation.axis, Axis::MinusY);
+        // the roll and the position are as typed
+        assert_eq!(placed[&id(2)].orientation.roll, 0);
+        assert_eq!(pos(&placed, 2), [50 * MM, 50 * MM, 50 * MM]);
+        // the box of the part follows its axis: 40 mm along y now
+        assert_eq!(placed[&id(2)].extent().0[1], 40 * MM);
+        // a chain: c points from b, which points from a
+        let chain = place(
+            &parts,
+            &mates(vec![
+                (9, angle(2, 3, Dim::Z, 1)),
+                (8, angle(1, 2, Dim::X, 1)),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(chain[&id(2)].orientation.axis, Axis::MinusY);
+        assert_eq!(chain[&id(3)].orientation.axis, Axis::PlusX);
+        // an angle and a turn can both orient the same part
+        let both = place(
+            &parts,
+            &mates(vec![
+                (9, angle(1, 2, Dim::X, 1)),
+                (8, kind_mate(1, 2, MateKind::Turn { quarters: 2 })),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(both[&id(2)].orientation.axis, Axis::MinusY);
+        assert_eq!(both[&id(2)].orientation.roll, 2);
+        // two angles on one part, and angles that point each other, are refused
+        let e = place(
+            &parts,
+            &mates(vec![
+                (9, angle(1, 2, Dim::X, 1)),
+                (8, angle(3, 2, Dim::X, 1)),
+            ]),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("pointed by two mates"), "{e}");
+        let e = place(
+            &parts,
+            &mates(vec![
+                (9, angle(2, 3, Dim::X, 1)),
+                (8, angle(3, 2, Dim::X, 1)),
+            ]),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("cycle"), "{e}");
+    }
+
+    #[test]
+    fn tangent_and_angle_mates_are_written_read_back_and_checked() {
+        for kind in [
+            MateKind::Tangent {
+                direction: Axis::MinusY,
+            },
+            MateKind::Angle {
+                about: Dim::Z,
+                quarters: 3,
+            },
+        ] {
+            assert!(kind.is_newer());
+            let mate = kind_mate(1, 2, kind);
+            let words = mate.words();
+            let refs: Vec<&str> = words.iter().map(String::as_str).collect();
+            assert_eq!(Mate::from_words(&refs).unwrap(), mate);
+            mate.check(mm(1000)).unwrap();
+        }
+        assert_eq!(
+            MateKind::Tangent {
+                direction: Axis::PlusX
+            }
+            .axis_index(),
+            0
+        );
+        assert_eq!(
+            MateKind::Tangent {
+                direction: Axis::MinusZ
+            }
+            .axis_index(),
+            2
+        );
+        assert_eq!(
+            MateKind::Angle {
+                about: Dim::X,
+                quarters: 1
+            }
+            .axis_index(),
+            3
+        );
+        let bad = kind_mate(
+            1,
+            2,
+            MateKind::Angle {
+                about: Dim::X,
+                quarters: 4,
+            },
+        );
+        assert!(bad.check(mm(1000)).is_err());
+        let one = id(1).to_string();
+        let two = id(2).to_string();
+        for words in [
+            vec![&one[..], &two[..], "tangent"],
+            vec![&one[..], &two[..], "tangent", "x"],
+            vec![&one[..], &two[..], "angle", "x"],
+            vec![&one[..], &two[..], "angle", "+x", "1"],
+            vec![&one[..], &two[..], "angle", "x", "4"],
+            vec![&one[..], &two[..], "angle", "x", "01"],
+        ] {
+            assert!(Mate::from_words(&words).is_err(), "{words:?}");
+        }
+        assert_eq!(
+            kind_mate(
+                1,
+                2,
+                MateKind::Tangent {
+                    direction: Axis::PlusX
+                }
+            )
+            .kind
+            .name(),
+            "tangent"
+        );
+        assert_eq!(
+            MateKind::Angle {
+                about: Dim::Y,
+                quarters: 2
+            }
+            .name(),
+            "angle"
+        );
+    }
+
+    #[test]
+    fn random_tangents_put_the_axes_exactly_a_sum_of_radii_apart_with_a_fixed_seed() {
+        let mut state = 0xC0DE_CAD1_F00D_0016u64;
+        let mut next = |n: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % n
+        };
+        let (mut placed_ok, mut refused) = (0, 0);
+        for round in 0..300 {
+            // shanks of a whole number of micrometres, so that the sum is even in nanometres
+            let (da, db) = (
+                um(1000 + 2 * next(9000) as i64),
+                um(1000 + 2 * next(9000) as i64),
+            );
+            let (ax_a, ax_b) = (
+                [Axis::PlusZ, Axis::MinusZ][next(2) as usize],
+                [Axis::PlusZ, Axis::MinusZ][next(2) as usize],
+            );
+            let mut spot = |n: u64| Length::new(next(n) as i64 * 1_000).unwrap();
+            let a = screw("a", [spot(80_000), spot(80_000), spot(80_000)], ax_a, da);
+            let b = screw("b", [spot(80_000), spot(80_000), spot(80_000)], ax_b, db);
+            let direction = Axis::ALL[next(6) as usize];
+            let parts = set(vec![(1, a.clone()), (2, b.clone())]);
+            let mate = kind_mate(1, 2, MateKind::Tangent { direction });
+            let result = place(&parts, &mates(vec![(9, mate)]));
+            let along_axes = matches!(direction, Axis::PlusZ | Axis::MinusZ);
+            if along_axes {
+                refused += 1;
+                assert!(result.is_err(), "round {round}");
+                continue;
+            }
+            let placed = result.unwrap();
+            placed_ok += 1;
+            let (index, sign) = direction_of(direction);
+            let (ca, cb) = (
+                placed[&id(1)].at[index].get() + placed[&id(1)].extent().0[index] / 2,
+                placed[&id(2)].at[index].get() + placed[&id(2)].extent().0[index] / 2,
+            );
+            let reach = (da.get() + db.get()) / 2;
+            assert_eq!(
+                cb - ca,
+                i64::from(sign) * reach,
+                "round {round} {direction:?}"
+            );
+            // the other two coordinates are as they were typed, and the first part did not move
+            for k in (0..3).filter(|k| *k != index) {
+                assert_eq!(placed[&id(2)].at[k], b.at[k], "round {round}");
+            }
+            assert_eq!(placed[&id(1)], a);
+            // solving again changes nothing
+            assert_eq!(
+                place(&placed, &mates(vec![(9, mate)])).unwrap(),
+                placed,
+                "round {round}"
+            );
+        }
+        assert!(placed_ok > 150 && refused > 30, "{placed_ok} {refused}");
+    }
+
+    #[test]
+    fn random_angle_chains_follow_the_turns_of_the_axes_with_a_fixed_seed() {
+        let mut state = 0x0A11_61E5_5EED_0016u64;
+        let mut next = |n: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % n
+        };
+        for round in 0..200 {
+            let count = 2 + next(5);
+            let parts: Vec<(u64, PartInstance)> = (1..=count)
+                .map(|n| (n, bar(&format!("p{n}"), [10 * n as i64, 0, 0], 40)))
+                .collect();
+            let steps: Vec<(Dim, u8)> = (1..count)
+                .map(|_| (Dim::ALL[next(3) as usize], next(4) as u8))
+                .collect();
+            let list: Vec<(u64, Mate)> = (1..count)
+                .map(|n| {
+                    let (about, quarters) = steps[n as usize - 1];
+                    (
+                        100 + n,
+                        kind_mate(n, n + 1, MateKind::Angle { about, quarters }),
+                    )
+                })
+                .collect();
+            let placed = place(&set(parts.clone()), &mates(list)).unwrap();
+            let mut expected = Axis::PlusZ;
+            assert_eq!(placed[&id(1)].orientation.axis, expected);
+            for n in 1..count {
+                let (about, quarters) = steps[n as usize - 1];
+                expected = turned_axis(expected, about, quarters);
+                assert_eq!(
+                    placed[&id(n + 1)].orientation.axis,
+                    expected,
+                    "round {round} part {n}"
+                );
+                // the roll was not touched
+                assert_eq!(placed[&id(n + 1)].orientation.roll, 0);
+            }
+            // the box of each part has its length along the axis it points
+            for (n, _) in &parts {
+                let p = &placed[&id(*n)];
+                let (index, _) = direction_of(p.orientation.axis);
+                assert_eq!(p.extent().0[index], 40 * MM, "round {round} part {n}");
+            }
         }
     }
 }

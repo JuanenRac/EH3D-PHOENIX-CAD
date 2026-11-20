@@ -78,6 +78,24 @@ impl Window {
                     .ok_or_else(|| CadError::Reference(word(&draft.direction)))?,
                 distance: self.parse_text(&draft.distance)?,
             },
+            "tangent" => MateKind::Tangent {
+                direction: Axis::from_name(draft.direction.trim())
+                    .ok_or_else(|| CadError::Reference(word(&draft.direction)))?,
+            },
+            "angle" => {
+                let degrees = draft
+                    .turn
+                    .trim()
+                    .parse::<u32>()
+                    .map_err(|_| CadError::ValueOutOfRange("angle"))?;
+                if degrees % 90 != 0 || degrees > 270 {
+                    return Err(CadError::ValueOutOfRange("angle"));
+                }
+                MateKind::Angle {
+                    about: axis()?,
+                    quarters: u8::try_from(degrees / 90).unwrap_or(0),
+                }
+            }
             "align" => MateKind::Align {
                 axis: axis()?,
                 edge: Edge::from_name(draft.edge.trim())
@@ -196,6 +214,15 @@ impl Window {
                 Msg::MateOverlap.tr(lang),
                 direction.name(),
                 mm(distance)
+            ),
+            MateKind::Tangent { direction } => {
+                format!("{} {}", Msg::MateTangent.tr(lang), direction.name())
+            }
+            MateKind::Angle { about, quarters } => format!(
+                "{} {} {}",
+                Msg::MateAngle.tr(lang),
+                about.name(),
+                u32::from(quarters) * 90
             ),
             MateKind::Proportion { axis, permille } => format!(
                 "{} {} {}/1000",

@@ -382,13 +382,18 @@ pub enum ConstraintTool {
     Equidistant,
     /// The angle from the first line to the second is the angle from the third to the fourth.
     EqualAngle,
+    /// Two lines (or two circles or arcs) are in the ratio typed in the value box (`3:2`, `3/2`
+    /// or `3` for `3:1`): the first is that many parts to the second's other part.
+    Proportional,
+    /// The first line picked halves the angle from the second line to the third.
+    Bisector,
     /// Points are held where they are.
     Fixed,
 }
 
 impl ConstraintTool {
     /// Every tool, in the order of the panel.
-    pub const ALL: [ConstraintTool; 15] = [
+    pub const ALL: [ConstraintTool; 17] = [
         ConstraintTool::Coincident,
         ConstraintTool::PointOnObject,
         ConstraintTool::Horizontal,
@@ -403,6 +408,8 @@ impl ConstraintTool {
         ConstraintTool::Midpoint,
         ConstraintTool::Equidistant,
         ConstraintTool::EqualAngle,
+        ConstraintTool::Proportional,
+        ConstraintTool::Bisector,
         ConstraintTool::Fixed,
     ];
 
@@ -423,6 +430,8 @@ impl ConstraintTool {
             ConstraintTool::Midpoint => Msg::CoMidpoint,
             ConstraintTool::Equidistant => Msg::CoEquidistant,
             ConstraintTool::EqualAngle => Msg::CoEqualAngle,
+            ConstraintTool::Proportional => Msg::CoProportional,
+            ConstraintTool::Bisector => Msg::CoBisector,
             ConstraintTool::Fixed => Msg::CoFixed,
         }
     }
@@ -839,6 +848,8 @@ fn constraint_msg(c: &Constraint) -> Msg {
         Constraint::Tangent(..) => Msg::CoTangent,
         Constraint::Equal(..) | Constraint::EqualDistance { .. } => Msg::CoEqual,
         Constraint::EqualAngle { .. } => Msg::CoEqualAngle,
+        Constraint::Proportional { .. } => Msg::CoProportional,
+        Constraint::Bisector { .. } => Msg::CoBisector,
         Constraint::Equidistant { .. } => Msg::CoEquidistant,
         Constraint::Collinear(..) | Constraint::CollinearPoints(..) => Msg::CoCollinear,
         Constraint::Concentric(..) => Msg::CoConcentric,
@@ -856,6 +867,21 @@ fn constraint_msg(c: &Constraint) -> Msg {
         Constraint::AngleBetween { .. } => Msg::DiAngle,
         Constraint::LineAngle { .. } => Msg::DiLineAngle,
         Constraint::PointLineDistance { .. } => Msg::DiPointLine,
+    }
+}
+
+/// The ratio a text says: `3:2` or `3/2` (two whole numbers from 1 to 1000), or `3` for `3:1`.
+pub fn ratio_of(text: &str) -> Option<(u32, u32)> {
+    let text = text.trim();
+    let part = |t: &str| {
+        t.trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|n| (1..=1000).contains(n))
+    };
+    match text.split_once([':', '/']) {
+        Some((a, b)) => Some((part(a)?, part(b)?)),
+        None => Some((part(text)?, 1)),
     }
 }
 
@@ -880,6 +906,8 @@ fn marker_of(c: &Constraint) -> Option<&'static str> {
         | Constraint::EqualDistance { .. }
         | Constraint::EqualAngle { .. }
         | Constraint::Equidistant { .. } => Some("="),
+        Constraint::Proportional { .. } => Some(":"),
+        Constraint::Bisector { .. } => Some("B"),
         Constraint::Collinear(..) | Constraint::CollinearPoints(..) => Some("CL"),
         Constraint::Concentric(..) => Some("CN"),
         Constraint::Coincident(..) => Some("C"),
@@ -1831,6 +1859,29 @@ impl SketchEditor {
                     b: lines[1],
                     c: lines[2],
                     d: lines[3],
+                }]
+            }
+            ConstraintTool::Proportional
+                if all.len() == 2 && (lines.len() == 2 || rounds.len() == 2) =>
+            {
+                let (num, den) = ratio_of(&self.dim_input).ok_or_else(|| {
+                    CadError::SketchConstraint(
+                        "type the ratio first, as 3:2 or 3/2, with whole numbers from 1 to 1000"
+                            .into(),
+                    )
+                })?;
+                vec![Constraint::Proportional {
+                    a: all[0],
+                    b: all[1],
+                    num,
+                    den,
+                }]
+            }
+            ConstraintTool::Bisector if all.len() == 3 && lines.len() == 3 => {
+                vec![Constraint::Bisector {
+                    bisector: lines[0],
+                    a: lines[1],
+                    b: lines[2],
                 }]
             }
             ConstraintTool::Midpoint if all.len() == 2 && points.len() == 1 && lines.len() == 1 => {
@@ -4845,6 +4896,49 @@ mod tests {
     }
 
     #[test]
+    fn a_ratio_is_read_from_the_text_and_a_proportion_or_a_bisector_is_made_of_the_selection() {
+        assert_eq!(ratio_of("3:2"), Some((3, 2)));
+        assert_eq!(ratio_of(" 3 / 2 "), Some((3, 2)));
+        assert_eq!(ratio_of("5"), Some((5, 1)));
+        assert_eq!(ratio_of("1000:1"), Some((1000, 1)));
+        for bad in [
+            "", "0", "3:0", "1001:1", "a:b", "3:", ":3", "3:2:1", "-1", "1.5",
+        ] {
+            assert_eq!(ratio_of(bad), None, "{bad:?}");
+        }
+        let mut e = editor();
+        rectangle(&mut e);
+        pick(&mut e, &[5, 6]);
+        // no ratio typed: the tool is not offered
+        e.dim_input.clear();
+        assert!(!e.available().contains(&ConstraintTool::Proportional));
+        e.dim_input = "3:2".to_string();
+        assert!(e.available().contains(&ConstraintTool::Proportional));
+        e.add_constraint(ConstraintTool::Proportional);
+        let made = e.sketch.constraints().last().unwrap().constraint.clone();
+        assert!(
+            matches!(made, Constraint::Proportional { num: 3, den: 2, .. }),
+            "{made:?}"
+        );
+        assert_eq!(constraint_msg(&made), Msg::CoProportional);
+        assert_eq!(marker_of(&made), Some(":"));
+        pick(&mut e, &[5, 6, 7]);
+        assert!(!e.available().contains(&ConstraintTool::Proportional));
+        assert!(e.available().contains(&ConstraintTool::Bisector));
+        e.add_constraint(ConstraintTool::Bisector);
+        let made = e.sketch.constraints().last().unwrap().constraint.clone();
+        assert!(matches!(made, Constraint::Bisector { .. }), "{made:?}");
+        assert_eq!(constraint_msg(&made), Msg::CoBisector);
+        assert_eq!(marker_of(&made), Some("B"));
+        pick(&mut e, &[5, 6]);
+        assert!(!e.available().contains(&ConstraintTool::Bisector));
+        for l in Lang::ALL {
+            assert!(!Msg::CoProportional.tr(l).is_empty());
+            assert!(!Msg::CoBisector.tr(l).is_empty());
+        }
+    }
+
+    #[test]
     fn equal_ties_every_selected_line_to_the_first_and_concentric_needs_two_circles() {
         let mut e = editor();
         rectangle(&mut e);
@@ -5391,5 +5485,43 @@ mod tests {
         e.offset_selection();
         assert!(matches!(e.status, Status::Error(_)));
         assert_eq!(e.sketch, before);
+    }
+
+    #[test]
+    fn random_texts_are_read_as_a_ratio_or_refused_with_a_fixed_seed() {
+        let mut state = 0x4A71_0016_7E57_0123u64;
+        let mut next = |n: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % n
+        };
+        let pieces = [
+            "0", "1", "2", "7", "999", "1000", "1001", ":", "/", " ", "-", "x", ".", "00", "٣",
+        ];
+        let (mut read, mut refused) = (0, 0);
+        for _ in 0..3000 {
+            let text: String = (0..1 + next(5))
+                .map(|_| pieces[next(pieces.len() as u64) as usize])
+                .collect();
+            match ratio_of(&text) {
+                Some((a, b)) => {
+                    read += 1;
+                    assert!(
+                        (1..=1000).contains(&a) && (1..=1000).contains(&b),
+                        "{text:?}"
+                    );
+                    // what was read is what the text says
+                    let nums: Vec<u32> = text
+                        .split([':', '/'])
+                        .map(|p| p.trim().parse().unwrap())
+                        .collect();
+                    assert_eq!(nums[0], a, "{text:?}");
+                    assert_eq!(nums.get(1).copied().unwrap_or(1), b, "{text:?}");
+                }
+                None => refused += 1,
+            }
+        }
+        assert!(read > 100 && refused > 1000, "{read} {refused}");
     }
 }

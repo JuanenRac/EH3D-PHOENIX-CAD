@@ -478,6 +478,23 @@ pub fn render_titled(
     name: &str,
     lang: Lang,
 ) -> Result<String, CadError> {
+    let d = hatched_drawing(section, drawing)?;
+    Ok(match (title.enabled, dxf) {
+        (false, true) => d.to_dxf(),
+        (false, false) => d.to_svg(drawing),
+        (true, true) => {
+            let block = d.title_block(title, name, "1:1", 6.0, lang);
+            d.to_dxf_with(Some(&block))
+        }
+        (true, false) => d.to_svg_with(drawing, Some((title, name, lang))),
+    })
+}
+
+/// The drawing of a section with its hatching: the outlines on the layer `CONTORNO` and the lines
+/// of the hatch (by material when `drawing.hatch_by_material` is 1) in the spacing of the settings.
+/// Refused with `PHOENIX-CAD-041` when the plane does not cut the model and with `PHOENIX-CAD-050`
+/// when the drawing has more lines than `drawing.max_entities`.
+pub fn hatched_drawing(section: &Section, drawing: &DrawingSettings) -> Result<Drawing, CadError> {
     let mut d = drawing_of(section);
     if d.entities.is_empty() {
         return Err(CadError::Export(
@@ -500,15 +517,7 @@ pub fn render_titled(
         hatch(section, spacing, room)?
     };
     d.entities.extend(hatching);
-    Ok(match (title.enabled, dxf) {
-        (false, true) => d.to_dxf(),
-        (false, false) => d.to_svg(drawing),
-        (true, true) => {
-            let block = d.title_block(title, name, "1:1", 6.0, lang);
-            d.to_dxf_with(Some(&block))
-        }
-        (true, false) => d.to_svg_with(drawing, Some((title, name, lang))),
-    })
+    Ok(d)
 }
 
 /// The report of a section as lines of text in a language: the plane, how many outlines and

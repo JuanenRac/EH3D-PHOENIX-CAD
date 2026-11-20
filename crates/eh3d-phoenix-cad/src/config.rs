@@ -493,6 +493,10 @@ pub struct DrawingSettings {
     /// Whether the sheet of views has the symbol of the projection (first or third angle) under
     /// its lower left corner (1) or not (0).
     pub sheet_symbol: bool,
+    /// Whether the sheet of views carries the cutting line (`cut_line`, `cut_at`, `cut_label`)
+    /// on the first view that shows the plane edge-on and the section of that plane, hatched,
+    /// beside the sheet under the letters twice (`A-A`) (1), or leaves both out (0).
+    pub sheet_section: bool,
     /// The height of the large end of that symbol, from 4 to 50 mm.
     pub sheet_symbol_size: Length,
     /// The paper of the SVG drawing: 0 scales the drawing to `svg_width`, 1 to 5 put it on a
@@ -683,6 +687,7 @@ impl DrawingSettings {
             sheet_gap,
             sheet_legends: flag("drawing.sheet_legends")?,
             sheet_symbol: flag("drawing.sheet_symbol")?,
+            sheet_section: flag("drawing.sheet_section")?,
             sheet_symbol_size,
             paper: paper as u8,
             paper_margin,
@@ -1807,6 +1812,7 @@ markup_percent = 1000
                 sheet_gap: Length::new(20_000_000).unwrap(),
                 sheet_legends: true,
                 sheet_symbol: false,
+                sheet_section: false,
                 sheet_symbol_size: Length::new(10_000_000).unwrap(),
                 paper: 0,
                 paper_margin: Length::new(10_000_000).unwrap(),

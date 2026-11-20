@@ -57,6 +57,7 @@ fn the_help_lists_the_commands_of_the_server_and_the_keys_of_its_section() {
         "server-save",
         "server-load",
         "server-report",
+        "server-check",
         "server_address",
         "PHOENIX_CAD_SERVER_PASSWORD",
     ] {
@@ -112,7 +113,7 @@ fn a_project_is_saved_on_the_server_listed_and_read_back_by_the_program() {
     );
     let (code, out, _) = run(&["server-list", "--config", &cfg]);
     assert_eq!(code, 0);
-    assert_eq!(out, "p-0001  bench box  (1 files)\n");
+    assert_eq!(out, "p-0001  bench box  (2 files)\n");
     let target = dir.file("back.phoenixproj");
     let (code, _, err) = run(&[
         "server-load",
@@ -143,4 +144,78 @@ fn a_project_is_saved_on_the_server_listed_and_read_back_by_the_program() {
     assert_eq!((code, out.as_str()), (1, ""));
     assert!(!err.contains("wrong"), "{err}");
     assert!(!err.is_empty());
+}
+
+const PLATE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/plate.phoenixproj");
+
+#[test]
+fn the_station_checks_a_project_as_the_program_over_a_socket_and_tells_it_in_the_language_asked() {
+    let mem = MemoryStore::new("tok");
+    let served = serve(&mem).unwrap();
+    let dir = Scratch::new("station");
+    let cfg = dir.file("settings.cfg");
+    fs::write(
+        &cfg,
+        format!(
+            "[server]\nserver_address = {}\nserver_token = tok\nserver_machine = cad1\nserver_retries = 0\nserver_timeout_s = 5\n",
+            served.address
+        ),
+    )
+    .unwrap();
+    let (code, out, err) = run(&["server-check", PLATE, "--config", cfg.as_str()]);
+    assert_eq!((code, err.as_str()), (0, ""), "{out}");
+    assert!(
+        out.starts_with("plate: pass (0 errors, 0 warnings)\n"),
+        "{out}"
+    );
+    let (code, out, _) = run(&[
+        "server-check",
+        PLATE,
+        "--kind",
+        "report",
+        "--lang",
+        "fr",
+        "--config",
+        cfg.as_str(),
+    ]);
+    assert_eq!(code, 0);
+    assert!(out.contains("1 pièces, 1 esquisses, 1 fonctions"), "{out}");
+    assert!(out.contains("Preuve : simulateur"), "{out}");
+    // the project was not saved by checking it; saving it makes the second way possible
+    let (code, _, err) = run(&[
+        "server-check",
+        "--stored",
+        "plate",
+        "--config",
+        cfg.as_str(),
+    ]);
+    assert_eq!(code, 1);
+    assert!(
+        err.contains("The server has no project named plate"),
+        "{err}"
+    );
+    let (code, _, _) = run(&["server-save", PLATE, "--config", cfg.as_str()]);
+    assert_eq!(code, 0);
+    assert!(mem.file("plate", "project.json").is_some());
+    let (code, out, _) = run(&[
+        "server-check",
+        "--stored",
+        "plate",
+        "--lang",
+        "it",
+        "--config",
+        cfg.as_str(),
+    ]);
+    assert_eq!(code, 0);
+    assert!(
+        out.starts_with("plate: superato (0 errori, 0 avvisi)\n"),
+        "{out}"
+    );
+    // no address, no machine
+    let (code, _, err) = run(&["server-check", PLATE]);
+    assert_eq!(code, 1);
+    assert!(
+        err.contains("The address of the server is not set"),
+        "{err}"
+    );
 }
