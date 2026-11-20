@@ -124,6 +124,7 @@ pub mod parametric;
 pub mod partlist;
 pub mod partpattern;
 pub mod pattern;
+pub mod pdf;
 pub mod placement;
 pub mod printer;
 pub mod profile;

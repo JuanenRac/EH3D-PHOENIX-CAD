@@ -643,6 +643,7 @@ pub fn format_msg(format: Format) -> Msg {
         Format::SvgFront => Msg::ExportSvgFront,
         Format::SvgSide => Msg::ExportSvgSide,
         Format::SvgSheet => Msg::ExportSvgSheet,
+        Format::PdfSheet => Msg::ExportPdfSheet,
         Format::Report => Msg::ExportReport,
         Format::Bill => Msg::ExportBill,
         Format::Obj => Msg::ExportObj,

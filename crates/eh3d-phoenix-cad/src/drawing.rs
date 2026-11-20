@@ -21,6 +21,7 @@ use crate::assembly::Dim;
 use crate::config::DrawingSettings;
 use crate::enclosure::{Enclosure, Face, FeatureKind, Hole, HoleStyle, Treatment};
 use crate::lang::{fill, Lang, Msg};
+use crate::pdf::{Anchor, Canvas, POINTS_PER_MM};
 use crate::scad::mm_text;
 use crate::schedule;
 use crate::solid::Frame;
@@ -1208,14 +1209,14 @@ impl Drawing {
         self.to_svg_with(settings, None)
     }
 
-    /// The SVG file with a title block under the drawing when the settings of the title block
-    /// are given with the title to use when they have none and the language of the cells. The
-    /// page grows to hold the block.
-    pub fn to_svg_with(
+    /// The layout of the page of the SVG and PDF files: the corners of what is drawn, the gap under the box, the margin, the width of the page in
+    /// millimetres, the scale (millimetres of paper for each millimetre of the model), the size of the page in the units of the drawing and the
+    /// offset that centres the drawing on it.
+    fn page_layout(
         &self,
         settings: &DrawingSettings,
         title: Option<(&TitleBlockSettings, &str, Lang)>,
-    ) -> String {
+    ) -> PageLayout {
         let (mut lo, mut hi) = self.bounds();
         if settings.dimensions {
             hi.0 = hi.0.max(self.legend_right());
@@ -1259,6 +1260,40 @@ impl Drawing {
                     )
                 }
             };
+        PageLayout {
+            lo,
+            hi,
+            gap,
+            margin,
+            page,
+            scale,
+            width,
+            height,
+            off_x,
+            off_y,
+        }
+    }
+
+    /// The SVG file with a title block under the drawing when the settings of the title block
+    /// are given with the title to use when they have none and the language of the cells. The
+    /// page grows to hold the block.
+    pub fn to_svg_with(
+        &self,
+        settings: &DrawingSettings,
+        title: Option<(&TitleBlockSettings, &str, Lang)>,
+    ) -> String {
+        let PageLayout {
+            lo,
+            hi,
+            gap,
+            margin,
+            page,
+            scale,
+            width,
+            height,
+            off_x,
+            off_y,
+        } = self.page_layout(settings, title);
         let line = 0.3 / scale;
         let text_size = 3.2 / scale;
         let num = |v: f64| {
@@ -1501,6 +1536,143 @@ impl Drawing {
         o.push_str("</svg>\n");
         o
     }
+
+    /// The drawing as a PDF file of one page, laid out exactly as [`Drawing::to_svg_with`] lays out its page (the same paper, scale, margin and title block),
+    /// with the lines, circles and arcs of every layer in its colour and dash, the dimensions and the title block in Helvetica. `document_title` is the
+    /// title kept in the file. Nothing is compressed and nothing depends on the date, so the same drawing gives the same bytes.
+    pub fn to_pdf_with(
+        &self,
+        settings: &DrawingSettings,
+        title: Option<(&TitleBlockSettings, &str, Lang)>,
+        document_title: &str,
+    ) -> Vec<u8> {
+        let PageLayout {
+            lo,
+            hi,
+            gap,
+            margin,
+            scale,
+            width,
+            height,
+            off_x,
+            off_y,
+            ..
+        } = self.page_layout(settings, title);
+        let line = 0.3 / scale;
+        let text_size = 3.2 / scale;
+        let px = |x: f64| x - lo.0 + margin + off_x;
+        let py = |y: f64| hi.1 - y + margin + off_y;
+        let mut c = Canvas::new(width, height, scale * POINTS_PER_MM);
+        for layer in [
+            Layer::Outline,
+            Layer::Holes,
+            Layer::Axes,
+            Layer::Hatch,
+            Layer::Hidden,
+            Layer::Frame,
+        ] {
+            let always = matches!(layer, Layer::Outline | Layer::Holes | Layer::Axes);
+            if !always && self.count(layer) == 0 {
+                continue;
+            }
+            c.stroke(layer.svg_colour());
+            c.width(line);
+            c.dash(match layer {
+                Layer::Axes => Some((6.0 / scale, 1.5 / scale)),
+                Layer::Hidden => Some((3.0 / scale, 1.5 / scale)),
+                _ => None,
+            });
+            for (l, e) in &self.entities {
+                if *l != layer {
+                    continue;
+                }
+                match *e {
+                    Entity::Line(a, b) => c.line((px(a.0), py(a.1)), (px(b.0), py(b.1))),
+                    Entity::Circle(m, r) => c.circle((px(m.0), py(m.1)), r),
+                    Entity::Arc(m, r, a0, a1) => c.arc((px(m.0), py(m.1)), r, a0, a1),
+                }
+            }
+        }
+        c.dash(None);
+        c.stroke("#111111");
+        c.fill("#111111");
+        c.width(line);
+        if settings.dimensions {
+            for note in &self.notes {
+                match note.measures {
+                    Some((a, b)) => {
+                        let horizontal = a.1 == b.1;
+                        let off = DIM_OFFSET + DIM_STEP * f64::from(note.level);
+                        let (p0, p1, label_at) = if horizontal {
+                            let y = py(a.1) + off;
+                            ((px(a.0), y), (px(b.0), y), (px((a.0 + b.0) / 2.0), y - 1.2))
+                        } else {
+                            let x = px(a.0) - off;
+                            ((x, py(a.1)), (x, py(b.1)), (x - 1.2, py((a.1 + b.1) / 2.0)))
+                        };
+                        c.line(p0, p1);
+                        for p in [p0, p1] {
+                            let foot = if horizontal {
+                                (p.0, p.1 - off)
+                            } else {
+                                (p.0 + off, p.1)
+                            };
+                            c.line(foot, p);
+                        }
+                        let turn = if horizontal { 0.0 } else { 90.0 };
+                        c.text(label_at, text_size, &note.text, Anchor::Middle, turn);
+                    }
+                    None => c.text(
+                        (px(note.at.0), py(note.at.1)),
+                        text_size,
+                        &note.text,
+                        Anchor::Start,
+                        0.0,
+                    ),
+                }
+            }
+        }
+        if let Some((tb, fallback, lang)) = title {
+            let block = self.title_block(
+                tb,
+                fallback,
+                &scale_label(scale, settings.paper != 0),
+                gap,
+                lang,
+            );
+            for item in &block.items {
+                match item {
+                    Item::Line(a, b) => c.line((px(a.0), py(a.1)), (px(b.0), py(b.1))),
+                    Item::Text { at, height, text } => {
+                        c.text((px(at.0), py(at.1)), *height, text, Anchor::Start, 0.0)
+                    }
+                }
+            }
+        }
+        c.fill("#555555");
+        c.text(
+            (2.0, height - 2.0),
+            text_size,
+            &scale_label(scale, settings.paper != 0),
+            Anchor::Start,
+            0.0,
+        );
+        c.finish(document_title)
+    }
+}
+
+/// The layout of a page, see [`Drawing::page_layout`].
+struct PageLayout {
+    lo: (f64, f64),
+    hi: (f64, f64),
+    gap: f64,
+    margin: f64,
+    page: f64,
+    scale: f64,
+    width: f64,
+    height: f64,
+    off_x: f64,
+    off_y: f64,
 }
 
 /// The lines of a legend for the holes of the face that `view` looks at: one line each with its

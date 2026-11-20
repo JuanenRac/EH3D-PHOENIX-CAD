@@ -54,6 +54,8 @@ pub enum Format {
     SvgSide,
     /// The plan, the front and the side on one sheet, as an SVG drawing.
     SvgSheet,
+    /// The plan, the front and the side on one sheet, as a PDF file of one page.
+    PdfSheet,
     /// The text of the fit report: the measures, whether the board fits and the state of every
     /// step.
     Report,
@@ -70,7 +72,7 @@ pub enum Format {
 
 impl Format {
     /// Every format, in the order of the menu.
-    pub const ALL: [Format; 16] = [
+    pub const ALL: [Format; 17] = [
         Format::Script,
         Format::Step,
         Format::Stl,
@@ -82,6 +84,7 @@ impl Format {
         Format::SvgFront,
         Format::SvgSide,
         Format::SvgSheet,
+        Format::PdfSheet,
         Format::Report,
         Format::Bill,
         Format::Obj,
@@ -97,6 +100,7 @@ impl Format {
             Format::Stl => "stl",
             Format::DxfTop | Format::DxfFront | Format::DxfSide | Format::DxfSheet => "dxf",
             Format::SvgTop | Format::SvgFront | Format::SvgSide | Format::SvgSheet => "svg",
+            Format::PdfSheet => "pdf",
             Format::Report => "txt",
             Format::Bill => "csv",
             Format::Obj => "obj",
@@ -119,6 +123,7 @@ impl Format {
             Format::SvgFront => "svg-front",
             Format::SvgSide => "svg-side",
             Format::SvgSheet => "svg-sheet",
+            Format::PdfSheet => "pdf-sheet",
             Format::Report => "report",
             Format::Bill => "bill",
             Format::Obj => "obj",
@@ -155,7 +160,7 @@ impl Format {
 
     /// Whether the format is a sheet of several views.
     pub fn is_sheet(self) -> bool {
-        matches!(self, Format::DxfSheet | Format::SvgSheet)
+        matches!(self, Format::DxfSheet | Format::SvgSheet | Format::PdfSheet)
     }
 
     /// The view of a drawing format, or `None` for the others and for the sheets.
@@ -286,6 +291,7 @@ pub fn render_titled(
             }
             let tb = &settings.title_block;
             let dxf = format.extension() == "dxf";
+            let pdf = format == Format::PdfSheet;
             if !tb.enabled {
                 if dxf {
                     if let Some(sheet) = drawing.paper_sheet(
@@ -296,6 +302,9 @@ pub fn render_titled(
                     ) {
                         drawing.add_paper_sheet(&sheet);
                     }
+                }
+                if pdf {
+                    return Ok(drawing.to_pdf_with(&settings.drawing, None, name));
                 }
                 text_of(if dxf {
                     drawing.to_dxf()
@@ -320,6 +329,8 @@ pub fn render_titled(
                     drawing.add_paper_sheet(sheet);
                 }
                 text_of(drawing.to_dxf_with(Some(&block)))
+            } else if pdf {
+                Ok(drawing.to_pdf_with(&settings.drawing, Some((tb, name, lang)), name))
             } else {
                 text_of(drawing.to_svg_with(&settings.drawing, Some((tb, name, lang))))
             }
@@ -501,6 +512,7 @@ mod tests {
                 ("svg", "svg-front"),
                 ("svg", "svg-side"),
                 ("svg", "svg-sheet"),
+                ("pdf", "pdf-sheet"),
                 ("txt", "report"),
                 ("csv", "bill"),
                 ("obj", "obj"),
@@ -806,5 +818,150 @@ frame_margin = 8 mm
         assert!(svg.contains("<g id=\"MARCO\""));
         assert!(svg.contains(">Dimensions (mm)</text>"));
         assert_eq!(suggested_name(None, Format::SvgSheet), "box.svg");
+    }
+
+    /// The width in millimetres that the SVG sheet says it has.
+    fn svg_width_mm(svg: &str) -> f64 {
+        let at = svg.find("width=\"").unwrap() + 7;
+        svg[at..].split("mm").next().unwrap().parse().unwrap()
+    }
+
+    #[test]
+    fn the_sheet_is_also_a_pdf_file_with_the_page_of_the_svg_sheet() {
+        assert_eq!(Format::from_name("pdf-sheet"), Some(Format::PdfSheet));
+        assert!(Format::PdfSheet.is_sheet() && Format::PdfSheet.view().is_none());
+        assert_eq!(suggested_name(None, Format::PdfSheet), "box.pdf");
+        let e = enclosure();
+        for config in [
+            "[drawing]\nframe = 1\n",
+            "[drawing]\npaper = 4\nframe = 1\n[title_block]\nenabled = 1\nnumber = P-7\n",
+            "[drawing]\npaper = 3\npaper_portrait = 1\ndimensions = 0\nlegend = 0\n",
+        ] {
+            let settings = Settings::with_user_config(config).unwrap();
+            let pdf =
+                render_titled(Format::PdfSheet, &e, "", &settings, Lang::En, "plate").unwrap();
+            let svg = String::from_utf8(
+                render_titled(Format::SvgSheet, &e, "", &settings, Lang::En, "plate").unwrap(),
+            )
+            .unwrap();
+            let (w, h, objects) = crate::pdf::check(&pdf).expect("a well formed file");
+            assert_eq!(objects, 6);
+            // the page is the one of the SVG sheet, in points
+            let width_mm = svg_width_mm(&svg);
+            assert!(
+                (w / crate::pdf::POINTS_PER_MM - width_mm).abs() < 0.01,
+                "{config}: {w} {width_mm}"
+            );
+            assert!(h > 0.0);
+            // the same marks: every line, circle and arc of the SVG sheet is in the file
+            let text = String::from_utf8_lossy(&pdf).to_string();
+            assert_eq!(
+                text.matches(" l S\n").count(),
+                svg.matches("<line ").count(),
+                "{config}"
+            );
+            assert_eq!(
+                text.matches(" h S\n").count(),
+                svg.matches("<circle ").count(),
+                "{config}"
+            );
+            assert_eq!(
+                text.matches(" c S\n").count(),
+                svg.matches("<path ").count(),
+                "{config}"
+            );
+            assert!(text.contains("/Title (plate)"));
+            // the same settings give the same bytes
+            assert_eq!(
+                pdf,
+                render_titled(Format::PdfSheet, &e, "", &settings, Lang::En, "plate").unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn the_pdf_sheet_carries_the_dimensions_the_title_block_and_the_scale() {
+        let e = enclosure();
+        let settings = Settings::with_user_config(
+            "[drawing]\npaper = 4\n[title_block]\nenabled = 1\nnumber = P-7\nrevision = B\n",
+        )
+        .unwrap();
+        let pdf = render_titled(Format::PdfSheet, &e, "", &settings, Lang::En, "plate").unwrap();
+        let text = String::from_utf8_lossy(&pdf).to_string();
+        // the cells and their values, the scale and a dimension of the box
+        for word in ["(Drawing number)", "(P-7)", "(B)", "(plate)", "(1:"] {
+            assert!(text.contains(word), "{word}");
+        }
+        // the dashed layers have their pattern and the file goes back to continuous lines
+        assert!(text.contains(" 0 d\n") && text.contains("[] 0 d\n"));
+        // in German the cells have umlauts: they are written as the codes of the encoding, not as UTF-8
+        let de = render_titled(Format::PdfSheet, &e, "", &settings, Lang::De, "plate").unwrap();
+        assert!(de.is_ascii());
+        // Japanese has no glyph in the font: question marks, and the file is still well formed
+        let ja = render_titled(Format::PdfSheet, &e, "", &settings, Lang::Ja, "plate").unwrap();
+        assert!(crate::pdf::check(&ja).is_some() && ja.is_ascii());
+    }
+
+    /// A small generator with a fixed seed (xorshift), so that a failure can be repeated.
+    struct Rng(u64);
+
+    impl Rng {
+        fn draw(&mut self, below: u64) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0 % below
+        }
+    }
+
+    #[test]
+    fn sheets_of_random_boxes_and_papers_are_well_formed_pdf_files_with_a_fixed_seed() {
+        for seed in 1..=30u64 {
+            let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let mm = |v: u64| Length::from_mm(v as i64).unwrap();
+            let e = Enclosure::new(EnclosureParams {
+                inner_length: mm(40 + rng.draw(160)),
+                inner_width: mm(30 + rng.draw(120)),
+                inner_height: mm(15 + rng.draw(60)),
+                wall: mm(2),
+                floor: mm(2),
+                lid: mm(3),
+                edge_margin: mm(3),
+                min_web: mm(2),
+            })
+            .unwrap();
+            let config = format!(
+                "[drawing]\npaper = {}\npaper_portrait = {}\ndimensions = {}\nlegend = {}\nframe = {}\nhidden_lines = {}\n[title_block]\nenabled = {}\nnumber = N{seed}\n",
+                rng.draw(6),
+                rng.draw(2),
+                rng.draw(2),
+                rng.draw(2),
+                rng.draw(2),
+                rng.draw(2),
+                rng.draw(2)
+            );
+            let settings = Settings::with_user_config(&config).unwrap();
+            let lang = Lang::ALL[rng.draw(8) as usize];
+            let pdf = render_titled(Format::PdfSheet, &e, "", &settings, lang, "box").unwrap();
+            let svg = String::from_utf8(
+                render_titled(Format::SvgSheet, &e, "", &settings, lang, "box").unwrap(),
+            )
+            .unwrap();
+            let (w, _, objects) = crate::pdf::check(&pdf)
+                .unwrap_or_else(|| panic!("seed {seed}: not well formed\n{config}"));
+            assert_eq!(objects, 6, "seed {seed}");
+            assert!(pdf.is_ascii(), "seed {seed}");
+            let width_mm = svg_width_mm(&svg);
+            assert!(
+                (w / crate::pdf::POINTS_PER_MM - width_mm).abs() < 0.01,
+                "seed {seed}: {w} {width_mm}\n{config}"
+            );
+            let text = String::from_utf8_lossy(&pdf).to_string();
+            assert_eq!(
+                text.matches(" l S\n").count(),
+                svg.matches("<line ").count(),
+                "seed {seed}\n{config}"
+            );
+        }
     }
 }

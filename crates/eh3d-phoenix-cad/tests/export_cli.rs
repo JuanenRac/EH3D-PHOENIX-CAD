@@ -583,3 +583,52 @@ fn a_dxf_drawing_on_paper_carries_the_sheet_and_the_scale_in_its_title_block() {
     let (w, h) = first_border(&fs::read_to_string(&upright).unwrap());
     assert!(h > w && (210.0 / w - 297.0 / h).abs() < 1e-9, "{w} x {h}");
 }
+
+#[test]
+fn the_sheet_is_written_as_a_pdf_file_and_a_pdf_takes_no_single_view() {
+    let dir = Scratch::new("pdf");
+    let out = dir.file("box.pdf");
+    let (code, text, err) = run(&[
+        "export",
+        EXAMPLE,
+        "--format",
+        "pdf",
+        "--out",
+        &out,
+        "--lang",
+        "en",
+        "--title-field",
+        "number=P-9",
+    ]);
+    assert_eq!(code, 0, "{text} {err}");
+    assert!(text.starts_with("Exported box.pdf ("), "{text}");
+    let bytes = fs::read(&out).unwrap();
+    assert!(bytes.starts_with(b"%PDF-1.4\n"));
+    let (width, height, objects) = eh3d_phoenix_cad::pdf::check(&bytes).expect("well formed");
+    assert!(width > 100.0 && height > 100.0 && objects == 6);
+    let page = String::from_utf8_lossy(&bytes);
+    assert!(page.contains("(P-9)") && page.contains("(Drawing number)"));
+    // the file is not written over, and the sheet is the only page
+    let (code, _, err) = run(&["export", EXAMPLE, "--format", "pdf", "--out", &out]);
+    assert_eq!(code, 1);
+    assert!(err.contains("PHOENIX-CAD-"), "{err}");
+    let (code, _, err) = run(&["export", EXAMPLE, "--format", "pdf", "--view", "top"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("pdf is always the sheet"), "{err}");
+    // --view sheet is the same sheet
+    let again = dir.file("again.pdf");
+    let (code, text, err) = run(&[
+        "export",
+        EXAMPLE,
+        "--format",
+        "pdf",
+        "--view",
+        "sheet",
+        "--out",
+        &again,
+        "--title-field",
+        "number=P-9",
+    ]);
+    assert_eq!(code, 0, "{text} {err}");
+    assert_eq!(fs::read(&again).unwrap(), bytes);
+}
