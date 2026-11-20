@@ -49,6 +49,7 @@
 //! * [`sketch`]: the 2D sketch on a face of the box: points, lines, circles, arcs, polylines and rectangles, geometric and dimensional constraints (a dimension may be an expression over the variables), a numeric solver that reports the degrees of freedom left, the constraints that repeat or contradict each other, or that it did not converge, its settings file, the sketch file (the way in and out of a sketch) and the domain `sketch` of the project file, where the sketches of a project are kept;
 //! * [`profile`]: the closed outlines of a sketch (chains of lines and arcs and circles, with the holes found by containment), checked for being closed, simple and large enough, with their area; the extrusions and pockets of the enclosure are made from them;
 //! * [`projection`], [`drag`] and [`measure`]: the lines of the drawing put on a pane and the way back from a point of the pane to a point of a plane of the model, the picking and the snapping of what is dragged with the mouse, and the distances and angles between points and edges of the model;
+//! * [`server`] and [`serverfake`]: the way to the EH3D server, a project saved on it as a new version of its file and read back, and the reports of a project sent to it, over the client of the suite (`eh3d-serverclient`), with the keys `server_address`, `server_token`, `server_machine`, `server_timeout_s`, `server_retries`, `server_mdns` and `server_max_answer_mib` in the section `[server]` of the settings and a store in memory for the tests;
 //! * [`export`]: writing the script, the STEP file and the text of the fit report to a file chosen from the window, with the checks that nothing is written over a file unless it was ordered, nor over the project that is open;
 //! * [`window`], [`scene`], [`history`], [`uiconfig`], [`lang`], [`shot`] and [`browse`]: the state of the window (the tree of the model, the properties, the
 //!   views, the history of the changes), the lines it draws, its settings, its texts in the eight languages, the picture mode and the list of files; the window itself is
@@ -129,6 +130,9 @@ pub mod scad;
 pub mod scene;
 pub mod schedule;
 pub mod section;
+pub mod server;
+pub mod server_cli;
+pub mod serverfake;
 pub mod shot;
 pub mod sketch;
 pub mod sketch_export;

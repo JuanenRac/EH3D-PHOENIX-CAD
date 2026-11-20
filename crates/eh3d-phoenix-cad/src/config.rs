@@ -874,6 +874,8 @@ pub struct Settings {
     pub placement: PlacementSettings,
     /// The settings of the title block of the drawings.
     pub title_block: TitleBlockSettings,
+    /// The link to the EH3D server (`[server]`): the keys of the client of the suite.
+    pub server: eh3d_serverclient::Settings,
     /// The named values that expressions can use: the sizes of the screws, the compensation of the
     /// printer and the `[constants]` of the settings.
     pub constants: Constants,
@@ -1158,6 +1160,7 @@ impl Settings {
         let clearance = ClearanceSettings::from_config(c)?;
         let placement = PlacementSettings::from_config(c)?;
         let title_block = TitleBlockSettings::from_config(c)?;
+        let server = crate::server::from_config(c)?;
         let constants = build_constants(c, &screws, &printer, counterbore_extra, &expr)?;
         Ok(Settings {
             backups,
@@ -1182,6 +1185,7 @@ impl Settings {
             clearance,
             placement,
             title_block,
+            server,
             constants,
         })
     }

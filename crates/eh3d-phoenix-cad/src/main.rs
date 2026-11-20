@@ -42,6 +42,11 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill|order [--view top|front|side|sheet] [--out FILE] [--overwrite] [--ascii|--binary] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), as a Wavefront file (obj) or as a 3MF package (3mf), the plan, front or side, or all three on one sheet, as a drawing (dxf, svg), the STEP file, the OpenSCAD-style script, the fit report, the bill of materials or the order sheet (an HTML page with the bars to buy, the holes to drill and the parts with their cost, in the language of --lang)
   eh3d-phoenix-cad faces PROJECT.phoenixproj --from FACE[:inner|:outer] --to FACE[:inner|:outer] [--lang CODE] [--config FILE]   measures between two faces of the box (front, back, left, right, top or bottom, the outer face of the wall unless :inner is given): the distance in millimetres between parallel faces (a wall, the inner height, the outer width) and the angle, 0 for parallel faces and 90 for faces that meet; the same face on the same side is refused
   eh3d-phoenix-cad sketch-edit SKETCH.phoenixsketch --op chamfer|trim|extend|linear|circular|offset [--out FILE] [--overwrite] [--config FILE] ...   edits a sketch file the way the buttons of the sketch window do (elements are named as in the file, like e5; lengths are in mm or with a unit): chamfer --lines e5,e6 --distance 3; trim --line e5 --cutter e6 [--drop e1]; extend --line e5 --to e6; linear --items e1,e2 --step DX,DY --count N; circular --items e1 --center e3 --count N [--step DEGREES]; offset --items e5,e6,e7,e8 --distance D (negative goes inwards); the edited sketch is written to --out, or over the file itself with --overwrite, and a refused edit writes nothing
+  eh3d-phoenix-cad server-status [--lang CODE] [--config FILE]                    asks the EH3D server named in the [server] section of the settings (server_address, server_token, server_machine, server_timeout_s, server_retries, server_mdns, server_max_answer_mib) how it is: its name, version and state; with no address nothing is sent anywhere
+  eh3d-phoenix-cad server-list [TEXT] [--user NAME] [--lang CODE] [--config FILE]        lists the projects this program keeps on the server (those whose name has TEXT, in any letter case); without a token in the settings, --user logs in with the password in the variable PHOENIX_CAD_SERVER_PASSWORD
+  eh3d-phoenix-cad server-save PROJECT.phoenixproj [--name NAME] [--comment TEXT] [--user NAME] [--lang CODE] [--config FILE]   saves a project file on the server as a new version of the file of the project NAME (the name of the file without --name; the project is made when the server has none of that name, the write says which version it is made from, and the same bytes make no version)
+  eh3d-phoenix-cad server-load NAME --out FILE [--overwrite] [--user NAME] [--lang CODE] [--config FILE]   reads the project NAME from the server, checks it is a project file and writes it to FILE, never over a file that exists unless --overwrite is given
+  eh3d-phoenix-cad server-report NAME --from FILE [--report NAME] [--comment TEXT] [--user NAME] [--lang CODE] [--config FILE]   sends a report (a text file such as the output of bom, partlist or holes) to the folder of reports of the project NAME on the server, as a new version of the file REPORT (the name of the file without --report)
   eh3d-phoenix-cad config                                                         every setting of the library, of the window and of the sketch with its default value, as a file for --config
 
 --open FILE is the same as giving the file by itself; a sketch file opens the window on the sketch. --lang takes en, es, de, fr, it, ja, zh or pt; without it the language of the system is used (the reports cutplan, clearance, placements, holes and balance and the answer of sketch-export are in English unless --lang is given; with --text the first four are lines for a person in that language instead of comma separated values).
@@ -1465,6 +1470,11 @@ fn run(args: &[String]) -> Result<bool, String> {
         "faces" => run_faces(rest),
         "sketch-edit" => run_sketch_edit(rest),
         "export" => run_export(rest),
+        c if eh3d_phoenix_cad::server_cli::COMMANDS.contains(&c) => {
+            let out = eh3d_phoenix_cad::server_cli::run(c, rest)?;
+            print!("{out}");
+            Ok(true)
+        }
         "gui" => Err("this build has no window: build it with --features gui".to_owned()),
         other => Err(format!("{other}: unknown command (see help)")),
     }

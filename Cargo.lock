@@ -105,7 +105,12 @@ name = "eh3d-phoenix-cad"
 version = "0.0.9"
 dependencies = [
  "eh3d-container",
+ "eh3d-serverclient",
 ]
+
+[[package]]
+name = "eh3d-serverclient"
+version = "0.0.1"
 
 [[package]]
 name = "equivalent"
