@@ -1190,3 +1190,49 @@ fn the_bill_by_assembly_has_a_bill_for_each_set_of_parts_that_mates_join() {
     assert_eq!(code, 1, "{err}");
     assert!(err.contains("cannot be given together"), "{err}");
 }
+
+#[test]
+fn the_section_drawing_hatches_each_material_at_its_own_angle_when_the_settings_ask() {
+    let dir = Scratch::new("hatch-by-material");
+    let plain = dir.file("plain.dxf");
+    let by = dir.file("by.dxf");
+    let other = dir.file("other.dxf");
+    let (code, _, err) = run(&[
+        "section", ASSEMBLY, "--axis", "z", "--at", "5", "--out", &plain,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let config = dir.file("by.cfg");
+    fs::write(&config, "[drawing]\nhatch_by_material = 1\n").unwrap();
+    let (code, _, err) = run(&[
+        "section", ASSEMBLY, "--axis", "z", "--at", "5", "--out", &by, "--config", &config,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let config = dir.file("other.cfg");
+    fs::write(
+        &config,
+        "[drawing]\nhatch_by_material = 1\nhatch_angles = 0 90 45 135 60 120 30 150\n",
+    )
+    .unwrap();
+    let (code, _, err) = run(&[
+        "section", ASSEMBLY, "--axis", "z", "--at", "5", "--out", &other, "--config", &config,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let (plain, by, other) = (
+        fs::read_to_string(&plain).unwrap(),
+        fs::read_to_string(&by).unwrap(),
+        fs::read_to_string(&other).unwrap(),
+    );
+    let hatch = |t: &str| t.matches("0\nLINE\n8\nRAYADO\n").count();
+    assert!(hatch(&plain) > 10 && hatch(&by) > 10 && hatch(&other) > 10);
+    // the part and the box are of different materials: they are hatched apart, at other angles
+    assert_ne!(plain, by);
+    assert_ne!(by, other);
+    // a list of angles that repeats one is refused with its key
+    let bad = dir.file("bad.cfg");
+    fs::write(&bad, "[drawing]\nhatch_angles = 0 0 45 135 60 120 30 150\n").unwrap();
+    let (code, _, err) = run(&[
+        "section", ASSEMBLY, "--axis", "z", "--at", "5", "--config", &bad,
+    ]);
+    assert_eq!(code, 1);
+    assert!(err.contains("drawing.hatch_angles"), "{err}");
+}

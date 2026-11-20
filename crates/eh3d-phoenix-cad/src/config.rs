@@ -404,6 +404,12 @@ pub struct DrawingSettings {
     /// The distance between the hatching lines of a section drawing, measured across them; zero
     /// leaves the hatching out.
     pub hatch_spacing: Length,
+    /// Whether the material of each solid of a section drawing is hatched at an angle of its own
+    /// (1, with the angles below) or all of it at the first angle (0).
+    pub hatch_by_material: bool,
+    /// The angles of the hatching of the materials, in degrees from the first axis of the drawing
+    /// (0 to 179, all different), used in turn in the order of the names of the materials.
+    pub hatch_angles: [u16; 8],
     /// Whether the drawing of a view has a legend with the list of its dimensions (the size of the
     /// box, the thickness of its walls, floor and lid, and the tag, diameter and position of each
     /// hole of the face the view looks at) to the right of the box (1) or not (0). It is written
@@ -444,6 +450,39 @@ pub struct DrawingSettings {
 }
 
 impl DrawingSettings {
+    /// The eight angles of `drawing.hatch_angles`: whole degrees from 0 to 179 separated by
+    /// spaces, all different.
+    fn hatch_angles_of(c: &Config) -> Result<[u16; 8], CadError> {
+        let bad = || {
+            CadError::Config(
+                "drawing.hatch_angles must be eight different whole numbers of degrees from 0 to 179"
+                    .into(),
+            )
+        };
+        let text = c
+            .get("drawing.hatch_angles")
+            .ok_or_else(|| CadError::Config("drawing.hatch_angles is missing".into()))?;
+        let mut angles = [0u16; 8];
+        let mut words = text.split_whitespace();
+        for slot in &mut angles {
+            let w = words.next().ok_or_else(bad)?;
+            *slot = w
+                .parse::<u16>()
+                .ok()
+                .filter(|a| *a <= 179)
+                .ok_or_else(bad)?;
+        }
+        if words.next().is_some() {
+            return Err(bad());
+        }
+        for (k, a) in angles.iter().enumerate() {
+            if angles[..k].contains(a) {
+                return Err(bad());
+            }
+        }
+        Ok(angles)
+    }
+
     /// The most entities that can be asked for.
     pub const ENTITIES_CAP: u32 = 5_000_000;
 
@@ -491,6 +530,7 @@ impl DrawingSettings {
                 "drawing.hatch_spacing must be 0 or from 0.2 mm to 100 mm".into(),
             ));
         }
+        let hatch_angles = Self::hatch_angles_of(c)?;
         let max_dimensions = c.number("drawing.max_dimensions")?;
         if !(1..=Self::DIMENSIONS_CAP).contains(&max_dimensions) {
             return Err(CadError::Config(format!(
@@ -552,6 +592,8 @@ impl DrawingSettings {
             hole_dimensions: flag("drawing.hole_dimensions")?,
             max_dimensions,
             hatch_spacing,
+            hatch_by_material: flag("drawing.hatch_by_material")?,
+            hatch_angles,
             legend: flag("drawing.legend")?,
             legend_gap,
             hidden_lines: flag("drawing.hidden_lines")?,
@@ -1670,6 +1712,8 @@ markup_percent = 1000
                 hole_dimensions: true,
                 max_dimensions: 40,
                 hatch_spacing: Length::new(2_000_000).unwrap(),
+                hatch_by_material: false,
+                hatch_angles: [135, 45, 90, 0, 60, 120, 30, 150],
                 legend: true,
                 legend_gap: Length::new(10_000_000).unwrap(),
                 hidden_lines: true,
@@ -1741,5 +1785,36 @@ markup_percent = 1000
         ] {
             assert!(Settings::with_user_config(text).is_ok(), "{text:?}");
         }
+    }
+
+    #[test]
+    fn the_angles_of_the_hatching_by_material_are_eight_different_whole_degrees() {
+        let s = Settings::defaults().drawing;
+        assert!(!s.hatch_by_material);
+        assert_eq!(s.hatch_angles, [135, 45, 90, 0, 60, 120, 30, 150]);
+        let own = Settings::with_user_config(
+            "[drawing]\nhatch_by_material = 1\nhatch_angles = 0 10 20 30 40 50 60 179\n",
+        )
+        .unwrap()
+        .drawing;
+        assert!(own.hatch_by_material);
+        assert_eq!(own.hatch_angles, [0, 10, 20, 30, 40, 50, 60, 179]);
+        for bad in [
+            "1 2 3",
+            "0 10 20 30 40 50 60 180",
+            "0 10 20 30 40 50 60 60",
+            "0 10 20 30 40 50 60 70 80",
+            "a b c d e f g h",
+            "-1 10 20 30 40 50 60 70",
+            "",
+        ] {
+            let text = format!("[drawing]\nhatch_angles = {bad}\n");
+            let e = Settings::with_user_config(&text).unwrap_err().to_string();
+            assert!(e.contains("drawing.hatch_angles"), "{bad}: {e}");
+        }
+        let e = Settings::with_user_config("[drawing]\nhatch_by_material = 2\n")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("hatch_by_material must be 0 or 1"), "{e}");
     }
 }

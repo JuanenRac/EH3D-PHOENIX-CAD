@@ -39,6 +39,8 @@ type EdgeKey = (u32, u32);
 pub struct Contour {
     /// The name of the solid that it belongs to.
     pub body: String,
+    /// The material of that solid; empty for the box.
+    pub material: String,
     /// The corners, in nanometres in the plane of the drawing; the last joins the first.
     pub points: Vec<(f64, f64)>,
     /// The area it holds, in square nanometres: positive for an outer outline of material and
@@ -180,6 +182,7 @@ pub fn cut(bodies: &[Body], axis: Dim, position: Length) -> Section {
             let area_nm2 = handed * signed_area(&points);
             contours.push(Contour {
                 body: body.name.clone(),
+                material: body.material.clone(),
                 points,
                 area_nm2,
             });
@@ -268,6 +271,113 @@ pub fn hatch(
                 "the hatching has more than the {limit} lines the settings allow"
             )));
         }
+    }
+    Ok(out)
+}
+
+/// The lines of one family of hatching: parallel lines `angle_deg` degrees from the first axis of
+/// the drawing, `spacing_mm` apart measured across them, clipped to the material of `contours` by
+/// the even-odd rule, as [`hatch`] does for 135 degrees. Refused with `PHOENIX-CAD-050` when the
+/// lines would be more than `limit`.
+fn hatch_lines(
+    contours: &[&Contour],
+    angle_deg: f64,
+    spacing_mm: f64,
+    limit: usize,
+) -> Result<Vec<(Layer, Entity)>, CadError> {
+    let mm = |v: f64| v / 1_000_000.0;
+    if spacing_mm <= 0.0 || contours.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (dy, dx) = angle_deg.to_radians().sin_cos();
+    let (nx, ny) = (-dy, dx);
+    let across = |p: (f64, f64)| mm(p.0) * nx + mm(p.1) * ny;
+    let (mut lo, mut hi) = (f64::MAX, f64::MIN);
+    for p in contours.iter().flat_map(|c| &c.points) {
+        let t = across(*p);
+        lo = lo.min(t);
+        hi = hi.max(t);
+    }
+    let first = (lo / spacing_mm).floor() as i64 + 1;
+    let last = (hi / spacing_mm).ceil() as i64 - 1;
+    if last < first {
+        return Ok(Vec::new());
+    }
+    if (last - first + 1) as usize > limit {
+        return Err(CadError::ExportLimit(format!(
+            "the hatching would have {} lines, more than the {limit} the settings allow",
+            last - first + 1
+        )));
+    }
+    let mut out = Vec::new();
+    for n in first..=last {
+        let t = n as f64 * spacing_mm;
+        // where the line meets an edge of an outline, as the distance along the line; an edge
+        // counts when its ends are on different sides, the lower end being on the line's side
+        let mut crossings: Vec<f64> = Vec::new();
+        for c in contours {
+            for (i, p) in c.points.iter().enumerate() {
+                let q = c.points[(i + 1) % c.points.len()];
+                let (a, b) = (across(*p), across(q));
+                if (a <= t) == (b <= t) {
+                    continue;
+                }
+                let u = (t - a) / (b - a);
+                let x = mm(p.0) + u * (mm(q.0) - mm(p.0));
+                let y = mm(p.1) + u * (mm(q.1) - mm(p.1));
+                crossings.push(x * dx + y * dy);
+            }
+        }
+        crossings.sort_by(f64::total_cmp);
+        for pair in crossings.windows(2).step_by(2) {
+            if pair[1] - pair[0] > 1e-9 {
+                let at = |w: f64| (w * dx + t * nx, w * dy + t * ny);
+                out.push((Layer::Hatch, Entity::Line(at(pair[0]), at(pair[1]))));
+            }
+        }
+        if out.len() > limit {
+            return Err(CadError::ExportLimit(format!(
+                "the hatching has more than the {limit} lines the settings allow"
+            )));
+        }
+    }
+    Ok(out)
+}
+
+/// The materials of a section in the order of their names (the box, which has none, first) and
+/// the angle of the hatching of each: the angles of the settings in turn, starting again when
+/// there are more materials than angles.
+pub fn hatch_key(section: &Section, angles: &[u16; 8]) -> Vec<(String, u16)> {
+    let names: BTreeSet<&str> = section
+        .contours
+        .iter()
+        .map(|c| c.material.as_str())
+        .collect();
+    names
+        .into_iter()
+        .enumerate()
+        .map(|(k, m)| (m.to_string(), angles[k % angles.len()]))
+        .collect()
+}
+
+/// The hatching of a section with an angle for each material (see [`hatch_key`]), so that the
+/// parts of a drawing can be told apart: each material is hatched on its own, by the even-odd rule
+/// over its own outlines. The lines of all of them together are limited to `limit`.
+pub fn hatch_by_material(
+    section: &Section,
+    angles: &[u16; 8],
+    spacing_mm: f64,
+    limit: usize,
+) -> Result<Vec<(Layer, Entity)>, CadError> {
+    let mut out = Vec::new();
+    for (material, angle) in hatch_key(section, angles) {
+        let group: Vec<&Contour> = section
+            .contours
+            .iter()
+            .filter(|c| c.material == material)
+            .collect();
+        let room = limit.saturating_sub(out.len());
+        out.extend(hatch_lines(&group, f64::from(angle), spacing_mm, room)?);
     }
     Ok(out)
 }
@@ -384,7 +494,12 @@ pub fn render_titled(
     // the hatching comes after the outlines and counts with them against the limit
     let room = drawing.max_entities as usize - d.entities.len();
     let spacing = drawing.hatch_spacing.get() as f64 / 1_000_000.0;
-    d.entities.extend(hatch(section, spacing, room)?);
+    let hatching = if drawing.hatch_by_material {
+        hatch_by_material(section, &drawing.hatch_angles, spacing, room)?
+    } else {
+        hatch(section, spacing, room)?
+    };
+    d.entities.extend(hatching);
     Ok(match (title.enabled, dxf) {
         (false, true) => d.to_dxf(),
         (false, false) => d.to_svg(drawing),
@@ -736,5 +851,189 @@ mod tests {
         small.max_entities = 7;
         // (the minimum the settings allow is 8, so this only tests the check itself)
         assert!(render_titled(&s, &small, true, &off, "box", Lang::En).is_err());
+    }
+
+    fn square(body: &str, material: &str, at: (f64, f64), side: f64, hole: bool) -> Contour {
+        let (x0, x1) = (at.0 * 1e6, (at.0 + side) * 1e6);
+        let (y0, y1) = (at.1 * 1e6, (at.1 + side) * 1e6);
+        let mut points = vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1)];
+        if hole {
+            points.reverse();
+        }
+        Contour {
+            body: body.into(),
+            material: material.into(),
+            points,
+            area_nm2: if hole { -1.0 } else { 1.0 } * side * side * 1e12,
+        }
+    }
+
+    fn two_materials() -> Section {
+        Section {
+            axis: Dim::Z,
+            position: Length::ZERO,
+            contours: vec![
+                square("plate", "steel", (0.0, 0.0), 20.0, false),
+                square("cover", "PLA", (40.0, 0.0), 20.0, false),
+            ],
+        }
+    }
+
+    const ANGLES: [u16; 8] = [135, 45, 90, 0, 60, 120, 30, 150];
+
+    fn direction(e: &Entity) -> (f64, f64) {
+        let Entity::Line(a, b) = *e else {
+            panic!("not a line: {e:?}");
+        };
+        let len = ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+        ((b.0 - a.0) / len, (b.1 - a.1) / len)
+    }
+
+    #[test]
+    fn each_material_of_a_section_is_hatched_at_an_angle_of_its_own() {
+        let s = two_materials();
+        // the names in order: PLA (capitals first) takes the first angle, steel the second
+        assert_eq!(
+            hatch_key(&s, &ANGLES),
+            vec![("PLA".to_string(), 135), ("steel".to_string(), 45)]
+        );
+        let lines = hatch_by_material(&s, &ANGLES, 2.0, 100_000).unwrap();
+        let (mut pla, mut steel) = (0usize, 0usize);
+        for (layer, e) in &lines {
+            assert_eq!(*layer, Layer::Hatch);
+            let Entity::Line(a, b) = *e else { panic!() };
+            let (dx, dy) = direction(e);
+            if a.0 > 30.0 {
+                // the cover (PLA) at 135 degrees: x + y is the same at both ends
+                assert!((a.0 + a.1 - (b.0 + b.1)).abs() < 1e-6, "{e:?}");
+                assert!((dx + dy).abs() < 1e-6);
+                let (lo, hi) = (a.0.min(b.0), a.0.max(b.0));
+                assert!(lo >= 40.0 - 1e-6 && hi <= 60.0 + 1e-6, "{e:?}");
+                assert!(a.1 >= -1e-6 && a.1 <= 20.0 + 1e-6, "{e:?}");
+                pla += 1;
+            } else {
+                // the plate (steel) at 45 degrees: x - y is the same at both ends
+                assert!((a.0 - a.1 - (b.0 - b.1)).abs() < 1e-6, "{e:?}");
+                assert!((dx - dy).abs() < 1e-6);
+                assert!(
+                    a.0.min(b.0) >= -1e-6 && a.0.max(b.0) <= 20.0 + 1e-6,
+                    "{e:?}"
+                );
+                steel += 1;
+            }
+        }
+        // two squares of the same size have the same number of lines, give or take the one that
+        // a corner decides
+        assert!(pla.abs_diff(steel) <= 1, "{pla} {steel}");
+        assert!(pla > 8, "{pla}");
+        // the same section always gives the same lines
+        assert_eq!(hatch_by_material(&s, &ANGLES, 2.0, 100_000).unwrap(), lines);
+    }
+
+    #[test]
+    fn a_hole_is_not_hatched_and_one_material_is_hatched_as_the_plain_hatching_is() {
+        let mut s = Section {
+            axis: Dim::Z,
+            position: Length::ZERO,
+            contours: vec![
+                square("plate", "steel", (0.0, 0.0), 40.0, false),
+                square("plate", "steel", (10.0, 10.0), 20.0, true),
+            ],
+        };
+        let lines = hatch_by_material(&s, &ANGLES, 2.0, 100_000).unwrap();
+        for (_, e) in &lines {
+            let Entity::Line(a, b) = *e else { panic!() };
+            let mid = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+            assert!(
+                !(mid.0 > 10.0 && mid.0 < 30.0 && mid.1 > 10.0 && mid.1 < 30.0),
+                "{e:?}"
+            );
+        }
+        // one material at the first angle (135) is the hatching at 45 degrees of the plain one
+        s.contours
+            .iter_mut()
+            .for_each(|c| c.material = "steel".into());
+        let one = hatch_by_material(&s, &[135, 0, 1, 2, 3, 4, 5, 6], 2.0, 100_000).unwrap();
+        let plain = hatch(&s, 2.0, 100_000).unwrap();
+        assert_eq!(one.len(), plain.len());
+        // the same lines, each walked from the other end and in the other order
+        let ends = |lines: &[(Layer, Entity)]| {
+            let mut v: Vec<[f64; 4]> = lines
+                .iter()
+                .map(|(_, e)| {
+                    let Entity::Line(a, b) = *e else { panic!() };
+                    let (p, q) = if (a.0, a.1) <= (b.0, b.1) {
+                        (a, b)
+                    } else {
+                        (b, a)
+                    };
+                    [p.0, p.1, q.0, q.1]
+                })
+                .collect();
+            v.sort_by_key(|x| ((x[0] * 1e6).round() as i64, (x[1] * 1e6).round() as i64));
+            v
+        };
+        for (x, y) in ends(&one).iter().zip(ends(&plain).iter()) {
+            for (p, q) in x.iter().zip(y.iter()) {
+                assert!((p - q).abs() < 1e-6, "{x:?} {y:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_angles_start_again_after_the_eighth_material_and_the_limit_is_shared() {
+        let mut s = Section {
+            axis: Dim::Z,
+            position: Length::ZERO,
+            contours: Vec::new(),
+        };
+        for k in 0..10 {
+            let name = format!("m{k}");
+            s.contours
+                .push(square(&name, &name, (k as f64 * 30.0, 0.0), 20.0, false));
+        }
+        let key = hatch_key(&s, &ANGLES);
+        assert_eq!(key.len(), 10);
+        assert_eq!(key[8].1, ANGLES[0]);
+        assert_eq!(key[9].1, ANGLES[1]);
+        let all = hatch_by_material(&s, &ANGLES, 4.0, 100_000).unwrap();
+        assert!(all.len() > 10);
+        // the lines of all the materials together count against the limit
+        let err = hatch_by_material(&s, &ANGLES, 4.0, all.len() - 1).unwrap_err();
+        assert_eq!(err.code(), "PHOENIX-CAD-050");
+        assert!(hatch_by_material(&s, &ANGLES, 4.0, all.len() + 10).is_ok());
+        // a spacing of nothing and a section with nothing have no lines
+        assert!(hatch_by_material(&s, &ANGLES, 0.0, 10).unwrap().is_empty());
+        let none = Section {
+            axis: Dim::Z,
+            position: Length::ZERO,
+            contours: Vec::new(),
+        };
+        assert!(hatch_by_material(&none, &ANGLES, 2.0, 10)
+            .unwrap()
+            .is_empty());
+        assert!(hatch_key(&none, &ANGLES).is_empty());
+    }
+
+    #[test]
+    fn the_files_of_a_section_are_hatched_by_material_when_the_settings_ask() {
+        let s = two_materials();
+        let off = TitleBlockSettings::off();
+        let mut settings = Settings::defaults().drawing;
+        let plain = render_titled(&s, &settings, true, &off, "x", Lang::En).unwrap();
+        settings.hatch_by_material = true;
+        let by = render_titled(&s, &settings, true, &off, "x", Lang::En).unwrap();
+        assert_ne!(plain, by);
+        let count = |t: &str| t.matches("0\nLINE\n8\nRAYADO\n").count();
+        assert!(count(&plain) > 8 && count(&by) > 8);
+        // the outline is the same, and the hatching of the cover turned from 135 to 45 degrees
+        assert_eq!(
+            plain.matches("0\nLINE\n8\nCONTORNO\n").count(),
+            by.matches("0\nLINE\n8\nCONTORNO\n").count()
+        );
+        // the other angles change the files
+        settings.hatch_angles = [0, 90, 45, 135, 60, 120, 30, 150];
+        let other = render_titled(&s, &settings, true, &off, "x", Lang::En).unwrap();
+        assert_ne!(other, by);
     }
 }

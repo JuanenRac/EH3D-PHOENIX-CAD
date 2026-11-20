@@ -31,6 +31,8 @@ use crate::CadError;
 pub struct Body {
     /// `enclosure`, or the name of the part.
     pub name: String,
+    /// The material of the part or of the turned or swept body; empty for the box.
+    pub material: String,
     /// The surface.
     pub mesh: Mesh,
     /// The exact volume of the model in cubic nanometres.
@@ -947,6 +949,7 @@ pub fn bodies(enclosure: &Enclosure, settings: &MeshSettings) -> Result<Vec<Body
     budget -= mesh.triangles.len();
     out.push(Body {
         name: "enclosure".to_owned(),
+        material: String::new(),
         mesh,
         expected_nm3: expected,
     });
@@ -957,6 +960,7 @@ pub fn bodies(enclosure: &Enclosure, settings: &MeshSettings) -> Result<Vec<Body
         budget -= mesh.triangles.len();
         out.push(Body {
             name: part.name.clone(),
+            material: part.part.material.clone(),
             mesh,
             expected_nm3: expected,
         });
@@ -969,6 +973,7 @@ pub fn bodies(enclosure: &Enclosure, settings: &MeshSettings) -> Result<Vec<Body
         budget -= mesh.triangles.len();
         out.push(Body {
             name: turned.spec.name.clone(),
+            material: turned.spec.material.clone(),
             mesh,
             expected_nm3: turned.volume_nm3()? as f64,
         });
@@ -980,6 +985,7 @@ pub fn bodies(enclosure: &Enclosure, settings: &MeshSettings) -> Result<Vec<Body
         budget -= mesh.triangles.len();
         out.push(Body {
             name: swept.spec.name.clone(),
+            material: swept.spec.material.clone(),
             mesh,
             expected_nm3: swept.volume_nm3()? as f64,
         });
