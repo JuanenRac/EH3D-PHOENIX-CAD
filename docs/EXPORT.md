@@ -19,11 +19,13 @@ The model is written to a file from the **Export** menu of the window or with th
 ```
 eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill|order
                         [--view top|front|side|sheet] [--out FILE] [--overwrite] [--ascii|--binary]
+                        [--title-field KEY=TEXT]... [--cut-line AXIS=POSITION[:LETTERS]]
 ```
 
 * `--out` defaults to the name of the project with the extension of the format, in the current folder.
 * A file that exists is **never** written over unless `--overwrite` is given (in the window, unless the box of the dialog is ticked); the project that is open and a name that belongs to a project or a sketch are never written over. The check is the one of [`export::check_target`](../crates/eh3d-phoenix-cad/src/export.rs): `PHOENIX-CAD-040` when the file exists, `PHOENIX-CAD-041` for the other refusals.
 * `--view` is for `dxf` and `svg` only (`top` is the default; `sheet` puts the plan, the front and the side on one drawing, see below); `--ascii` and `--binary` are for `stl` only and override `mesh.stl_binary`.
+* `--title-field` (`organisation`, `title`, `number`, `revision` or `author`, as often as needed) and `--cut-line` are for `dxf` and `svg` only: they are the same as the settings `title_block.*` and `drawing.cut_*` for this export alone, and `--title-field` also turns the title block on (see below).
 * The exit code is 0 when the file was written and 1 when it was not; the code of the reason is printed.
 
 ## The order sheet
@@ -67,6 +69,10 @@ The file has not been opened in a slicer or in a CAD program.
 ## The OBJ file and the 3MF package
 
 `eh3d_phoenix_cad::interchange` writes the solids that the STL file has (the box and every placed part, each checked against its exact volume, and every turned and swept body, checked to be closed) in two more formats, with the same triangles, in millimetres with six decimals and with the same bytes for the same model. The OBJ file has a group `o` for each solid, its vertices `v` and its faces `f` numbered from 1 over the whole file. The 3MF package holds `[Content_Types].xml`, `_rels/.rels` and `3D/3dmodel.model` (one `object` for each solid and one `item` of the build for each object); its entries are stored without compression and dated 1 January 1980, so the bytes do not depend on a compression library. Both are refused with the codes of the STL file (`PHOENIX-CAD-048` to `-050`) when the solid cannot be made. The 3MF package has not been opened in a slicer or a CAD program; the tests read it back and check every entry against its CRC-32.
+
+### Colours by material
+
+With `mesh.colors = 1` the OBJ file and the 3MF package carry the colour of the material of each solid (the box has none and is a light grey in the OBJ file). The colour comes from the name of the material, so the same material has the same colour in every file and in every model: a hue taken from a hash of the name (FNV-1a) with a fixed saturation and value, written as integers only. In the OBJ file every vertex line has the three colours from 0 to 1 after the position (`v x y z r g b`, the way viewers of vertex colours read it); in the 3MF package a `basematerials` list holds each different material once, with its `displaycolor`, before the objects, and each solid that has a material points at its entry (`pid`, `pindex`). The readers of this program ignore the colours and read the same solids; with `mesh.colors = 0`, which is the default, the files are exactly what they were. Neither file has been opened in a program that shows colours.
 
 ### Reading the files back
 
@@ -142,6 +148,7 @@ In `phoenix-cad.default.cfg` (the `config` command writes them):
 | `mesh.circle_segments` | 64 | sides of every circle, a multiple of 4 from 8 to 720 |
 | `mesh.max_triangles` | 400000 | the most triangles of one export |
 | `mesh.stl_binary` | 1 | 1 writes a binary STL file, 0 a text one |
+| `mesh.colors` | 0 | 1 puts the colour of the material of each solid in the OBJ and 3MF files (see below), 0 leaves them plain |
 | `mesh.volume_tolerance_ppm` | 2000 | how far the volume of the triangles may be from the exact one |
 | `mesh.step_max_kib` | 65536 | the largest STEP file that is read, in KiB (from 1 to 1048576) |
 | `mesh.step_max_entities` | 1000000 | the most entities of a STEP file that is read (from 10 to 50000000) |
@@ -164,11 +171,18 @@ In `phoenix-cad.default.cfg` (the `config` command writes them):
 | `drawing.sheet_legends` | 1 | the legend of the sheet lists the holes of every view under the name of the view; 0 lists only those of the front |
 | `drawing.sheet_symbol` | 0 | 1 draws the symbol of the projection under the lower left corner of the sheet (the circles to the right of a truncated cone for first angle, to its left for third angle) |
 | `drawing.sheet_symbol_size` | 10 mm | the height of the large end of that symbol, from 4 mm to 50 mm |
+| `drawing.cut_line` | 0 | 0 draws no cutting line; 1, 2 or 3 draw the line of the plane across `x`, `y` or `z` in the views that show it edge-on (see below) |
+| `drawing.cut_at` | 0 mm | where that plane is along its axis, from the outer face of the box |
+| `drawing.cut_label` | A | the letters at the two ends of the cutting line (one to three letters or digits) |
 | `drawing.paper` | 0 | the paper of the SVG drawing: 0 scales it to `drawing.svg_width`, 1 to 5 put it centred on a sheet of the A series (A1 to A5) at the largest standard scale that fits |
 | `drawing.paper_margin` | 10 mm | the air between the drawing and the edge of the paper, from 0 mm to 100 mm |
 | `drawing.paper_portrait` | 0 | 1 stands the paper upright, 0 lays it across |
 | `drawing.frame` | 0 | a border on the layer `MARCO` round the views, their dimensions and their legend |
 | `drawing.frame_margin` | 5 mm | the air between what is drawn and the border, from 0 mm to 1000 mm |
+
+### The cutting line
+
+With `drawing.cut_line` from 1 to 3 a DXF or SVG drawing of a view carries the cutting line of the plane across `x`, `y` or `z` at `drawing.cut_at` from the outer face of the box: a line across the view on the layer of the axes (drawn dashed, as the centre lines are), going 12 mm beyond the box at both ends, a heavy mark with an arrow at each end that points to the side of the larger coordinate, and the letters of `drawing.cut_label` (one to three letters or digits, `A` by default) beside both ends, as texts of the drawing (so they come with the dimensions). A view shows only the planes it sees edge-on: the plan the planes across `x` and `y`, the front those across `x` and `z`, the side those across `y` and `z`; for any other plane, or one outside the box, nothing is drawn. The sheet of views carries none. The `section` command and the section panel draw the cut itself; this line marks where it was taken. With `--cut-line x=40 mm:S1` on `export` the same is asked for one file.
 
 ### The title block
 
@@ -184,6 +198,8 @@ With `title_block.enabled = 1` the DXF and SVG drawings of the views and of a sk
 | `title_block.author` | empty | the author |
 | `title_block.width` | 120 mm | the width of the block, from 60 mm to 400 mm |
 | `title_block.row` | 7 mm | the height of each of the four rows, from 4 mm to 20 mm |
+
+The texts can also be given for one export with `--title-field KEY=TEXT` (`KEY` is `organisation`, `title`, `number`, `revision` or `author`; the same limits as the settings), which turns the block on for that export: `export PROJECT --format svg --title-field title="Front plate" --title-field number=EH-7`.
 
 In `phoenix-cad-window.default.cfg`: `export.format` (the format the dialog starts with: `script`, `step`, `stl`, `dxf-top`, `dxf-front`, `dxf-side`, `dxf-sheet`, `svg-top`, `svg-front`, `svg-side`, `svg-sheet`, `report`, `bill`, `obj`, `3mf` or `order`), `export.overwrite` and `export.max_kib`.
 

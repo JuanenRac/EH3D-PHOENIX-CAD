@@ -10,6 +10,7 @@
 //! `PHOENIX-CAD-022`, as in the library) and the script says so in a comment line; the STL file and
 //! the drawings do draw them (see [`crate::solid`] for what the STL file can be made of).
 
+use crate::assembly::Dim;
 use crate::browse::matches_extension;
 use crate::config::Settings;
 use crate::drawing::{Drawing, View};
@@ -202,7 +203,17 @@ pub fn render_titled(
             let bodies = solid::bodies(enclosure, &settings.mesh)?;
             let list: Vec<(&str, &mesh::Mesh)> =
                 bodies.iter().map(|b| (b.name.as_str(), &b.mesh)).collect();
+            let coloured: Vec<(&str, &mesh::Mesh, &str)> = bodies
+                .iter()
+                .map(|b| (b.name.as_str(), &b.mesh, b.material.as_str()))
+                .collect();
             match format {
+                Format::Obj if settings.mesh.colors => {
+                    text_of(interchange::obj_coloured(&coloured))
+                }
+                Format::ThreeMf if settings.mesh.colors => {
+                    Ok(interchange::three_mf_coloured(&coloured))
+                }
                 Format::Obj => text_of(interchange::obj(&list)),
                 Format::ThreeMf => Ok(interchange::three_mf(&list)),
                 _ if settings.mesh.binary => Ok(mesh::stl_binary(&list)),
@@ -216,6 +227,14 @@ pub fn render_titled(
                 let view = format.view().unwrap_or(View::Top);
                 Drawing::of(enclosure, view, &settings.drawing)?
             };
+            if !format.is_sheet() && settings.drawing.cut_line != 0 {
+                let axis = Dim::ALL[usize::from(settings.drawing.cut_line) - 1];
+                drawing.add_cut_line(
+                    axis,
+                    settings.drawing.cut_at,
+                    &settings.drawing.cut_letters(),
+                );
+            }
             if format.is_sheet() && settings.drawing.sheet_symbol {
                 drawing.add_projection_symbol(
                     settings.drawing.sheet_angle == 3,

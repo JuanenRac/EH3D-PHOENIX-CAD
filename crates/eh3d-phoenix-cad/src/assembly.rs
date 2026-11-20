@@ -2670,4 +2670,65 @@ interference_tolerance = thick
         };
         assert!(kind_mate(1, 2, far).check(largest).is_err());
     }
+
+    /// The next number of a fixed sequence (xorshift), so that a failure can be repeated.
+    fn next_seed(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    #[test]
+    fn a_chain_of_offsets_keeps_every_distance_and_placing_twice_changes_nothing_with_a_fixed_seed()
+    {
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        for round in 0..300 {
+            let count = 2 + (next_seed(&mut state) % 7) as usize;
+            // bars of one size along z, typed anywhere
+            let parts: Vec<(u64, PartInstance)> = (1..=count as u64)
+                .map(|n| {
+                    let p = [
+                        (next_seed(&mut state) % 500) as i64,
+                        (next_seed(&mut state) % 500) as i64,
+                        (next_seed(&mut state) % 500) as i64,
+                    ];
+                    (n, bar(&format!("p{n}"), p, 80))
+                })
+                .collect();
+            let distances: Vec<i64> = (1..count)
+                .map(|_| (next_seed(&mut state) % 201) as i64 - 100)
+                .collect();
+            let list: Vec<(u64, Mate)> = (1..count as u64)
+                .map(|n| {
+                    let kind = MateKind::Offset {
+                        axis: Dim::Z,
+                        distance: mm(distances[n as usize - 1]),
+                    };
+                    (100 + n, kind_mate(n, n + 1, kind))
+                })
+                .collect();
+            let set_of_parts = set(parts.clone());
+            let mate_map = mates(list);
+            let placed = place(&set_of_parts, &mate_map).unwrap();
+            // every distance between the middles holds (all the bars are 80 mm long)
+            for n in 1..count as u64 {
+                let (a, b) = (pos(&placed, n)[2], pos(&placed, n + 1)[2]);
+                assert_eq!(
+                    b - a,
+                    distances[n as usize - 1] * MM,
+                    "round {round} mate {n}"
+                );
+            }
+            // the other two axes are left as typed, and the first part does not move
+            for (n, p) in &parts {
+                let got = pos(&placed, *n);
+                assert_eq!(got[0], p.at[0].get(), "round {round}");
+                assert_eq!(got[1], p.at[1].get(), "round {round}");
+            }
+            assert_eq!(pos(&placed, 1), pos(&set_of_parts, 1));
+            // placing the placed parts again changes nothing
+            assert_eq!(place(&placed, &mate_map).unwrap(), placed, "round {round}");
+        }
+    }
 }

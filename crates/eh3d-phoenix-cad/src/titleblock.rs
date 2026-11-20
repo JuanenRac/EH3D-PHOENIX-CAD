@@ -75,6 +75,26 @@ impl TitleBlockSettings {
         }
     }
 
+    /// Sets one text of the block by its name (`organisation`, `title`, `number`, `revision` or
+    /// `author`), checked like the same key of the settings. The block is not turned on by it:
+    /// `enabled` says that. This is how a drawing gets its own title without a settings file.
+    pub fn set_field(&mut self, key: &str, value: &str) -> Result<(), CadError> {
+        let checked = check_text(&format!("title_block.{key}"), value)?;
+        match key {
+            "organisation" => self.organisation = checked,
+            "title" => self.title = checked,
+            "number" => self.number = checked,
+            "revision" => self.revision = checked,
+            "author" => self.author = checked,
+            _ => {
+                return Err(CadError::Config(format!(
+                    "{key} is not a text of the title block: organisation, title, number, revision or author"
+                )))
+            }
+        }
+        Ok(())
+    }
+
     /// Reads and checks the keys of `[title_block]`.
     pub fn from_config(c: &Config) -> Result<TitleBlockSettings, CadError> {
         let enabled = match c.number("title_block.enabled")? {
@@ -387,5 +407,33 @@ row = 6 mm
             "a &amp; b &lt; c &gt; &quot;d&quot; &apos;e&apos;"
         );
         assert_eq!(xml_text("plain"), "plain");
+    }
+
+    #[test]
+    fn a_text_of_the_block_is_set_by_its_name_and_checked_like_the_setting() {
+        let mut s = TitleBlockSettings::shipped();
+        for (key, value) in [
+            ("organisation", "Electro Hobby 3D"),
+            ("title", "Front plate"),
+            ("number", "EH-7"),
+            ("revision", "B"),
+            ("author", "J. Doe"),
+        ] {
+            s.set_field(key, value).unwrap();
+        }
+        assert_eq!(
+            (s.organisation.as_str(), s.title.as_str(), s.number.as_str()),
+            ("Electro Hobby 3D", "Front plate", "EH-7")
+        );
+        assert_eq!((s.revision.as_str(), s.author.as_str()), ("B", "J. Doe"));
+        // the block is not turned on by it
+        assert!(!s.enabled);
+        // a name that is not a text of the block, a text that is too long and one with a control
+        let kept = s.clone();
+        assert!(s.set_field("colour", "red").is_err());
+        assert!(s.set_field("title", &"x".repeat(MAX_TEXT + 1)).is_err());
+        assert!(s.set_field("title", "two\nlines").is_err());
+        assert_eq!(s, kept);
+        assert!(s.set_field("title", &"x".repeat(MAX_TEXT)).is_ok());
     }
 }

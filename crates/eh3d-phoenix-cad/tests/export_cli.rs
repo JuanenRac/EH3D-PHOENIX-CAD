@@ -211,6 +211,154 @@ fn a_file_that_exists_is_kept_unless_the_order_to_write_over_it_is_given() {
 }
 
 #[test]
+fn a_drawing_gets_its_title_block_and_its_cutting_line_from_the_command_line() {
+    let dir = Scratch::new("title");
+    let plain = dir.file("plain.svg");
+    let (code, _, err) = run(&[
+        "export", EXAMPLE, "--format", "svg", "--out", &plain, "--lang", "en",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let plain_text = fs::read_to_string(&plain).unwrap();
+    assert!(!plain_text.contains("Front plate"));
+    // the texts go into the block, which is turned on by them
+    let titled = dir.file("titled.svg");
+    let (code, _, err) = run(&[
+        "export",
+        EXAMPLE,
+        "--format",
+        "svg",
+        "--out",
+        &titled,
+        "--lang",
+        "en",
+        "--title-field",
+        "title=Front plate",
+        "--title-field",
+        "author=J. Doe",
+        "--title-field",
+        "revision=B",
+        "--title-field",
+        "number=EH-7",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let text = fs::read_to_string(&titled).unwrap();
+    for word in ["Front plate", "J. Doe", "EH-7"] {
+        assert!(text.contains(word), "{word}");
+    }
+    // and in the language asked for the names of the cells
+    let es = dir.file("es.svg");
+    let (code, _, _) = run(&[
+        "export",
+        EXAMPLE,
+        "--format",
+        "svg",
+        "--out",
+        &es,
+        "--lang",
+        "es",
+        "--title-field",
+        "title=Placa",
+    ]);
+    assert_eq!(code, 0);
+    assert!(fs::read_to_string(&es).unwrap().contains("Placa"));
+    // a cutting line adds lines and the two letters
+    let cut = dir.file("cut.svg");
+    let (code, _, err) = run(&[
+        "export",
+        EXAMPLE,
+        "--format",
+        "svg",
+        "--out",
+        &cut,
+        "--lang",
+        "en",
+        "--cut-line",
+        "x=20 mm:K",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let cut_text = fs::read_to_string(&cut).unwrap();
+    assert_eq!(cut_text.matches(">K</text>").count(), 2);
+    assert!(cut_text.len() > plain_text.len());
+    // what cannot be used is refused with a reason and nothing is written
+    for (args, reason) in [
+        (
+            vec!["--title-field", "colour=red"],
+            "not a text of the title block",
+        ),
+        (vec!["--title-field", "title"], "KEY=TEXT"),
+        (vec!["--cut-line", "w=3 mm"], "AXIS=POSITION"),
+        (vec!["--cut-line", "x=3"], "drawing.cut_at"),
+        (vec!["--cut-line", "x=3 mm:TOOLONG"], "one to three letters"),
+    ] {
+        let out = dir.file("refused.svg");
+        let mut all = vec!["export", EXAMPLE, "--format", "svg", "--out", out.as_str()];
+        all.extend(args.iter());
+        let (code, _, err) = run(&all);
+        assert_eq!(code, 1, "{args:?}");
+        assert!(err.contains(reason), "{args:?} {err}");
+        assert!(!std::path::Path::new(&out).exists());
+    }
+    // they are for the drawings only
+    let stl = dir.file("x.stl");
+    let (code, _, err) = run(&[
+        "export",
+        EXAMPLE,
+        "--format",
+        "stl",
+        "--out",
+        &stl,
+        "--cut-line",
+        "x=3 mm",
+    ]);
+    assert_eq!(code, 1);
+    assert!(err.contains("only for the drawings"), "{err}");
+}
+
+#[test]
+fn the_obj_and_3mf_files_have_colours_when_the_settings_say_so() {
+    let dir = Scratch::new("colours");
+    let config = dir.file("settings.cfg");
+    fs::write(&config, "[mesh]\ncolors = 1\n").unwrap();
+    let plain = dir.file("plain.obj");
+    let coloured = dir.file("coloured.obj");
+    let (code, _, err) = run(&["export", FRAME, "--format", "obj", "--out", &plain]);
+    assert_eq!(code, 0, "{err}");
+    let (code, _, err) = run(&[
+        "export", FRAME, "--format", "obj", "--out", &coloured, "--config", &config,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let plain_text = fs::read_to_string(&plain).unwrap();
+    let text = fs::read_to_string(&coloured).unwrap();
+    assert!(text.starts_with("# EH3D PHOENIX-CAD, millimetres, colours by material\n"));
+    let first = |t: &str| t.lines().find(|l| l.starts_with("v ")).unwrap().to_owned();
+    assert_eq!(first(&plain_text).split(' ').count(), 4);
+    assert_eq!(first(&text).split(' ').count(), 7);
+    let package = dir.file("coloured.3mf");
+    let (code, _, err) = run(&[
+        "export", FRAME, "--format", "3mf", "--out", &package, "--config", &config,
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let bytes = fs::read(&package).unwrap();
+    let entries = eh3d_phoenix_cad::interchange::read_stored_zip(&bytes).unwrap();
+    let model = String::from_utf8(entries[2].1.clone()).unwrap();
+    assert!(model.contains("<basematerials id=\""), "{model}");
+    // a value that is not 0 or 1 is refused
+    fs::write(&config, "[mesh]\ncolors = 2\n").unwrap();
+    let (code, _, err) = run(&[
+        "export",
+        FRAME,
+        "--format",
+        "obj",
+        "--out",
+        &dir.file("x.obj"),
+        "--config",
+        &config,
+    ]);
+    assert_eq!(code, 1);
+    assert!(err.contains("mesh.colors must be 0 or 1"), "{err}");
+}
+
+#[test]
 fn the_arguments_are_checked() {
     let (code, _, err) = run(&["export", EXAMPLE]);
     assert_eq!(code, 1);

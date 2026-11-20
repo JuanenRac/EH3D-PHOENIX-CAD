@@ -39,7 +39,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad section PROJECT.phoenixproj --axis x|y|z --at LENGTH [--format dxf|svg] [--out FILE] [--overwrite] [--lang CODE] [--config FILE]   cuts the solids of a project (the box, the parts and the turned and swept bodies) with the plane across an axis at a position (a length: 15, 15 mm, 0.5 in) and prints the outlines and the area of the material; with --out the section is written as a DXF or SVG drawing (the format is --format or the extension of the file; never over a file that exists unless --overwrite is given)
   eh3d-phoenix-cad library FILE.phoenixlib [--config FILE]                        reads a library of parts, checks it and lists its parts
   eh3d-phoenix-cad mesh-info FILE.stl|.obj|.3mf|.step|.stp [--density KG_M3 | --material NAME] [--config FILE]   reads a file of triangles (the ones this program writes or another program's stored 3MF) or a STEP file of solids made of flat faces (the limits are mesh.step_max_kib, mesh.step_max_entities and mesh.step_max_faces; a face on a cylinder, a surface of revolution or a curved edge is refused with the entity and its name) and prints, for each solid in it, its vertices, triangles, whether its surface is closed, its volume, its surface and its size, and, for a prism along an axis, its height and outlines; with a density (or a material of the settings) also its mass, centre of mass and tensor of inertia; it exits with 0 when every solid is closed and with 1 when one is not
-  eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill|order [--view top|front|side|sheet] [--out FILE] [--overwrite] [--ascii|--binary] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), as a Wavefront file (obj) or as a 3MF package (3mf), the plan, front or side, or all three on one sheet, as a drawing (dxf, svg), the STEP file, the OpenSCAD-style script, the fit report, the bill of materials or the order sheet (an HTML page with the bars to buy, the holes to drill and the parts with their cost, in the language of --lang)
+  eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|step|script|report|bill|order [--view top|front|side|sheet] [--out FILE] [--overwrite] [--ascii|--binary] [--title-field KEY=TEXT]... [--cut-line AXIS=POSITION[:LETTERS]] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), as a Wavefront file (obj) or as a 3MF package (3mf), the plan, front or side, or all three on one sheet, as a drawing (dxf, svg), the STEP file, the OpenSCAD-style script, the fit report, the bill of materials or the order sheet (an HTML page with the bars to buy, the holes to drill and the parts with their cost, in the language of --lang)
   eh3d-phoenix-cad faces PROJECT.phoenixproj --from FACE[:inner|:outer] --to FACE[:inner|:outer] [--lang CODE] [--config FILE]   measures between two faces of the box (front, back, left, right, top or bottom, the outer face of the wall unless :inner is given): the distance in millimetres between parallel faces (a wall, the inner height, the outer width) and the angle, 0 for parallel faces and 90 for faces that meet; the same face on the same side is refused
   eh3d-phoenix-cad sketch-edit SKETCH.phoenixsketch --op chamfer|trim|extend|linear|circular|offset [--out FILE] [--overwrite] [--config FILE] ...   edits a sketch file the way the buttons of the sketch window do (elements are named as in the file, like e5; lengths are in mm or with a unit): chamfer --lines e5,e6 --distance 3; trim --line e5 --cutter e6 [--drop e1]; extend --line e5 --to e6; linear --items e1,e2 --step DX,DY --count N; circular --items e1 --center e3 --count N [--step DEGREES]; offset --items e5,e6,e7,e8 --distance D (negative goes inwards); the edited sketch is written to --out, or over the file itself with --overwrite, and a refused edit writes nothing
   eh3d-phoenix-cad server-status [--lang CODE] [--config FILE]                    asks the EH3D server named in the [server] section of the settings (server_address, server_token, server_machine, server_timeout_s, server_retries, server_mdns, server_max_answer_mib) how it is: its name, version and state; with no address nothing is sent anywhere
@@ -48,6 +48,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad server-load NAME --out FILE [--overwrite] [--user NAME] [--lang CODE] [--config FILE]   reads the project NAME from the server, checks it is a project file and writes it to FILE, never over a file that exists unless --overwrite is given
   eh3d-phoenix-cad server-report NAME --from FILE [--report NAME] [--comment TEXT] [--user NAME] [--lang CODE] [--config FILE]   sends a report (a text file such as the output of bom, partlist or holes) to the folder of reports of the project NAME on the server, as a new version of the file REPORT (the name of the file without --report)
   eh3d-phoenix-cad project-units PROJECT.phoenixproj [--unit nm|um|mm|cm|m|in|mil] [--decimals N] [--clear] [--out FILE] [--overwrite] [--lang CODE] [--config FILE]   tells the unit and the decimals the project keeps (in its own domain, so a project of inches stays in inches whoever opens it; a project without them follows the settings); with --unit and --decimals (0 to 12) it sets them, with --clear it takes them away, and writes the project to --out or over the file itself, never over a file that exists unless --overwrite is given
+  eh3d-phoenix-cad compare BEFORE.phoenixproj AFTER.phoenixproj [--text] [--lang CODE] [--config FILE]   what changed between two versions of an assembly: the parts added, taken away, replaced, cut again, moved or turned (the positions after the mates) and the mates added, taken away or changed, as comma separated values (change,part,from,to) or, with --text, as lines in the language of --lang; it exits with 0 when the two versions are the same and with 1 when they differ
   eh3d-phoenix-cad config                                                         every setting of the library, of the window and of the sketch with its default value, as a file for --config
 
 --open FILE is the same as giving the file by itself; a sketch file opens the window on the sketch. --lang takes en, es, de, fr, it, ja, zh or pt; without it the language of the system is used (the reports cutplan, clearance, placements, holes and balance and the answer of sketch-export are in English unless --lang is given; with --text the first four are lines for a person in that language instead of comma separated values).
@@ -55,7 +56,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
 --config FILE reads a settings file over the defaults: it only needs the keys it changes (see the output of config).
 check exits with 0 when every step was applied and the board fits, and with 1 when a step was refused or the board does not fit.
 interference exits with 0 when every step was applied and no two parts share volume, and with 1 when one does.
-export never writes over a file that exists unless --overwrite is given; --out defaults to the name of the project with the extension of the format, in the current folder; --view is for dxf and svg (the plan, top, is the default); --ascii or --binary overrides the setting mesh.stl_binary for stl. It exits with 0 when the file was written and with 1 when it was not (the code of the reason is printed).";
+export never writes over a file that exists unless --overwrite is given; --title-field (organisation, title, number, revision or author, as often as needed) turns the title block of a drawing on with those texts and --cut-line (x=40 mm, z=1.5 in:B) draws the cutting line of a plane in a dxf or svg view, over the settings title_block and drawing.cut_line; --out defaults to the name of the project with the extension of the format, in the current folder; --view is for dxf and svg (the plan, top, is the default); --ascii or --binary overrides the setting mesh.stl_binary for stl. It exits with 0 when the file was written and with 1 when it was not (the code of the reason is printed).";
 
 /// The settings of the library and of the window, with the keys of a user file put over the defaults.
 fn load_settings(config: Option<&Path>) -> Result<(Settings, UiSettings), String> {
@@ -354,6 +355,44 @@ fn run_bom(args: &[String]) -> Result<bool, String> {
     .map_err(|e| error_text(&e, lang))?;
     print!("{out}");
     Ok(win.info.failed == 0)
+}
+
+/// `compare`: reads two versions of a project and prints what changed from the first to the second
+/// (see `eh3d_phoenix_cad::compare`). The answer is false (exit code 1) when they differ.
+fn run_compare(args: &[String]) -> Result<bool, String> {
+    let (lang, args) = take_lang(args)?;
+    let text = args.iter().any(|a| a == "--text");
+    let mut files: Vec<String> = Vec::new();
+    let mut config: Option<PathBuf> = None;
+    let mut words = args.iter().filter(|a| *a != "--text");
+    while let Some(word) = words.next() {
+        match word.as_str() {
+            "--config" => {
+                config = Some(PathBuf::from(
+                    words.next().ok_or("--config needs a settings file")?,
+                ));
+            }
+            other if other.starts_with("--") => return Err(format!("unknown option {other}")),
+            other => files.push(other.to_string()),
+        }
+    }
+    let [before, after] = files.as_slice() else {
+        return Err(
+            "this command needs two project files: the first version and the second".to_string(),
+        );
+    };
+    let first = open_for_report(Path::new(before), config.as_deref(), lang)?;
+    let second = open_for_report(Path::new(after), config.as_deref(), lang)?;
+    let changes = first
+        .changes_to(&second)
+        .map_err(|e| error_text(&e, lang))?;
+    let shown = if text {
+        eh3d_phoenix_cad::compare::text_in(&changes, lang)
+    } else {
+        eh3d_phoenix_cad::compare::csv(&changes)
+    };
+    print!("{shown}");
+    Ok(changes.is_empty())
 }
 
 /// `project-units`: tells the units a project keeps, or sets them (`--unit`, `--decimals`) or takes
@@ -1477,6 +1516,8 @@ fn run_export(args: &[String]) -> Result<bool, String> {
     let mut sheet = false;
     let mut overwrite = false;
     let mut binary: Option<bool> = None;
+    let mut title_fields: Vec<(String, String)> = Vec::new();
+    let mut cut_line: Option<String> = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -1487,6 +1528,16 @@ fn run_export(args: &[String]) -> Result<bool, String> {
             "--config" => {
                 let path = iter.next().ok_or("--config needs a settings file")?;
                 config = Some(PathBuf::from(path));
+            }
+            "--title-field" => {
+                let pair = iter.next().ok_or("--title-field needs KEY=TEXT")?;
+                let (key, value) = pair
+                    .split_once('=')
+                    .ok_or("--title-field is written KEY=TEXT (title=Front plate)")?;
+                title_fields.push((key.trim().to_owned(), value.to_owned()));
+            }
+            "--cut-line" => {
+                cut_line = Some(iter.next().ok_or("--cut-line needs AXIS=POSITION")?.clone());
             }
             "--format" => word = Some(iter.next().ok_or("--format needs a format")?.clone()),
             "--view" => {
@@ -1524,6 +1575,30 @@ fn run_export(args: &[String]) -> Result<bool, String> {
     win.sketch_settings = load_solver_settings(config.as_deref())?;
     if let Some(b) = binary {
         win.settings.mesh.binary = b;
+    }
+    let drawing_only = |what: &str| {
+        if format.view().is_some() || format.is_sheet() {
+            Ok(())
+        } else {
+            Err(format!("{what} is only for the drawings (dxf and svg)"))
+        }
+    };
+    if !title_fields.is_empty() {
+        drawing_only("--title-field")?;
+        for (key, value) in &title_fields {
+            win.settings
+                .title_block
+                .set_field(key, value)
+                .map_err(|e| error_text(&e, lang))?;
+        }
+        win.settings.title_block.enabled = true;
+    }
+    if let Some(text) = &cut_line {
+        drawing_only("--cut-line")?;
+        win.settings
+            .drawing
+            .set_cut_line(text)
+            .map_err(|e| error_text(&e, lang))?;
     }
     if !win.open(&file) {
         return Err(format!("{}: {}", file.display(), win.status.text(lang)));
@@ -1568,6 +1643,7 @@ fn run(args: &[String]) -> Result<bool, String> {
         "partlist" => run_partlist(rest),
         "bom" => run_bom(rest),
         "project-units" => run_project_units(rest),
+        "compare" => run_compare(rest),
         "balance" => run_balance(rest),
         "revolve" => run_revolve(rest),
         "sweep" => run_sweep(rest),

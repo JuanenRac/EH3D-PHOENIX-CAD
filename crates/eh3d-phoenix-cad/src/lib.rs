@@ -90,6 +90,7 @@ pub mod bom;
 pub mod browse;
 pub mod catalog;
 pub mod clearance;
+pub mod compare;
 pub mod config;
 pub mod datum;
 pub mod drag;

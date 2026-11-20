@@ -1238,6 +1238,55 @@ fn the_section_drawing_hatches_each_material_at_its_own_angle_when_the_settings_
 }
 
 #[test]
+fn two_versions_of_an_assembly_are_compared_from_the_command_line() {
+    // the same version twice has nothing to tell and exits with 0
+    let (code, out, err) = run(&["compare", FRAME, FRAME]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "change,part,from,to\n");
+    let (code, out, _) = run(&["compare", FRAME, FRAME, "--text", "--lang", "de"]);
+    assert_eq!(code, 0);
+    assert_eq!(
+        out,
+        "Die beiden Versionen haben dieselben Teile und Verbindungen\n"
+    );
+    // a project with parts against one with none: every part is taken away, and the exit is 1
+    let (code, out, _) = run(&["compare", FRAME, BOX]);
+    assert_eq!(code, 1);
+    assert!(
+        out.starts_with("change,part,from,to\npart-removed,"),
+        "{out}"
+    );
+    assert_eq!(
+        out.lines()
+            .filter(|l| l.starts_with("part-removed,"))
+            .count(),
+        18
+    );
+    assert!(
+        out.lines().all(|l| l.starts_with("part-removed,")
+            || l.starts_with("mate-removed,")
+            || l.starts_with("change,")),
+        "{out}"
+    );
+    let (code, out, _) = run(&["compare", BOX, FRAME, "--text"]);
+    assert_eq!(code, 1);
+    assert!(out.starts_with("Part added: "), "{out}");
+    let (code, out, _) = run(&["compare", BOX, FRAME, "--text", "--lang", "pt"]);
+    assert_eq!(code, 1);
+    assert!(out.starts_with("Peça acrescentada: "), "{out}");
+    // the files must be two, and must be projects
+    let (code, _, err) = run(&["compare", FRAME]);
+    assert_eq!(code, 1);
+    assert!(err.contains("two project files"), "{err}");
+    let (code, _, err) = run(&["compare", FRAME, "no-such-file.phoenixproj"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("no-such-file.phoenixproj"), "{err}");
+    let (code, _, err) = run(&["compare", FRAME, BOX, "--unknown"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("unknown option"), "{err}");
+}
+
+#[test]
 fn the_units_of_a_project_are_told_set_and_taken_away_from_the_command_line() {
     let dir = Scratch::new("project-units");
     let copy = dir.file("box.phoenixproj");

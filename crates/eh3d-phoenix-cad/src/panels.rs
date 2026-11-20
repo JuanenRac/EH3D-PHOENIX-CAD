@@ -58,11 +58,17 @@ pub enum Panel {
     History,
     /// A placed part repeated along a line, over a grid or round an axis.
     PartPattern,
+    /// The unit and the decimals the project keeps.
+    Units,
+    /// The project kept on the EH3D server.
+    Server,
+    /// What changed from another version of the project to the one that is open.
+    Compare,
 }
 
 impl Panel {
     /// Every panel, in the order of the menu.
-    pub const ALL: [Panel; 14] = [
+    pub const ALL: [Panel; 17] = [
         Panel::CutPlan,
         Panel::Holes,
         Panel::Clearance,
@@ -77,6 +83,9 @@ impl Panel {
         Panel::Mates,
         Panel::PartPattern,
         Panel::History,
+        Panel::Units,
+        Panel::Server,
+        Panel::Compare,
     ];
 
     /// The title of the panel, which is also the text of its menu entry.
@@ -96,6 +105,9 @@ impl Panel {
             Panel::Mates => Msg::PanelMates,
             Panel::History => Msg::PanelHistory,
             Panel::PartPattern => Msg::PanelPartPattern,
+            Panel::Units => Msg::PanelUnits,
+            Panel::Server => Msg::PanelServer,
+            Panel::Compare => Msg::PanelCompare,
         }
     }
 }
@@ -225,6 +237,8 @@ pub struct PanelOptions {
     pub explode: Option<u32>,
     /// Add the totals of the bill of materials by material or by kind of piece.
     pub bom_group: Option<crate::bom::GroupBy>,
+    /// Add the bill of each assembly (the parts that mates join) after the bill of all.
+    pub bom_by_assembly: bool,
 }
 
 /// The state of the panels of the window: which one is open and what is chosen in it.
@@ -240,6 +254,8 @@ pub struct PanelState {
     pub explode_text: String,
     /// The totals the bill of materials panel adds to its lines, if any.
     pub bom_group: Option<crate::bom::GroupBy>,
+    /// Whether the bill of materials panel adds the bill of each assembly.
+    pub bom_by_assembly: bool,
     /// The number of the sketch being drawn, among the sketches of the project.
     pub sketch: usize,
     /// The format of the drawing of a sketch.
@@ -282,6 +298,22 @@ pub struct PanelState {
     pub part_pattern: PartPatternDraft,
     /// The number of the step being typed in the history panel to go to.
     pub history_goto: String,
+    /// The unit being typed in the units panel; empty keeps the one shown now.
+    pub units_unit: String,
+    /// The decimals being typed in the units panel; empty keeps the ones shown now.
+    pub units_decimals: String,
+    /// The name being typed in the server panel; empty means the name of the file.
+    pub server_name: String,
+    /// The comment being typed in the server panel for the version it saves.
+    pub server_comment: String,
+    /// The text being typed in the server panel to look for projects.
+    pub server_query: String,
+    /// What the last listing of the server panel showed.
+    pub server_list: String,
+    /// The file being typed in the compare panel: an earlier version of the project.
+    pub compare_file: String,
+    /// What the last comparison of the compare panel told.
+    pub compare_text: String,
 }
 
 impl PanelState {
@@ -293,6 +325,7 @@ impl PanelState {
             explode: settings.explode,
             explode_text: settings.explode_percent.to_string(),
             bom_group: None,
+            bom_by_assembly: false,
             sketch: 0,
             format: settings.sketch_format,
             file: String::new(),
@@ -314,6 +347,14 @@ impl PanelState {
             mate: MateDraft::default(),
             part_pattern: PartPatternDraft::default(),
             history_goto: String::new(),
+            units_unit: String::new(),
+            units_decimals: String::new(),
+            server_name: String::new(),
+            server_comment: String::new(),
+            server_query: String::new(),
+            server_list: String::new(),
+            compare_file: String::new(),
+            compare_text: String::new(),
         }
     }
 
@@ -327,6 +368,7 @@ impl PanelState {
                 None
             },
             bom_group: self.bom_group,
+            bom_by_assembly: self.bom_by_assembly,
         }
     }
 }

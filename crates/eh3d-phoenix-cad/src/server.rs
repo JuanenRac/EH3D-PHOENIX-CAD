@@ -1035,4 +1035,72 @@ server_max_answer_mib = 16
             assert!(store.save(name, bytes, "").unwrap().unchanged, "{name}");
         }
     }
+
+    #[test]
+    fn random_saves_and_writes_made_behind_never_lose_a_version_or_overwrite_blindly_with_a_fixed_seed(
+    ) {
+        use std::collections::BTreeMap;
+        let mem = MemoryStore::new(TOKEN);
+        let mut store = store_over(&mem, Lang::En);
+        let mut seed = Seed(0x0123_4567_89ab_cdef);
+        // what the server must hold for each project: the text of the file and its versions
+        let mut model: BTreeMap<String, (String, usize)> = BTreeMap::new();
+        let (mut refused, mut unchanged) = (0, 0);
+        for n in 0..300 {
+            let name = format!("p{}", seed.pick(5));
+            let bytes = project_bytes(1 + seed.pick(6));
+            let text = String::from_utf8(bytes.clone()).unwrap();
+            match seed.pick(3) {
+                0 | 2 => {
+                    let w = store.save(&name, &bytes, "").unwrap();
+                    match model.get_mut(&name) {
+                        None => {
+                            assert!(w.created, "step {n}");
+                            model.insert(name, (text, 1));
+                        }
+                        Some((kept, versions)) if *kept == text => {
+                            assert!(w.unchanged, "step {n}");
+                            assert_eq!(w.version as usize, *versions, "step {n}");
+                            unchanged += 1;
+                        }
+                        Some((kept, versions)) => {
+                            *versions += 1;
+                            *kept = text;
+                            assert_eq!(w.version as usize, *versions, "step {n}");
+                        }
+                    }
+                }
+                _ => {
+                    // somebody else writes while this program holds the tag it read: its write is
+                    // refused and what the other one wrote stays
+                    if let Some((kept, versions)) = model.get_mut(&name) {
+                        let project = store.find(&name).unwrap().unwrap().id;
+                        let tag = store.files(&project).unwrap()[0].tag.clone();
+                        let other = format!("written by somebody else at step {n}");
+                        mem.write_behind(&name, PROJECT_FILE, &other);
+                        *kept = other;
+                        *versions += 1;
+                        let e = store
+                            .write_file(&project, PROJECT_FILE, &text, "", Some(&tag))
+                            .unwrap_err();
+                        assert_eq!(e.text, sc::text_for("precondition_failed", sc::Lang::En));
+                        refused += 1;
+                    }
+                }
+            }
+            for (name, (kept, versions)) in &model {
+                assert_eq!(
+                    &mem.file(name, PROJECT_FILE).unwrap(),
+                    kept,
+                    "{name} step {n}"
+                );
+                assert_eq!(
+                    mem.versions(name, PROJECT_FILE),
+                    *versions,
+                    "{name} step {n}"
+                );
+            }
+        }
+        assert!(refused > 20 && unchanged > 5, "{refused} {unchanged}");
+    }
 }

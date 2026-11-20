@@ -17,6 +17,7 @@
 //! are text that is the same for the same model. Neither has been opened in a CAD program or a
 //! drawing program.
 
+use crate::assembly::Dim;
 use crate::config::DrawingSettings;
 use crate::enclosure::{Enclosure, Face, FeatureKind, Hole, HoleStyle, Treatment};
 use crate::lang::{fill, Lang, Msg};
@@ -24,7 +25,7 @@ use crate::scad::mm_text;
 use crate::schedule;
 use crate::solid::Frame;
 use crate::titleblock::{self, Block, Item, TitleBlockSettings};
-use crate::CadError;
+use crate::{CadError, Length};
 use std::fmt::Write as _;
 
 /// The view of a drawing.
@@ -140,6 +141,12 @@ pub enum Entity {
     /// An arc, counter-clockwise from the first angle to the second, in degrees.
     Arc((f64, f64), f64, f64, f64),
 }
+
+/// How far the cutting line goes beyond the box at both ends, in millimetres.
+const CUT_OVERSHOOT: f64 = 12.0;
+
+/// The length of the arrow at the end of the cutting line, in millimetres.
+const CUT_ARROW: f64 = 6.0;
 
 /// The room between the line a dimension measures and its dimension line, in millimetres.
 const DIM_OFFSET: f64 = 8.0;
@@ -612,6 +619,76 @@ impl Drawing {
                 Entity::Line(at(0.0, centre), at(3.1 * size + 0.2 * size, centre)),
             ),
         ]);
+    }
+
+    /// Draws the cutting line of a plane across `axis` at `at` from the outer face of the box, the
+    /// way a drawing marks where a section was taken: a line across the view on the layer of the
+    /// axes (which the files draw dashed, as they draw the centre lines), a heavy mark at each end with an arrow that points to the
+    /// side the section is looked from (the side of the larger coordinate), and the letters
+    /// `label` beside both ends. The line goes a little beyond the box at both ends.
+    ///
+    /// Only a view that shows the plane edge-on can carry it: the plan shows the planes across
+    /// `x` and `y`, the front those across `x` and `z`, the side those across `y` and `z`. False,
+    /// and nothing drawn, when the view does not show it, when the plane lies outside the box or
+    /// when the drawing is empty.
+    pub fn add_cut_line(&mut self, axis: Dim, at: Length, label: &str) -> bool {
+        let (across, up) = match self.view {
+            View::Top => (Dim::X, Dim::Y),
+            View::Front => (Dim::X, Dim::Z),
+            View::Side => (Dim::Y, Dim::Z),
+        };
+        let vertical = if axis == across {
+            true
+        } else if axis == up {
+            false
+        } else {
+            return false;
+        };
+        let p = mm(at.get());
+        let (width, height) = self.extent;
+        let along = if vertical { height } else { width };
+        let limit = if vertical { width } else { height };
+        if self.entities.is_empty() || p < 0.0 || p > limit {
+            return false;
+        }
+        let over = CUT_OVERSHOOT;
+        // the point of the line at `s` along it, in the coordinates of the view
+        let at_s = |s: f64| if vertical { (p, s) } else { (s, p) };
+        // one line on the layer of the axes, which the files draw as a dashed one
+        let end = along + over;
+        self.entities
+            .push((Layer::Axes, Entity::Line(at_s(-over), at_s(end))));
+        // the heavy marks and the arrows, at both ends
+        let side = if vertical { (1.0, 0.0) } else { (0.0, 1.0) };
+        for (end_s, outward) in [(-over, -1.0), (end, 1.0)] {
+            let base = at_s(end_s);
+            let tip = (base.0 + side.0 * CUT_ARROW, base.1 + side.1 * CUT_ARROW);
+            let back = at_s(end_s - outward * CUT_ARROW * 0.5);
+            // the mark lies along the line; the arrow is its shaft and a head of two strokes
+            self.entities.push((
+                Layer::Outline,
+                Entity::Line(base, at_s(end_s - outward * 3.0)),
+            ));
+            self.entities
+                .push((Layer::Outline, Entity::Line(base, tip)));
+            let head = |k: f64| {
+                (
+                    tip.0 - side.0 * CUT_ARROW * 0.4 + (back.0 - base.0) * k,
+                    tip.1 - side.1 * CUT_ARROW * 0.4 + (back.1 - base.1) * k,
+                )
+            };
+            self.entities
+                .push((Layer::Outline, Entity::Line(tip, head(1.0))));
+            self.entities
+                .push((Layer::Outline, Entity::Line(tip, head(-1.0))));
+            self.notes.push(Note {
+                at: at_s(end_s - outward * 5.0),
+                text: label.to_owned(),
+                measures: None,
+                level: 0,
+            });
+        }
+        true
     }
 
     /// Writes the lines of a legend, one under the other, to the right of the box.
@@ -1917,6 +1994,145 @@ mod tests {
     }
 
     #[test]
+    fn a_cutting_line_crosses_the_view_at_the_plane_with_a_mark_and_the_letters_at_both_ends() {
+        let e = model();
+        // the plan shows the planes across x (a vertical line) and across y (a horizontal one)
+        let mut d = Drawing::of(&e, View::Top, &bare()).unwrap();
+        let before = (d.entities.len(), d.notes.len());
+        assert!(d.add_cut_line(Dim::X, mmv(40), "A"));
+        let added: Vec<_> = d.entities[before.0..].to_vec();
+        assert!(!added.is_empty());
+        // the line is on x = 40 and goes beyond the box at both ends
+        let lines: Vec<_> = added
+            .iter()
+            .filter(|(l, _)| *l == Layer::Axes)
+            .map(|(_, e)| *e)
+            .collect();
+        assert_eq!(
+            lines,
+            [Entity::Line(
+                (40.0, -CUT_OVERSHOOT),
+                (40.0, 64.0 + CUT_OVERSHOOT)
+            )]
+        );
+        // a heavy mark and an arrow of three lines at each end, on the outline layer
+        assert_eq!(added.len(), 1 + 2 * 4);
+        // the letters are beside both ends, on the outer side of each, as notes with no dimension
+        let letters: Vec<_> = d.notes[before.1..].iter().collect();
+        assert_eq!(letters.len(), 2);
+        assert!(letters
+            .iter()
+            .all(|n| n.text == "A" && n.measures.is_none()));
+        assert!(letters[0].at.1 < 0.0 && letters[1].at.1 > 64.0);
+        assert!(letters.iter().all(|n| n.at.0 == 40.0));
+        // a plane across y is a horizontal line of the plan
+        let mut h = Drawing::of(&e, View::Top, &bare()).unwrap();
+        assert!(h.add_cut_line(Dim::Y, mmv(10), "B2"));
+        assert!(h.entities.iter().any(|(l, e)| *l == Layer::Axes
+            && matches!(*e, Entity::Line(a, b) if a.1 == 10.0 && b.1 == 10.0 && a.0 < 0.0 && b.0 > 104.0)));
+    }
+
+    #[test]
+    fn a_cutting_line_the_view_cannot_show_or_outside_the_box_is_left_out() {
+        let e = model();
+        let none = |view: View, axis: Dim, at: i64| {
+            let mut d = Drawing::of(&e, view, &bare()).unwrap();
+            let before = d.clone();
+            let drawn = d.add_cut_line(axis, mmv(at), "A");
+            (drawn, d == before)
+        };
+        // the plan does not show the plane across z, the front not the one across y, the side not
+        // the one across x: they are seen face-on
+        assert_eq!(none(View::Top, Dim::Z, 10), (false, true));
+        assert_eq!(none(View::Front, Dim::Y, 10), (false, true));
+        assert_eq!(none(View::Side, Dim::X, 10), (false, true));
+        // outside the box, on either side
+        assert_eq!(none(View::Top, Dim::X, 105), (false, true));
+        assert_eq!(none(View::Front, Dim::Z, 36), (false, true));
+        // the edges of the box are inside it
+        assert!(none(View::Top, Dim::X, 0).0);
+        assert!(none(View::Top, Dim::X, 104).0);
+        // a drawing with nothing in it gets nothing
+        let mut empty = Drawing {
+            view: View::Top,
+            entities: Vec::new(),
+            notes: Vec::new(),
+            extent: (10.0, 10.0),
+            dxf_dimensions: false,
+        };
+        assert!(!empty.add_cut_line(Dim::X, mmv(5), "A"));
+    }
+
+    #[test]
+    fn the_cutting_line_is_in_the_dxf_and_svg_files_only_when_the_settings_ask_for_it() {
+        let e = model();
+        let plain = crate::config::Settings::defaults();
+        assert_eq!(plain.drawing.cut_line, 0);
+        assert_eq!(plain.drawing.cut_letters(), "A");
+        let with = crate::config::Settings::with_user_config(
+            "[drawing]\ncut_line = 1\ncut_at = 40 mm\ncut_label = S1\ndimensions = 0\ndxf_dimensions = 0\n",
+        )
+        .unwrap();
+        assert_eq!(with.drawing.cut_letters(), "S1");
+        // the same settings without the line
+        let base = crate::config::Settings::with_user_config(
+            "[drawing]\ndimensions = 0\ndxf_dimensions = 0\n",
+        )
+        .unwrap();
+        let same = |a: Vec<u8>, b: Vec<u8>| a == b;
+        for format in [crate::export::Format::DxfTop, crate::export::Format::SvgTop] {
+            let off = crate::export::render(format, &e, "", &base).unwrap();
+            let on = crate::export::render(format, &e, "", &with).unwrap();
+            assert!(!same(off, on.clone()), "{format:?}");
+            // the same bytes every time
+            assert!(same(
+                on,
+                crate::export::render(format, &e, "", &with).unwrap()
+            ));
+        }
+        // the letters are texts of the drawing, so they come with the dimensions
+        let lettered = crate::config::Settings::with_user_config(
+            "[drawing]\ncut_line = 1\ncut_at = 40 mm\ncut_label = S1\n",
+        )
+        .unwrap();
+        let svg = String::from_utf8(
+            crate::export::render(crate::export::Format::SvgTop, &e, "", &lettered).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(svg.matches(">S1</text>").count(), 2);
+        let dxf = String::from_utf8(
+            crate::export::render(crate::export::Format::DxfTop, &e, "", &lettered).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(dxf.matches("\nS1\n").count(), 2);
+        // the sheet of views carries none
+        let sheet_off = crate::export::render(crate::export::Format::SvgSheet, &e, "", &base);
+        let sheet_on = crate::export::render(crate::export::Format::SvgSheet, &e, "", &with);
+        assert!(same(sheet_off.unwrap(), sheet_on.unwrap()));
+        // a cutting line across the axis a view cannot show changes nothing in that view
+        let z = crate::config::Settings::with_user_config(
+            "[drawing]\ncut_line = 3\ncut_at = 10 mm\ndimensions = 0\ndxf_dimensions = 0\n",
+        )
+        .unwrap();
+        assert!(same(
+            crate::export::render(crate::export::Format::SvgTop, &e, "", &z).unwrap(),
+            crate::export::render(crate::export::Format::SvgTop, &e, "", &base).unwrap()
+        ));
+        // the settings refuse what cannot be drawn
+        for bad in [
+            "[drawing]\ncut_line = 4\n",
+            "[drawing]\ncut_label = \n",
+            "[drawing]\ncut_label = ABCD\n",
+            "[drawing]\ncut_label = A-\n",
+        ] {
+            assert!(
+                crate::config::Settings::with_user_config(bad).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
     fn the_sheet_has_the_projection_symbol_in_its_files_only_when_the_settings_say_so() {
         let e = model();
         let off = crate::config::Settings::defaults();
@@ -2889,5 +3105,49 @@ frame_margin = 1001 mm
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn a_cutting_line_is_drawn_exactly_when_the_view_shows_the_plane_and_it_is_in_the_box_with_a_fixed_seed(
+    ) {
+        let e = model();
+        let mut state = 0x6C07_8965_D3E6_1F27u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let (mut drawn, mut left_out) = (0, 0);
+        for _ in 0..600 {
+            let view = [View::Top, View::Front, View::Side][(next() % 3) as usize];
+            let axis = Dim::ALL[(next() % 3) as usize];
+            let at = (next() % 140) as i64 - 20;
+            let mut d = Drawing::of(&e, view, &bare()).unwrap();
+            let before = d.clone();
+            let shown = match view {
+                View::Top => [Dim::X, Dim::Y],
+                View::Front => [Dim::X, Dim::Z],
+                View::Side => [Dim::Y, Dim::Z],
+            };
+            let length = if axis == shown[0] {
+                d.extent.0
+            } else {
+                d.extent.1
+            };
+            let expected = shown.contains(&axis) && (0..=length as i64).contains(&at);
+            let did = d.add_cut_line(axis, Length::from_mm(at).unwrap(), "A");
+            assert_eq!(did, expected, "{view:?} {axis:?} {at}");
+            if did {
+                drawn += 1;
+                // one line, four lines for each end, two letters
+                assert_eq!(d.entities.len(), before.entities.len() + 9);
+                assert_eq!(d.notes.len(), before.notes.len() + 2);
+            } else {
+                left_out += 1;
+                assert_eq!(d, before, "{view:?} {axis:?} {at}");
+            }
+        }
+        assert!(drawn > 50 && left_out > 50, "{drawn} {left_out}");
     }
 }

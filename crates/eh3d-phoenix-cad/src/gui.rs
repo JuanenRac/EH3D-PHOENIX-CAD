@@ -901,6 +901,13 @@ impl App {
         let mut undo_now = false;
         let mut redo_now = false;
         let mut goto_now = false;
+        let mut units_apply = false;
+        let mut units_follow = false;
+        let mut server_save = false;
+        let mut server_open = false;
+        let mut server_list = false;
+        let mut compare_file = false;
+        let mut compare_server = false;
         let choices: Vec<String> = self
             .win
             .mate_choices()
@@ -936,6 +943,10 @@ impl App {
                         }
                     }
                     Panel::Bom => {
+                        ui.checkbox(
+                            &mut self.panels.bom_by_assembly,
+                            Msg::PanelBomByAssembly.tr(lang),
+                        );
                         ui.horizontal_wrapped(|ui| {
                             ui.selectable_value(
                                 &mut self.panels.bom_group,
@@ -1417,6 +1428,87 @@ impl App {
                             }
                         });
                     }
+                    Panel::Units => {
+                        ui.horizontal(|ui| {
+                            ui.label(Msg::FieldUnitsUnit.tr(lang));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.panels.units_unit)
+                                    .desired_width(60.0),
+                            );
+                            ui.label(Msg::FieldUnitsDecimals.tr(lang));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.panels.units_decimals)
+                                    .desired_width(40.0),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.button(Msg::UnitsApplyDo.tr(lang)).clicked() {
+                                units_apply = true;
+                            }
+                            if ui.button(Msg::UnitsFollowDo.tr(lang)).clicked() {
+                                units_follow = true;
+                            }
+                        });
+                    }
+                    Panel::Compare => {
+                        ui.horizontal(|ui| {
+                            ui.label(Msg::FieldCompareFile.tr(lang));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.panels.compare_file)
+                                    .desired_width(300.0),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.button(Msg::CompareFileDo.tr(lang)).clicked() {
+                                compare_file = true;
+                            }
+                            if ui.button(Msg::CompareServerDo.tr(lang)).clicked() {
+                                compare_server = true;
+                            }
+                        });
+                    }
+                    Panel::Server => {
+                        ui.horizontal(|ui| {
+                            ui.label(Msg::FieldServerName.tr(lang));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.panels.server_name)
+                                    .desired_width(200.0),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(Msg::FieldServerComment.tr(lang));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.panels.server_comment)
+                                    .desired_width(300.0),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.button(Msg::ServerSaveDo.tr(lang)).clicked() {
+                                server_save = true;
+                            }
+                            if ui.button(Msg::ServerOpenDo.tr(lang)).clicked() {
+                                server_open = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(Msg::FieldServerQuery.tr(lang));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.panels.server_query)
+                                    .desired_width(160.0),
+                            );
+                            if ui.button(Msg::ServerListDo.tr(lang)).clicked() {
+                                server_list = true;
+                            }
+                        });
+                        if !self.panels.server_list.is_empty() {
+                            let mut shown: &str = self.panels.server_list.as_str();
+                            ui.add(
+                                egui::TextEdit::multiline(&mut shown)
+                                    .font(egui::TextStyle::Monospace)
+                                    .desired_width(f32::INFINITY),
+                            );
+                        }
+                    }
                     _ => {}
                 }
                 if panel == Panel::SketchExport {
@@ -1456,6 +1548,8 @@ impl App {
                         self.panels.import_report.clone()
                     } else if panel == Panel::Mates {
                         self.win.mates_panel_text(&self.panels.mate)
+                    } else if panel == Panel::Compare {
+                        self.panels.compare_text.clone()
                     } else if panel == Panel::PartPattern {
                         self.win.part_pattern_text(&self.panels.part_pattern)
                     } else if panel == Panel::Section {
@@ -1505,6 +1599,39 @@ impl App {
         if add_pattern {
             let draft = self.panels.part_pattern.clone();
             self.win.add_part_pattern(&draft);
+        }
+        if units_apply {
+            let (unit, decimals) = (
+                self.panels.units_unit.clone(),
+                self.panels.units_decimals.clone(),
+            );
+            self.win.apply_units_text(&unit, &decimals);
+        }
+        if units_follow {
+            self.win.set_project_units(None);
+        }
+        if server_save {
+            let (name, comment) = (
+                self.panels.server_name.clone(),
+                self.panels.server_comment.clone(),
+            );
+            self.win.server_save_now(&name, &comment);
+        }
+        if server_open {
+            let name = self.panels.server_name.clone();
+            self.win.server_open_now(&name);
+        }
+        if compare_file {
+            let file = self.panels.compare_file.clone();
+            self.panels.compare_text = self.win.compare_with_file_text(&file);
+        }
+        if compare_server {
+            let name = self.panels.server_name.clone();
+            self.panels.compare_text = self.win.compare_with_server_now(&name);
+        }
+        if server_list {
+            let query = self.panels.server_query.clone();
+            self.panels.server_list = self.win.server_list_now(&query);
         }
         if choose {
             self.open_dxf_dialog();

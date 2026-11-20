@@ -7,10 +7,12 @@
 //! transaction: the new recipe is built first and the change is kept only when the model accepts
 //! it, so a refused value leaves the project exactly as it was.
 
+mod link;
 mod mates;
 mod part_patterns;
 mod sections;
 mod steps;
+mod versions;
 
 use crate::assembly::{Dim, Edge, Mate, MateKind, Report};
 use crate::body::{Built, Step, StepState};
@@ -2501,13 +2503,23 @@ impl Window {
                     text.push('\n');
                     text.push_str(&crate::bom::groups_text_in(&b, by, lang));
                 }
+                if options.bom_by_assembly {
+                    if let Ok(sets) = self.bom_assemblies() {
+                        text.push('\n');
+                        text.push_str(&crate::bom::assemblies_text_in(&sets, lang));
+                    }
+                }
                 text
             }),
             Panel::Balance => self.balance().map(|b| panels::balance_text_in(&b, lang)),
-            Panel::Section | Panel::ImportDxf | Panel::Mates | Panel::PartPattern => {
-                Ok(String::new())
-            }
+            Panel::Section
+            | Panel::ImportDxf
+            | Panel::Mates
+            | Panel::PartPattern
+            | Panel::Compare => Ok(String::new()),
             Panel::History => Ok(self.history_text()),
+            Panel::Units => Ok(self.units_panel_text()),
+            Panel::Server => Ok(self.server_panel_text()),
             Panel::SketchExport | Panel::Revolve => Ok(if self.mech.sketches.is_empty() {
                 Msg::PanelNoSketch.tr(lang).to_string()
             } else {
@@ -4130,7 +4142,14 @@ impl Window {
     fn read_project(&mut self, path: &Path) -> Result<(), Status> {
         let limit = self.settings.mechanical.max_bytes.saturating_add(1 << 20);
         let bytes = store::load_limited(path, limit as u64).map_err(Status::Error)?;
-        let opened = Document::open(&bytes, limit, &[MECHANICAL_DOMAIN, PARAMETERS_DOMAIN])
+        self.read_project_bytes(&bytes, Some(path))
+    }
+
+    /// Opens a project from its bytes; `path` is the file it came from, if it came from one (a
+    /// project read from the server has none, and saving it asks for one).
+    fn read_project_bytes(&mut self, bytes: &[u8], path: Option<&Path>) -> Result<(), Status> {
+        let limit = self.settings.mechanical.max_bytes.saturating_add(1 << 20);
+        let opened = Document::open(bytes, limit, &[MECHANICAL_DOMAIN, PARAMETERS_DOMAIN])
             .map_err(Status::Error)?;
         let mut mech = opened
             .document
@@ -4160,12 +4179,12 @@ impl Window {
         self.document = opened.document;
         self.read_only = opened.read_only || damaged.is_some();
         self.active_sketch = None;
-        self.path = Some(path.to_path_buf());
+        self.path = path.map(Path::to_path_buf);
         self.dirty = false;
         self.history.clear();
         self.selection = Selection::Body;
         let name = path
-            .file_name()
+            .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         self.status = if let Some(e) = damaged {
@@ -8132,6 +8151,59 @@ mod tests {
     }
 
     #[test]
+    fn the_obj_and_3mf_files_carry_the_colours_of_the_materials_only_when_the_setting_says_so() {
+        let mut w = fresh();
+        assert!(w.open(&frame_path()), "{:?}", w.status);
+        let plain_obj = w.export_text(Format::Obj).unwrap();
+        let plain_3mf = w.export_bytes(Format::ThreeMf).unwrap();
+        assert!(!plain_obj.contains("colours by material"));
+        w.settings.mesh.colors = true;
+        let obj = w.export_text(Format::Obj).unwrap();
+        assert!(obj.contains("colours by material"));
+        // the same triangles, with six numbers on each vertex line
+        let count = |t: &str, p: &str| t.lines().filter(|l| l.starts_with(p)).count();
+        assert_eq!(count(&obj, "v "), count(&plain_obj, "v "));
+        assert_eq!(count(&obj, "f "), count(&plain_obj, "f "));
+        assert!(obj
+            .lines()
+            .filter(|l| l.starts_with("v "))
+            .all(|l| l.split(' ').count() == 7));
+        let bytes = w.export_bytes(Format::ThreeMf).unwrap();
+        let model = String::from_utf8(
+            crate::interchange::read_stored_zip(&bytes).unwrap()[2]
+                .1
+                .clone(),
+        )
+        .unwrap();
+        assert!(model.contains("<basematerials "), "{model}");
+        assert!(model.contains("pindex="));
+        // every material of the bill has its entry, once
+        for line in w
+            .bom()
+            .unwrap()
+            .lines
+            .iter()
+            .filter(|l| !l.material.is_empty())
+        {
+            let base = format!("<base name=\"{}\"", line.material);
+            assert_eq!(model.matches(&base).count(), 1, "{}", line.material);
+        }
+        // and the plain package has none
+        let plain = String::from_utf8(
+            crate::interchange::read_stored_zip(&plain_3mf).unwrap()[2]
+                .1
+                .clone(),
+        )
+        .unwrap();
+        assert!(!plain.contains("basematerials"));
+        // the two read back to the same solids
+        assert_eq!(
+            crate::interchange::read_three_mf(&bytes).unwrap(),
+            crate::interchange::read_three_mf(&plain_3mf).unwrap()
+        );
+    }
+
+    #[test]
     fn the_bill_is_exported_to_a_file_and_the_script_has_the_parts() {
         let dir = Scratch::new("bill");
         let mut w = fresh();
@@ -9205,6 +9277,37 @@ mass: "
         state.bom_group = Some(GroupBy::Kind);
         assert_eq!(state.options().bom_group, Some(GroupBy::Kind));
         // a new project has no part, with or without totals
+        assert_eq!(
+            fresh().panel_text(Panel::Bom, &state.options()),
+            Msg::PanelNoParts.tr(Lang::En)
+        );
+    }
+
+    #[test]
+    fn the_bill_panel_can_add_the_bill_of_each_assembly_after_the_bill_of_all() {
+        use crate::panels::{Panel, PanelOptions, PanelState};
+        let mut w = fresh();
+        assert!(w.open(&frame_path()), "{:?}", w.status);
+        let plain = w.panel_text(Panel::Bom, &PanelOptions::default());
+        let with = w.panel_text(
+            Panel::Bom,
+            &PanelOptions {
+                bom_by_assembly: true,
+                ..PanelOptions::default()
+            },
+        );
+        assert!(with.starts_with(&plain), "{with}");
+        let sets = w.bom_assemblies().unwrap();
+        assert_eq!(
+            &with[plain.len()..],
+            format!("\n{}", w.bom_assemblies_text().unwrap())
+        );
+        assert!(!sets.is_empty());
+        // the state of the panel passes the choice on, and a new project has no part
+        let mut state = PanelState::new(&w.ui.panels, false);
+        assert!(!state.options().bom_by_assembly);
+        state.bom_by_assembly = true;
+        assert!(state.options().bom_by_assembly);
         assert_eq!(
             fresh().panel_text(Panel::Bom, &state.options()),
             Msg::PanelNoParts.tr(Lang::En)

@@ -290,6 +290,8 @@ pub struct MeshSettings {
     pub max_triangles: u32,
     /// Whether the STL file is binary (1) or text (0).
     pub binary: bool,
+    /// Whether the OBJ and 3MF files carry the colour of the material of each solid (1) or not (0).
+    pub colors: bool,
     /// How far, in parts per million of the volume of the model, the volume of the triangles may
     /// be from the exact volume.
     pub volume_tolerance_ppm: u32,
@@ -340,6 +342,11 @@ impl MeshSettings {
             1 => true,
             _ => return Err(CadError::Config("mesh.stl_binary must be 0 or 1".into())),
         };
+        let colors = match c.number("mesh.colors")? {
+            0 => false,
+            1 => true,
+            _ => return Err(CadError::Config("mesh.colors must be 0 or 1".into())),
+        };
         let volume_tolerance_ppm = c.number("mesh.volume_tolerance_ppm")?;
         if !(1..=Self::TOLERANCE_CAP_PPM).contains(&volume_tolerance_ppm) {
             return Err(CadError::Config(format!(
@@ -372,11 +379,59 @@ impl MeshSettings {
             circle_segments,
             max_triangles,
             binary,
+            colors,
             volume_tolerance_ppm,
             step_max_kib,
             step_max_entities,
             step_max_faces,
         })
+    }
+}
+
+impl DrawingSettings {
+    /// Sets the cutting line from a text `AXIS=POSITION` or `AXIS=POSITION:LETTERS` (`x=40 mm`,
+    /// `z=1.5 in:B`), checked like the keys `drawing.cut_line`, `drawing.cut_at` and
+    /// `drawing.cut_label`; without letters the ones in the settings stay.
+    pub fn set_cut_line(&mut self, text: &str) -> Result<(), CadError> {
+        let bad = || {
+            CadError::Config(format!(
+                "{text}: the cutting line is written AXIS=POSITION or AXIS=POSITION:LETTERS (x=40 mm)"
+            ))
+        };
+        let (axis, rest) = text.split_once('=').ok_or_else(bad)?;
+        let line = match axis.trim() {
+            "x" => 1,
+            "y" => 2,
+            "z" => 3,
+            _ => return Err(bad()),
+        };
+        let (position, letters) = match rest.split_once(':') {
+            Some((p, l)) => (p, Some(l.trim())),
+            None => (rest, None),
+        };
+        let at =
+            parse_length(position).map_err(|e| CadError::Config(format!("drawing.cut_at: {e}")))?;
+        let mut label = self.cut_label;
+        if let Some(l) = letters {
+            if !(1..=3).contains(&l.len()) || !l.bytes().all(|b| b.is_ascii_alphanumeric()) {
+                return Err(CadError::Config(
+                    "drawing.cut_label must be one to three letters or digits".into(),
+                ));
+            }
+            label = [0u8; 3];
+            label[..l.len()].copy_from_slice(l.as_bytes());
+        }
+        (self.cut_line, self.cut_at, self.cut_label) = (line, at, label);
+        Ok(())
+    }
+
+    /// The letters of the cutting line (`drawing.cut_label`) as text.
+    pub fn cut_letters(&self) -> String {
+        self.cut_label
+            .iter()
+            .take_while(|b| **b != 0)
+            .map(|b| char::from(*b))
+            .collect()
     }
 }
 
@@ -445,6 +500,14 @@ pub struct DrawingSettings {
     pub paper: u8,
     /// The air between the drawing and the edge of the paper, from 0 to 100 mm.
     pub paper_margin: Length,
+    /// The cutting line of a view: 0 draws none, 1 to 3 draw the line of the plane across the axis
+    /// `x`, `y` or `z` (in the views that show that plane edge-on).
+    pub cut_line: u8,
+    /// Where the plane of the cutting line is along its axis, from the outer face of the box.
+    pub cut_at: Length,
+    /// The letters at the two ends of the cutting line, one to three letters or digits, padded
+    /// with zero bytes (see [`DrawingSettings::cut_letters`]).
+    pub cut_label: [u8; 3],
     /// Whether the paper is turned to stand upright (1) or lies across (0).
     pub paper_portrait: bool,
 }
@@ -577,6 +640,23 @@ impl DrawingSettings {
                 "drawing.paper_margin must be from 0 mm to 100 mm".into(),
             ));
         }
+        let cut_line = c.number("drawing.cut_line")?;
+        if cut_line > 3 {
+            return Err(CadError::Config(
+                "drawing.cut_line must be 0 (none) or 1 to 3 (the plane across x, y or z)".into(),
+            ));
+        }
+        let cut_at = c.length("drawing.cut_at")?;
+        let label = c
+            .get("drawing.cut_label")
+            .ok_or_else(|| CadError::Config("drawing.cut_label is missing".into()))?;
+        if !(1..=3).contains(&label.len()) || !label.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            return Err(CadError::Config(
+                "drawing.cut_label must be one to three letters or digits".into(),
+            ));
+        }
+        let mut cut_label = [0u8; 3];
+        cut_label[..label.len()].copy_from_slice(label.as_bytes());
         let sheet_symbol_size = c.length("drawing.sheet_symbol_size")?;
         if sheet_symbol_size.get() < 4_000_000 || sheet_symbol_size.get() > 50_000_000 {
             return Err(CadError::Config(
@@ -607,6 +687,9 @@ impl DrawingSettings {
             paper: paper as u8,
             paper_margin,
             paper_portrait: flag("drawing.paper_portrait")?,
+            cut_line: cut_line as u8,
+            cut_at,
+            cut_label,
         })
     }
 }
@@ -1695,6 +1778,7 @@ markup_percent = 1000
                 circle_segments: 64,
                 max_triangles: 400_000,
                 binary: true,
+                colors: false,
                 volume_tolerance_ppm: 2000,
                 step_max_kib: 65_536,
                 step_max_entities: 1_000_000,
@@ -1727,6 +1811,9 @@ markup_percent = 1000
                 paper: 0,
                 paper_margin: Length::new(10_000_000).unwrap(),
                 paper_portrait: false,
+                cut_line: 0,
+                cut_at: Length::new(0).unwrap(),
+                cut_label: [b'A', 0, 0],
             }
         );
         let own = Settings::with_user_config(
@@ -1816,5 +1903,69 @@ markup_percent = 1000
             .unwrap_err()
             .to_string();
         assert!(e.contains("hatch_by_material must be 0 or 1"), "{e}");
+    }
+
+    #[test]
+    fn any_text_for_the_cutting_line_is_taken_or_refused_and_a_valid_one_is_kept_with_a_fixed_seed()
+    {
+        let mut state = 0xDEAD_BEEF_CAFE_F00Du64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let axes = ["x", "y", "z", "w", ""];
+        let seps = ["=", "=", "=", "", "-"];
+        let numbers = ["5", "-3", "0,5", "1/2", "40", "abc", ""];
+        let units = [" mm", " in", " cm", "", " km"];
+        let tails = ["", ":A", ":k9", ":ABCD", ":", ":\u{e9}", " "];
+        let (mut taken, mut refused) = (0, 0);
+        let base = Settings::defaults().drawing;
+        for _ in 0..2000 {
+            let mut pick = |n: usize| (next() % n as u64) as usize;
+            let text = format!(
+                "{}{}{}{}{}",
+                axes[pick(axes.len())],
+                seps[pick(seps.len())],
+                numbers[pick(numbers.len())],
+                units[pick(units.len())],
+                tails[pick(tails.len())]
+            );
+            let mut s = base;
+            let before = s;
+            match s.set_cut_line(&text) {
+                Ok(()) => {
+                    taken += 1;
+                    assert!((1..=3).contains(&s.cut_line), "{text}");
+                    assert!(
+                        s.cut_letters().len() <= 3 && !s.cut_letters().is_empty(),
+                        "{text}"
+                    );
+                }
+                Err(_) => {
+                    refused += 1;
+                    assert_eq!(s, before, "{text:?}");
+                }
+            }
+        }
+        assert!(taken > 20 && refused > 20, "{taken} {refused}");
+        // a valid one is kept as it was written
+        for (axis, number) in [("x", 1), ("y", 2), ("z", 3)] {
+            for (at, nm) in [
+                ("40 mm", 40_000_000),
+                ("1.5 cm", 15_000_000),
+                ("1 in", 25_400_000),
+            ] {
+                let mut s = Settings::defaults().drawing;
+                s.set_cut_line(&format!("{axis}={at}:Q7")).unwrap();
+                assert_eq!(
+                    (s.cut_line, s.cut_at.get(), s.cut_letters()),
+                    (number, nm, "Q7".to_string())
+                );
+                s.set_cut_line(&format!("{axis}={at}")).unwrap();
+                assert_eq!(s.cut_letters(), "Q7");
+            }
+        }
     }
 }

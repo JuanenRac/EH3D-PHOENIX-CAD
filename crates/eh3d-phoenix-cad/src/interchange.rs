@@ -47,6 +47,78 @@ pub fn obj(bodies: &[(&str, &Mesh)]) -> String {
     out
 }
 
+/// The colour a material is drawn with in the coloured files: the same name always gives the same
+/// colour, with a hue taken from the name (a hash of its bytes) and fixed saturation and value, so
+/// that the colours of the materials of a model differ from each other and no file holds a colour
+/// that depends on the order of the parts. No material (the box) is a light grey.
+pub fn material_colour(material: &str) -> [u8; 3] {
+    if material.is_empty() {
+        return [190, 190, 190];
+    }
+    let mut hash: u32 = 0x811c_9dc5;
+    for b in material.bytes() {
+        hash ^= u32::from(b);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    let (hue, sat, val) = (hash % 360, 55u32, 85u32);
+    let (sector, f) = (hue / 60, hue % 60);
+    let p = val * (100 - sat) / 100;
+    let q = val * (6000 - sat * f) / 6000;
+    let t = val * (6000 - sat * (60 - f)) / 6000;
+    let (r, g, b) = match sector {
+        0 => (val, t, p),
+        1 => (q, val, p),
+        2 => (p, val, t),
+        3 => (p, q, val),
+        4 => (t, p, val),
+        _ => (val, p, q),
+    };
+    let scale = |x: u32| u8::try_from((x * 255 + 50) / 100).unwrap_or(255);
+    [scale(r), scale(g), scale(b)]
+}
+
+/// The colour as `#RRGGBB`.
+fn hex_colour(c: [u8; 3]) -> String {
+    format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2])
+}
+
+/// The solids as a Wavefront OBJ file with the colour of the material of each solid on every
+/// vertex line (`v x y z r g b`, the three colours from 0 to 1), the way viewers that show vertex
+/// colours read it. The third word of a solid is its material (empty for the box). A reader that
+/// does not know the colours reads the same solids, as [`read_obj`] does.
+pub fn obj_coloured(bodies: &[(&str, &Mesh, &str)]) -> String {
+    let mut out = String::from("# EH3D PHOENIX-CAD, millimetres, colours by material\n");
+    let mut base = 0usize;
+    for (name, mesh, material) in bodies {
+        let c = material_colour(material);
+        let rgb = c.map(|x| format!("{:.3}", f64::from(x) / 255.0));
+        let _ = writeln!(out, "o {}", solid_name(name));
+        for v in &mesh.vertices {
+            let _ = writeln!(
+                out,
+                "v {} {} {} {} {} {}",
+                number(v[0] / NM_PER_MM),
+                number(v[1] / NM_PER_MM),
+                number(v[2] / NM_PER_MM),
+                rgb[0],
+                rgb[1],
+                rgb[2]
+            );
+        }
+        for t in &mesh.triangles {
+            let _ = writeln!(
+                out,
+                "f {} {} {}",
+                base + t[0] as usize + 1,
+                base + t[1] as usize + 1,
+                base + t[2] as usize + 1
+            );
+        }
+        base += mesh.vertices.len();
+    }
+    out
+}
+
 /// The CRC-32 of some bytes (the one of zip files, polynomial `0xEDB88320`).
 pub fn crc32(bytes: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
@@ -124,13 +196,67 @@ const RELATIONSHIPS: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Relati
 
 /// The XML of the model of a 3MF package.
 pub fn three_mf_model(bodies: &[(&str, &Mesh)]) -> String {
+    model_xml(bodies, None)
+}
+
+/// The XML of the model of a 3MF package with a list of base materials, one for each different
+/// material of the solids (in the order they first appear), each with its colour
+/// ([`material_colour`]); every solid that has a material points at its entry. The box, which has
+/// none, has no colour of its own.
+pub fn three_mf_model_coloured(bodies: &[(&str, &Mesh, &str)]) -> String {
+    let list: Vec<(&str, &Mesh)> = bodies.iter().map(|(n, m, _)| (*n, *m)).collect();
+    let materials: Vec<&str> = bodies.iter().map(|b| b.2).collect();
+    model_xml(&list, Some(&materials))
+}
+
+/// The solids as a 3MF package with the colours of their materials (see
+/// [`three_mf_model_coloured`]).
+pub fn three_mf_coloured(bodies: &[(&str, &Mesh, &str)]) -> Vec<u8> {
+    zip_stored(&[
+        ("[Content_Types].xml", CONTENT_TYPES.as_bytes().to_vec()),
+        ("_rels/.rels", RELATIONSHIPS.as_bytes().to_vec()),
+        (
+            "3D/3dmodel.model",
+            three_mf_model_coloured(bodies).into_bytes(),
+        ),
+    ])
+}
+
+fn model_xml(bodies: &[(&str, &Mesh)], materials: Option<&[&str]>) -> String {
     let mut out = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<model unit=\"millimeter\" xml:lang=\"en-US\" xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">\n<resources>\n",
     );
+    // the different materials in the order they appear, and the id of the list (after the objects)
+    let mut distinct: Vec<&str> = Vec::new();
+    if let Some(list) = materials {
+        for m in list.iter().filter(|m| !m.is_empty()) {
+            if !distinct.contains(m) {
+                distinct.push(m);
+            }
+        }
+    }
+    let list_id = bodies.len() + 1;
+    if !distinct.is_empty() {
+        let _ = writeln!(out, "<basematerials id=\"{list_id}\">");
+        for m in &distinct {
+            let _ = writeln!(
+                out,
+                "<base name=\"{}\" displaycolor=\"{}\"/>",
+                solid_name(m),
+                hex_colour(material_colour(m))
+            );
+        }
+        out.push_str("</basematerials>\n");
+    }
     for (i, (name, mesh)) in bodies.iter().enumerate() {
+        let colour = materials
+            .and_then(|list| list.get(i))
+            .and_then(|m| distinct.iter().position(|d| d == m))
+            .map(|at| format!(" pid=\"{list_id}\" pindex=\"{at}\""))
+            .unwrap_or_default();
         let _ = writeln!(
             out,
-            "<object id=\"{}\" name=\"{}\" type=\"model\"><mesh><vertices>",
+            "<object id=\"{}\" name=\"{}\" type=\"model\"{colour}><mesh><vertices>",
             i + 1,
             solid_name(name)
         );
@@ -646,6 +772,108 @@ mod tests {
     }
 
     #[test]
+    fn the_colour_of_a_material_comes_from_its_name_and_differs_between_materials() {
+        assert_eq!(material_colour(""), [190, 190, 190]);
+        assert_eq!(material_colour("aluminium"), material_colour("aluminium"));
+        let names = [
+            "aluminium",
+            "steel",
+            "brass",
+            "pla",
+            "petg",
+            "oak",
+            "copper",
+            "abs",
+        ];
+        for (i, a) in names.iter().enumerate() {
+            for b in &names[i + 1..] {
+                assert_ne!(material_colour(a), material_colour(b), "{a} {b}");
+            }
+        }
+        assert_eq!(hex_colour([0, 15, 255]), "#000FFF");
+        // the saturation and the value are fixed: the largest colour is the value, the smallest
+        // is the value less the saturation
+        for name in names {
+            let c = material_colour(name);
+            let (hi, lo) = (*c.iter().max().unwrap(), *c.iter().min().unwrap());
+            assert_eq!(hi, 217, "{name}");
+            assert!((97..=99).contains(&lo), "{name} {c:?}");
+        }
+    }
+
+    #[test]
+    fn the_obj_file_with_colours_has_six_numbers_a_vertex_and_reads_back_to_the_same_solids() {
+        let a = cube(0.0);
+        let b = cube(20.0);
+        let text = obj_coloured(&[("box", &a, ""), ("part", &b, "steel")]);
+        assert!(text.starts_with("# EH3D PHOENIX-CAD, millimetres, colours by material\n"));
+        let verts: Vec<&str> = text.lines().filter(|l| l.starts_with("v ")).collect();
+        assert_eq!(verts.len(), 16);
+        assert!(verts.iter().all(|l| l.split(' ').count() == 7), "{verts:?}");
+        // the first eight are grey, the others have the colour of the steel
+        let grey = format!("{:.3}", 190.0 / 255.0);
+        assert!(
+            verts[0].ends_with(&format!("{grey} {grey} {grey}")),
+            "{}",
+            verts[0]
+        );
+        let c = material_colour("steel").map(|x| format!("{:.3}", f64::from(x) / 255.0));
+        assert!(verts[8].ends_with(&c.join(" ")), "{}", verts[8]);
+        // the faces number the vertices over the whole file, and a reader that ignores the colours
+        // gets the solids that were written
+        let read = read_obj(&text).unwrap();
+        assert_eq!(read.len(), 2);
+        assert_eq!((read[0].0.as_str(), &read[0].1), ("box", &a));
+        assert_eq!((read[1].0.as_str(), &read[1].1), ("part", &b));
+        // the same bytes for the same model
+        assert_eq!(
+            text,
+            obj_coloured(&[("box", &a, ""), ("part", &b, "steel")])
+        );
+    }
+
+    #[test]
+    fn the_3mf_package_with_colours_lists_each_material_once_and_reads_back_to_the_same_solids() {
+        let a = cube(0.0);
+        let b = cube(20.0);
+        let c = cube(40.0);
+        let bodies = [
+            ("box", &a, ""),
+            ("one", &b, "steel"),
+            ("two", &c, "steel"),
+            ("three", &a, "brass"),
+        ];
+        let model = three_mf_model_coloured(&bodies);
+        assert_eq!(model.matches("<basematerials id=\"5\">").count(), 1);
+        assert_eq!(model.matches("<base ").count(), 2);
+        assert!(model.contains(&format!(
+            "<base name=\"steel\" displaycolor=\"{}\"/>",
+            hex_colour(material_colour("steel"))
+        )));
+        assert!(model.contains("<object id=\"1\" name=\"box\" type=\"model\"><mesh>"));
+        assert!(
+            model.contains("<object id=\"2\" name=\"one\" type=\"model\" pid=\"5\" pindex=\"0\">")
+        );
+        assert!(
+            model.contains("<object id=\"3\" name=\"two\" type=\"model\" pid=\"5\" pindex=\"0\">")
+        );
+        assert!(model
+            .contains("<object id=\"4\" name=\"three\" type=\"model\" pid=\"5\" pindex=\"1\">"));
+        // the list comes before the objects that use it
+        assert!(model.find("<basematerials").unwrap() < model.find("<object ").unwrap());
+        let bytes = three_mf_coloured(&bodies);
+        let read = read_three_mf(&bytes).unwrap();
+        assert_eq!(read.len(), 4);
+        assert_eq!((read[1].0.as_str(), &read[1].1), ("one", &b));
+        assert_eq!((read[3].0.as_str(), &read[3].1), ("three", &a));
+        // a model with no material at all is the plain one
+        assert_eq!(
+            three_mf_model_coloured(&[("box", &a, "")]),
+            three_mf_model(&[("box", &a)])
+        );
+    }
+
+    #[test]
     fn a_stl_file_is_welded_into_a_closed_surface_with_the_same_volume() {
         let a = cube(0.0);
         let stl = crate::mesh::stl_binary(&[("box", &a)]);
@@ -855,5 +1083,49 @@ mod tests {
     fn the_volume_of_the_triangles_of_the_cube_is_a_thousand_cubic_millimetres() {
         let a = cube(0.0);
         assert!((a.volume_nm3() - 1.0e21).abs() < 1.0e9);
+    }
+
+    #[test]
+    fn colours_of_random_names_are_fixed_and_a_3mf_lists_each_material_once_with_a_fixed_seed() {
+        let mut state = 0x1234_5678_9ABC_DEF1u64;
+        let pool = ["steel", "brass", "pla", "oak", "copper", "abs", "petg", ""];
+        let a = cube(0.0);
+        for round in 0..300 {
+            // a random name of letters and digits: the same colour every time, with the largest
+            // channel at the fixed value and a text of seven characters
+            let len = 1 + (next(&mut state) % 12) as usize;
+            let name: String = (0..len)
+                .map(|_| char::from(b'a' + (next(&mut state) % 26) as u8))
+                .collect();
+            let c = material_colour(&name);
+            assert_eq!(c, material_colour(&name), "{name}");
+            assert_eq!(*c.iter().max().unwrap(), 217, "{name}");
+            assert_eq!(hex_colour(c).len(), 7);
+            // up to six solids with materials from a pool: each different material is listed once
+            let count = 1 + (next(&mut state) % 6) as usize;
+            let picks: Vec<&str> = (0..count)
+                .map(|_| pool[(next(&mut state) % pool.len() as u64) as usize])
+                .collect();
+            let bodies: Vec<(&str, &Mesh, &str)> =
+                picks.iter().map(|m| ("solid", &a, *m)).collect();
+            let model = three_mf_model_coloured(&bodies);
+            let mut distinct: Vec<&str> = picks.iter().copied().filter(|m| !m.is_empty()).collect();
+            distinct.sort_unstable();
+            distinct.dedup();
+            assert_eq!(
+                model.matches("<base ").count(),
+                distinct.len(),
+                "round {round}"
+            );
+            assert_eq!(
+                model.matches(" pid=").count(),
+                picks.iter().filter(|m| !m.is_empty()).count(),
+                "round {round}"
+            );
+            // the package reads back to the same solids
+            let read = read_three_mf(&three_mf_coloured(&bodies)).unwrap();
+            assert_eq!(read.len(), count);
+            assert!(read.iter().all(|(_, m)| *m == a));
+        }
     }
 }
