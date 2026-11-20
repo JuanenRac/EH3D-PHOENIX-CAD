@@ -15,7 +15,7 @@ The table repeats the `REGISTRY` of the crate `eh3d-phoenix-cad` (`src/lib.rs`);
 | PHOENIX-CAD-005 | Hole or post id used twice or unknown | an operation that adds a hole, a post, an extrusion or a pocket under an id already used, or names a hole, a post, an extrusion or a pocket that does not exist |
 | PHOENIX-CAD-006 | Angle outside the range | an angle whose absolute value is not below a million degrees |
 | PHOENIX-CAD-007 | Count or ratio outside its range | a count that is negative or above a million, or a ratio beyond a thousand times the whole |
-| PHOENIX-CAD-008 | Number with a unit not understood | a text such as `1.6 mm` or `1/16 in` that has no number, no known unit or an invalid fraction |
+| PHOENIX-CAD-008 | Number with a unit not understood | a text such as `1.6 mm`, `1/16 in` or `1 1/2 in` that has no number, no known unit, an invalid fraction or a mixed number whose fraction is not proper (`1 5/2 in`) |
 | PHOENIX-CAD-009 | Integer calculation overflows | a scaling or a division that does not fit in the integers used, or a division by zero |
 | PHOENIX-CAD-010 | Reference to an element that does not exist | a name of a face, edge or hole wall that is unknown, names a hole that is gone, or is not written in the canonical way; the operation that uses it fails and no other element is chosen in its place |
 | PHOENIX-CAD-011 | Settings not valid | a settings file with a line that is not a section, a `key = value` or a comment, a repeated or missing key, or a value outside its limits; the message names the line or the key |

@@ -294,8 +294,32 @@ fn parse_int(s: &str) -> Option<i128> {
     Some(if negative { -v } else { v })
 }
 
-/// A number written as `12`, `1.6`, `0,5` or `1/16`, as a numerator and a positive denominator.
+/// A mixed number written as `1 1/2` (a whole number, a space and a proper fraction), as a numerator and a positive denominator. The sign of the whole
+/// number is the sign of the whole value, so `-1 1/2` is minus one and a half. `None` for anything else, a fraction that is not proper (`1 5/2`) and a
+/// fraction with a sign of its own (`1 -1/2`).
+fn parse_mixed(s: &str) -> Option<(i128, i128)> {
+    let (whole, fraction) = s.trim().split_once(' ')?;
+    let (num, den) = fraction.trim().split_once('/')?;
+    let (num, den) = (parse_int(num.trim())?, parse_int(den.trim())?);
+    let num_is_plain = !fraction.contains(['-', '+']);
+    if den <= 0 || num < 0 || num >= den || !num_is_plain {
+        return None;
+    }
+    let whole = whole.trim();
+    let (negative, digits) = match whole.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, whole.strip_prefix('+').unwrap_or(whole)),
+    };
+    let w = parse_int(digits).filter(|w| *w >= 0)?;
+    let total = w.checked_mul(den)?.checked_add(num)?;
+    Some((if negative { -total } else { total }, den))
+}
+
+/// A number written as `12`, `1.6`, `0,5`, `1/16` or `1 1/2`, as a numerator and a positive denominator.
 fn parse_rational(s: &str) -> Option<(i128, i128)> {
+    if let Some(mixed) = parse_mixed(s) {
+        return Some(mixed);
+    }
     if let Some((a, b)) = s.split_once('/') {
         let n = parse_int(a.trim())?;
         let d = parse_int(b.trim())?;
@@ -331,13 +355,14 @@ fn parse_rational(s: &str) -> Option<(i128, i128)> {
     Some((if negative { -int } else { int }, den))
 }
 
-/// Reads a length written with its unit: `1.6 mm`, `62 mil`, `1/16 in`, `0,5mm`. The decimal
+/// Reads a length written with its unit: `1.6 mm`, `62 mil`, `1/16 in`, `1 1/2 in`, `0,5mm`. The decimal
 /// separator is a point or a comma. The result is rounded half away from zero to the nanometre.
 /// A text without a known unit, or a number that is not understood, is refused.
 ///
 /// ```
 /// use eh3d_phoenix_cad::units::parse_length;
 /// assert_eq!(parse_length("1/16 in").unwrap().get(), 1_587_500);
+/// assert_eq!(parse_length("1 1/2 in").unwrap().get(), 38_100_000);
 /// assert_eq!(parse_length("0,5 mm").unwrap().get(), 500_000);
 /// assert_eq!(parse_length("5 km").unwrap_err().code(), "PHOENIX-CAD-008");
 /// ```
@@ -734,5 +759,58 @@ mod tests {
             read > 30 && refused > 1000 && angles > 50,
             "{read} {refused} {angles}"
         );
+    }
+
+    #[test]
+    fn a_mixed_number_of_inches_is_a_whole_number_and_a_proper_fraction() {
+        for (text, nm) in [
+            ("1 1/2 in", 38_100_000),
+            ("1 1/2in", 38_100_000),
+            ("2 3/16 in", 55_562_500),
+            ("0 1/4 in", 6_350_000),
+            ("-1 1/2 in", -38_100_000),
+            ("+3 1/8 in", 79_375_000),
+            ("1  1/2 in", 38_100_000),
+            ("12 1/2 mm", 12_500_000),
+            ("1 1/2 mil", 38_100),
+        ] {
+            assert_eq!(parse_length(text).unwrap().get(), nm, "{text}");
+        }
+        // the plain fractions and decimals are read as they were
+        assert_eq!(parse_length("-1/2 in").unwrap().get(), -12_700_000);
+        assert_eq!(parse_length("1/16 in").unwrap().get(), 1_587_500);
+        assert_eq!(parse_length("1.5 in").unwrap().get(), 38_100_000);
+        assert_eq!(parse_length("1 / 2 in").unwrap().get(), 12_700_000);
+        // a fraction that is not proper, has a sign of its own or is broken is refused, as is a number with a space in it that is not a fraction
+        for text in [
+            "1 5/2 in",
+            "1 2/2 in",
+            "1 -1/2 in",
+            "1 +1/2 in",
+            "1 1/0 in",
+            "1 1/-2 in",
+            "1 1/2/3 in",
+            "- 1 1/2 in",
+            "1 1 in",
+            "1 1/ in",
+            "a 1/2 in",
+            "1.5 1/2 in",
+            "1 0.5/2 in",
+        ] {
+            assert_eq!(
+                parse_length(text).unwrap_err().code(),
+                "PHOENIX-CAD-008",
+                "{text}"
+            );
+        }
+        // angles take the same mixed numbers
+        assert_eq!(parse_angle("22 1/2").unwrap().get(), 22_500_000_000);
+        assert_eq!(parse_angle("-22 1/2 deg").unwrap().get(), -22_500_000_000);
+        // a mixed number written back with the decimals is read back to the same length
+        for nm in [38_100_000, 55_562_500, -6_350_000, 1_587_500] {
+            let length = Length::new(nm).unwrap();
+            let text = format_length(length, Unit::Inch, 6);
+            assert_eq!(parse_length(&text).unwrap(), length, "{text}");
+        }
     }
 }
