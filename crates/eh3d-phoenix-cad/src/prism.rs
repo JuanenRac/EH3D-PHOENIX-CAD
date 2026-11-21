@@ -265,6 +265,95 @@ impl Solid {
         Ok(Solid { prisms })
     }
 
+    /// The solid reflected in the plane across `axis` (0 for x, 1 for y, 2 for z) at the
+    /// coordinate `at`: a point at `v` goes to `2 * at - v`. The result is in the canonical form;
+    /// a coordinate that would leave the range of lengths is refused (`PHOENIX-CAD-001`) and an
+    /// axis above 2 is refused (`PHOENIX-CAD-053`).
+    pub fn mirrored(&self, axis: usize, at: Length, limits: &Limits) -> Result<Solid, CadError> {
+        if axis > 2 {
+            return Err(CadError::PrismLimit(format!(
+                "the axis {axis} is not 0, 1 or 2"
+            )));
+        }
+        let twice = at
+            .get()
+            .checked_mul(2)
+            .ok_or(CadError::Overflow("plane of a mirror"))?;
+        let mut prisms = Vec::with_capacity(self.prisms.len());
+        for b in &self.prisms {
+            let mut p = *b;
+            p.min[axis] = Length::new(
+                twice
+                    .checked_sub(b.max[axis])
+                    .ok_or(CadError::Overflow("mirrored prism"))?,
+            )?
+            .get();
+            p.max[axis] = Length::new(
+                twice
+                    .checked_sub(b.min[axis])
+                    .ok_or(CadError::Overflow("mirrored prism"))?,
+            )?
+            .get();
+            prisms.push(p);
+        }
+        Solid::from_prisms(&prisms, limits)
+    }
+
+    /// The solid turned `quarters` quarter turns (counter-clockwise seen from the high end of the
+    /// axis, so one quarter of the z axis takes x to y) about the line parallel to `axis` that
+    /// passes through `centre`. Any whole number of quarters is taken, a negative one turns the
+    /// other way. Only quarter turns keep the boxes aligned with the axes, so nothing is rounded.
+    pub fn rotated(
+        &self,
+        axis: usize,
+        quarters: i64,
+        centre: [Length; 3],
+        limits: &Limits,
+    ) -> Result<Solid, CadError> {
+        if axis > 2 {
+            return Err(CadError::PrismLimit(format!(
+                "the axis {axis} is not 0, 1 or 2"
+            )));
+        }
+        let turns = quarters.rem_euclid(4);
+        // the two axes of the plane of the turn, in the order that makes the turn counter-clockwise
+        let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+        let (cu, cv) = (centre[u].get(), centre[v].get());
+        let spin = |p: [i64; 3]| -> Result<[i64; 3], CadError> {
+            let mut q = p;
+            for _ in 0..turns {
+                let (du, dv) = (
+                    q[u].checked_sub(cu)
+                        .ok_or(CadError::Overflow("turned prism"))?,
+                    q[v].checked_sub(cv)
+                        .ok_or(CadError::Overflow("turned prism"))?,
+                );
+                q[u] = Length::new(
+                    cu.checked_sub(dv)
+                        .ok_or(CadError::Overflow("turned prism"))?,
+                )?
+                .get();
+                q[v] = Length::new(
+                    cv.checked_add(du)
+                        .ok_or(CadError::Overflow("turned prism"))?,
+                )?
+                .get();
+            }
+            Ok(q)
+        };
+        let mut prisms = Vec::with_capacity(self.prisms.len());
+        for b in &self.prisms {
+            let (a, c) = (spin(b.min)?, spin(b.max)?);
+            let mut p = *b;
+            for i in 0..3 {
+                p.min[i] = a[i].min(c[i]);
+                p.max[i] = a[i].max(c[i]);
+            }
+            prisms.push(p);
+        }
+        Solid::from_prisms(&prisms, limits)
+    }
+
     /// The union with another solid.
     pub fn union(&self, other: &Solid, limits: &Limits) -> Result<Solid, CadError> {
         Solid::combine(&self.prisms, &other.prisms, Boolean::Union, limits)

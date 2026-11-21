@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! The commands that look at the history of features of a project: `history-check` builds it and
-//! reports every node, `history-graph` writes its graph for Graphviz.
+//! reports every node (and can write the solid as a glTF or an STL file), `history-graph` writes
+//! its graph for Graphviz, `history-measure` measures the solid (volume, surface, centre of mass,
+//! box, thinnest walls) and `sketch-points` places points typed as text.
 //!
 //! The exit code of `history-check` is the one of every check of the suite: 0 when every node was
 //! built, 2 when the verification did not pass (a node failed or inherits a failure), and 1 when
@@ -12,17 +14,26 @@ use std::fs;
 use std::path::Path;
 
 use crate::config::Settings;
+use crate::coordentry;
 use crate::export::write_bytes;
 use crate::featuredag::{BuildState, FeatureDag, HistorySettings};
 use crate::glb;
 use crate::lang::{fill, Lang, Msg};
+use crate::prism::Solid;
 use crate::project::Document;
+use crate::solidquery;
+use crate::stlsolid;
 use crate::tools_cli::Args;
 use crate::uiconfig::UiSettings;
 use crate::window::error_text;
 
 /// The commands of this module, for the program to know which words are theirs.
-pub const COMMANDS: [&str; 2] = ["history-check", "history-graph"];
+pub const COMMANDS: [&str; 4] = [
+    "history-check",
+    "history-graph",
+    "history-measure",
+    "sketch-points",
+];
 
 /// The largest project file that these commands read.
 const MAX_PROJECT_BYTES: usize = 256 << 20;
@@ -33,6 +44,8 @@ pub fn run(command: &str, args: &[String]) -> Result<(String, bool), String> {
     match command {
         "history-check" => check(args),
         "history-graph" => graph(args),
+        "history-measure" => measure(args),
+        "sketch-points" => points(args),
         other => Err(format!("{other}: unknown command (see help)")),
     }
 }
@@ -86,10 +99,14 @@ fn csv(text: &str) -> String {
 }
 
 fn check(args: &[String]) -> Result<(String, bool), String> {
-    let a = Args::parse(args, &["--config", "--glb"], &["--text", "--overwrite"])?;
+    let a = Args::parse(
+        args,
+        &["--config", "--glb", "--stl"],
+        &["--text", "--overwrite"],
+    )?;
     let (dag, lib, ui) = open(&a, a.lang)?;
-    if a.has("--overwrite") && a.value("--glb").is_none() {
-        return Err("--overwrite is for --glb".to_owned());
+    if a.has("--overwrite") && a.value("--glb").is_none() && a.value("--stl").is_none() {
+        return Err("--overwrite is for --glb and --stl".to_owned());
     }
     let Some(mut dag) = dag else {
         return if a.has("--text") {
@@ -117,6 +134,27 @@ fn check(args: &[String]) -> Result<(String, bool), String> {
         out.push_str(&fill(
             Msg::MeshWrote.tr(a.lang),
             &["1", &(solid.prisms().len() * 12).to_string(), target],
+        ));
+        out.push('\n');
+    }
+    if let Some(target) = a.value("--stl") {
+        let solid = dag
+            .result()
+            .ok_or_else(|| Msg::FeatNoResult.tr(a.lang).to_owned())?;
+        let bytes = stlsolid::solid_to_stl(solid, lib.mesh.max_triangles, &lib_limits(&dag))
+            .map_err(|e| error_text(&e, a.lang))?;
+        let triangles = (bytes.len() - 84) / 50;
+        write_bytes(
+            Path::new(target),
+            &bytes,
+            a.has("--overwrite"),
+            None,
+            ui.export.max_kib,
+        )
+        .map_err(|e| error_text(&e, a.lang))?;
+        out.push_str(&fill(
+            Msg::MeshWrote.tr(a.lang),
+            &["1", &triangles.to_string(), target],
         ));
         out.push('\n');
     }
@@ -169,6 +207,211 @@ fn check(args: &[String]) -> Result<(String, bool), String> {
         }
     }
     Ok((out, rebuild.is_clean()))
+}
+
+/// The limits of the operations between solids, from the settings of the history.
+fn lib_limits(dag: &FeatureDag) -> crate::prism::Limits {
+    dag.settings().limits()
+}
+
+/// `value` divided by ten to the `shift`, with six decimals, rounded half away from zero.
+fn fixed(value: i128, shift: u32) -> String {
+    let keep = shift.saturating_sub(6);
+    let scale = 10i128.pow(keep);
+    let half = scale / 2;
+    let rounded = if value >= 0 {
+        (value + half) / scale
+    } else {
+        (value - half) / scale
+    };
+    let sign = if rounded < 0 { "-" } else { "" };
+    let magnitude = rounded.unsigned_abs();
+    format!(
+        "{sign}{}.{:06}",
+        magnitude / 1_000_000,
+        magnitude % 1_000_000
+    )
+}
+
+/// A length in nanometres as millimetres with six decimals (exact).
+fn mm(nm: i64) -> String {
+    fixed(i128::from(nm), 6)
+}
+
+const AXES: [&str; 3] = ["x", "y", "z"];
+
+/// The solid of the history of a project, built.
+fn built_solid(a: &Args) -> Result<(Solid, crate::prism::Limits), String> {
+    let (dag, lib, _) = open(a, a.lang)?;
+    let Some(mut dag) = dag else {
+        return Err(Msg::FeatNone.tr(a.lang).to_owned());
+    };
+    let rebuild = dag.rebuild(&lib).map_err(|e| error_text(&e, a.lang))?;
+    if !rebuild.is_clean() {
+        return Err(Msg::FeatNoResult.tr(a.lang).to_owned());
+    }
+    let limits = lib_limits(&dag);
+    let solid = dag
+        .result()
+        .ok_or_else(|| Msg::FeatNoResult.tr(a.lang).to_owned())?
+        .clone();
+    Ok((solid, limits))
+}
+
+fn measure(args: &[String]) -> Result<(String, bool), String> {
+    let a = Args::parse(args, &["--config", "--min-wall"], &["--text"])?;
+    let min_wall = match a.value("--min-wall") {
+        None => None,
+        Some(text) => {
+            let t = text.trim();
+            let with_unit = if t.chars().any(char::is_alphabetic) {
+                t.to_owned()
+            } else {
+                format!("{t} mm")
+            };
+            let l = crate::units::parse_length(&with_unit).map_err(|e| error_text(&e, a.lang))?;
+            if l.get() <= 0 {
+                return Err("--min-wall must be more than zero".to_owned());
+            }
+            Some(l.get())
+        }
+    };
+    let (solid, limits) = built_solid(&a)?;
+    let text = a.has("--text");
+    let fail = |e: crate::CadError| error_text(&e, a.lang);
+    let mut out = String::new();
+    if !text {
+        out.push_str("quantity,axis,value,unit\n");
+    }
+    let Some((lo, hi)) = solid.bounds() else {
+        if text {
+            out.push_str(Msg::MeasEmpty.tr(a.lang));
+            out.push('\n');
+        }
+        return Ok((out, true));
+    };
+    let area = solidquery::surface_area_nm2(&solid, &limits).map_err(fail)?;
+    let centre = solidquery::centroid_nm(&solid)
+        .map_err(fail)?
+        .unwrap_or([0; 3]);
+    let volume = solid.volume_nm3();
+    let mut thin_rows = Vec::new();
+    let mut thinnest = Vec::new();
+    for (axis, name) in AXES.iter().enumerate() {
+        if let Some(t) = solidquery::thinnest(&solid, axis, &limits).map_err(fail)? {
+            thinnest.push((*name, t));
+        }
+        if let Some(limit) = min_wall {
+            for w in solidquery::walls(&solid, axis, Some(limit), 1000, &limits).map_err(fail)? {
+                thin_rows.push((*name, w));
+            }
+        }
+    }
+    if text {
+        let lines = [
+            fill(Msg::MeasVolume.tr(a.lang), &[&fixed(volume, 18)]),
+            fill(Msg::MeasArea.tr(a.lang), &[&fixed(area, 12)]),
+            fill(
+                Msg::MeasCentre.tr(a.lang),
+                &[&mm(centre[0]), &mm(centre[1]), &mm(centre[2])],
+            ),
+            fill(
+                Msg::MeasBox.tr(a.lang),
+                &[
+                    &mm(lo[0]),
+                    &mm(lo[1]),
+                    &mm(lo[2]),
+                    &mm(hi[0]),
+                    &mm(hi[1]),
+                    &mm(hi[2]),
+                ],
+            ),
+        ];
+        for l in lines {
+            out.push_str(&l);
+            out.push('\n');
+        }
+        for (name, t) in &thinnest {
+            out.push_str(&fill(
+                Msg::MeasThinnest.tr(a.lang),
+                &[name, &mm(t.run.thickness()), &mm(t.run.from), &mm(t.run.to)],
+            ));
+            out.push('\n');
+        }
+        if let Some(limit) = min_wall {
+            if thin_rows.is_empty() {
+                out.push_str(&fill(Msg::MeasNoWalls.tr(a.lang), &[&mm(limit)]));
+                out.push('\n');
+            }
+            for (name, w) in &thin_rows {
+                out.push_str(&fill(
+                    Msg::MeasWall.tr(a.lang),
+                    &[
+                        &mm(limit),
+                        name,
+                        &mm(w.run.thickness()),
+                        &mm(w.run.from),
+                        &mm(w.run.to),
+                        &mm(w.low[0]),
+                        &mm(w.high[0]),
+                        &mm(w.low[1]),
+                        &mm(w.high[1]),
+                    ],
+                ));
+                out.push('\n');
+            }
+        }
+    } else {
+        out.push_str(&format!("volume,,{volume},nm3\n"));
+        out.push_str(&format!("surface,,{area},nm2\n"));
+        for (i, name) in AXES.iter().enumerate() {
+            out.push_str(&format!("centre,{name},{},nm\n", centre[i]));
+        }
+        for (i, name) in AXES.iter().enumerate() {
+            out.push_str(&format!("box_low,{name},{},nm\n", lo[i]));
+            out.push_str(&format!("box_high,{name},{},nm\n", hi[i]));
+        }
+        for (name, t) in &thinnest {
+            out.push_str(&format!("thinnest,{name},{},nm\n", t.run.thickness()));
+        }
+        for (name, w) in &thin_rows {
+            out.push_str(&format!("thin_wall,{name},{},nm\n", w.run.thickness()));
+        }
+    }
+    // a wall under the minimum is a verification that did not pass
+    Ok((out, thin_rows.is_empty()))
+}
+
+fn points(args: &[String]) -> Result<(String, bool), String> {
+    let a = Args::parse(args, &["--start"], &["--text"])?;
+    if a.words.is_empty() {
+        return Err("this command needs at least one point".to_owned());
+    }
+    let start = match a.value("--start") {
+        None => [0, 0],
+        Some(text) => {
+            let p = coordentry::resolve(&[text], [0, 0]).map_err(|e| error_text(&e, a.lang))?;
+            p[0]
+        }
+    };
+    let words: Vec<&str> = a.words.iter().map(String::as_str).collect();
+    let placed = coordentry::resolve(&words, start).map_err(|e| error_text(&e, a.lang))?;
+    let mut out = String::new();
+    if !a.has("--text") {
+        out.push_str("point,x_nm,y_nm\n");
+    }
+    for (i, p) in placed.iter().enumerate() {
+        if a.has("--text") {
+            out.push_str(&fill(
+                Msg::PointRow.tr(a.lang),
+                &[&(i + 1).to_string(), &mm(p[0]), &mm(p[1])],
+            ));
+        } else {
+            out.push_str(&format!("{},{},{}", i + 1, p[0], p[1]));
+        }
+        out.push('\n');
+    }
+    Ok((out, true))
 }
 
 fn graph(args: &[String]) -> Result<(String, bool), String> {
@@ -342,5 +585,197 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.contains("Settings not valid"), "{e}");
+    }
+
+    /// A project whose result is a cube of 10 mm with a cavity of 6 mm whose left wall is
+    /// `left` mm thick (and the right one 4 - `left`).
+    fn hollow_project(left: &str) -> String {
+        let c = Settings::defaults();
+        let mut d = FeatureDag::new(HistorySettings::defaults());
+        d.add_parameter(id(1), "left", left, &c).unwrap();
+        d.add_feature(
+            id(2),
+            "block",
+            Op::Box,
+            &[],
+            &[
+                ("x", "0 mm"),
+                ("y", "0 mm"),
+                ("z", "0 mm"),
+                ("sx", "10 mm"),
+                ("sy", "10 mm"),
+                ("sz", "10 mm"),
+            ],
+            &c,
+        )
+        .unwrap();
+        d.add_feature(
+            id(3),
+            "cavity",
+            Op::Box,
+            &[],
+            &[
+                ("x", "left"),
+                ("y", "2 mm"),
+                ("z", "2 mm"),
+                ("sx", "6 mm"),
+                ("sy", "6 mm"),
+                ("sz", "6 mm"),
+            ],
+            &c,
+        )
+        .unwrap();
+        d.add_feature(id(4), "hollow", Op::Difference, &[id(2), id(3)], &[], &c)
+            .unwrap();
+        d.set_tip(Some(id(4)), &c).unwrap();
+        let mut doc = Document::new();
+        doc.set_history(&d).unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "cad24_histcli_{}_{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::SeqCst)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("p.phoenixproj");
+        fs::write(&path, doc.to_bytes()).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn the_measures_of_a_hollow_cube_are_the_ones_worked_out_by_hand() {
+        let path = hollow_project("2 mm");
+        let (csv, ok) = run("history-measure", &s(&[&path])).unwrap();
+        assert!(ok, "{csv}");
+        assert!(csv.starts_with("quantity,axis,value,unit\n"));
+        // volume 1000 - 216 = 784 mm3, surface 600 + 216 = 816 mm2, centre in the middle
+        assert!(
+            csv.contains("\nvolume,,784000000000000000000,nm3\n"),
+            "{csv}"
+        );
+        assert!(csv.contains("\nsurface,,816000000000000,nm2\n"), "{csv}");
+        assert!(csv.contains("\ncentre,x,5000000,nm\n"), "{csv}");
+        assert!(csv.contains("\nthinnest,y,2000000,nm\n"), "{csv}");
+        assert!(csv.contains("\nbox_high,z,10000000,nm\n"), "{csv}");
+        let (text, ok) = run("history-measure", &s(&[&path, "--text"])).unwrap();
+        assert!(ok);
+        assert!(
+            text.starts_with("Volume: 784.000000 mm3\nSurface: 816.000000 mm2\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Centre of mass: (5.000000, 5.000000, 5.000000) mm"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Thinnest along x: 2.000000 mm, from 0.000000 to 2.000000 mm"),
+            "{text}"
+        );
+        for (lang, word) in [
+            ("es", "Superficie"),
+            ("de", "Oberfläche"),
+            ("fr", "Centre de masse"),
+            ("it", "Baricentro"),
+            ("ja", "重心"),
+            ("zh", "质心"),
+            ("pt", "Superfície"),
+        ] {
+            let (t, _) = run("history-measure", &s(&[&path, "--text", "--lang", lang])).unwrap();
+            assert!(t.contains(word), "{lang}: {t}");
+        }
+    }
+
+    #[test]
+    fn a_wall_under_the_minimum_does_not_pass_and_is_reported_with_where() {
+        // the left wall is 1 mm thick
+        let path = hollow_project("1 mm");
+        let (csv, ok) = run("history-measure", &s(&[&path, "--min-wall", "2"])).unwrap();
+        assert!(!ok, "{csv}");
+        assert!(csv.contains("\nthin_wall,x,1000000,nm\n"), "{csv}");
+        let (text, ok) = run(
+            "history-measure",
+            &s(&[&path, "--text", "--min-wall", "2 mm"]),
+        )
+        .unwrap();
+        assert!(!ok);
+        assert!(
+            text.contains(
+                "Wall under 2.000000 mm along x: 1.000000 mm thick, from 0.000000 to 1.000000 mm, across 2.000000 to 8.000000 by 2.000000 to 8.000000 mm"
+            ),
+            "{text}"
+        );
+        let (es, _) = run(
+            "history-measure",
+            &s(&[&path, "--text", "--min-wall", "2", "--lang", "es"]),
+        )
+        .unwrap();
+        assert!(es.contains("Pared de menos de 2.000000 mm"), "{es}");
+        // with the limit at the thickness itself nothing is thinner
+        let (text, ok) = run("history-measure", &s(&[&path, "--text", "--min-wall", "1"])).unwrap();
+        assert!(ok && text.contains("No wall under 1.000000 mm"), "{text}");
+        // a limit that is not a length, or not positive, could not run
+        for bad in ["0", "-1", "abc", "2 km"] {
+            assert!(
+                run("history-measure", &s(&[&path, "--min-wall", bad])).is_err(),
+                "{bad}"
+            );
+        }
+        assert!(run("history-measure", &s(&[&path, "--min-wall"])).is_err());
+    }
+
+    #[test]
+    fn the_solid_is_written_as_an_stl_file_that_reads_back_with_the_exact_volume() {
+        let path = hollow_project("2 mm");
+        let out = std::path::Path::new(&path).with_file_name("out.stl");
+        let target = out.to_string_lossy().into_owned();
+        let (text, ok) = run("history-check", &s(&[&path, "--text", "--stl", &target])).unwrap();
+        assert!(ok, "{text}");
+        // twelve rectangles, twenty-four triangles
+        assert!(
+            text.starts_with("Wrote 1 solid(s) and 24 triangles to"),
+            "{text}"
+        );
+        let bytes = fs::read(&out).unwrap();
+        assert_eq!(bytes.len(), 84 + 24 * 50);
+        let tris = crate::mesh::read_stl(&bytes).unwrap();
+        assert_eq!(tris.len(), 24);
+        let volume: f64 = tris
+            .iter()
+            .map(|t| {
+                (t[0] * (t[4] * t[8] - t[5] * t[7])
+                    + t[1] * (t[5] * t[6] - t[3] * t[8])
+                    + t[2] * (t[3] * t[7] - t[4] * t[6]))
+                    / 6.0
+            })
+            .sum();
+        assert!((volume - 784.0).abs() < 1e-6, "{volume}");
+        // nothing is written over a file that exists unless it is ordered
+        let e = run("history-check", &s(&[&path, "--stl", &target])).unwrap_err();
+        assert!(!e.is_empty());
+        assert_eq!(fs::read(&out).unwrap(), bytes);
+        run(
+            "history-check",
+            &s(&[&path, "--stl", &target, "--overwrite"]),
+        )
+        .unwrap();
+        assert!(run("history-check", &s(&[&path, "--overwrite"])).is_err());
+    }
+
+    #[test]
+    fn typed_points_are_placed_one_after_another() {
+        let (csv, ok) = run("sketch-points", &s(&["0,0", "@10,0", "@10<90", "@-10,0"])).unwrap();
+        assert!(ok);
+        assert_eq!(
+            csv,
+            "point,x_nm,y_nm\n1,0,0\n2,10000000,0\n3,10000000,10000000\n4,0,10000000\n"
+        );
+        let (text, _) = run(
+            "sketch-points",
+            &s(&["--start", "1,1", "@5<30", "--text", "--lang", "de"]),
+        )
+        .unwrap();
+        assert_eq!(text, "Punkt 1: (5.330127, 3.500000) mm\n");
+        assert!(run("sketch-points", &s(&[])).is_err());
+        assert!(run("sketch-points", &s(&["1,2,3"])).is_err());
+        assert!(run("sketch-points", &s(&["--start", "@1,1", "0,0"])).is_ok());
     }
 }

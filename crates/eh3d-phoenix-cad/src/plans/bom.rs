@@ -101,7 +101,7 @@ pub fn part_nodes(
         }
         match op {
             Op::Box | Op::Intersection => add(&mut out)?,
-            Op::Move | Op::Difference => {
+            Op::Move | Op::Difference | Op::Rotate => {
                 if let Some(first) = inputs.first() {
                     stack.push((*first, mult));
                 }
@@ -115,6 +115,11 @@ pub fn part_nodes(
                 };
                 if let Some(first) = inputs.first() {
                     stack.push((*first, mult.saturating_mul(n)));
+                }
+            }
+            Op::Mirror => {
+                if let Some(first) = inputs.first() {
+                    stack.push((*first, mult.saturating_mul(2)));
                 }
             }
             Op::Union => {

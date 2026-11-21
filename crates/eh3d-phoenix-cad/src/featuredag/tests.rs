@@ -889,7 +889,140 @@ fn the_operations_have_names_inputs_and_keys() {
         assert_eq!(Op::from_name(op.name()), Some(op));
     }
     assert_eq!(Op::from_name("sphere"), None);
-    assert_eq!(Op::ALL.map(Op::inputs), [0, 1, 1, 2, 2, 2]);
+    assert_eq!(Op::ALL.map(Op::inputs), [0, 1, 1, 2, 2, 2, 1, 1]);
     assert_eq!(Op::Box.keys().len(), 6);
     assert!(Op::Union.keys().is_empty());
+}
+
+/// A row of two boxes and a node on top of it, for the tests of the mirror and the turn.
+fn lug(op: Op, params: &[(&str, &str)]) -> FeatureDag {
+    let c = cfg();
+    let mut d = dag();
+    d.add_feature(
+        id(30),
+        "lug",
+        Op::Box,
+        &[],
+        &[
+            ("x", "2 mm"),
+            ("y", "0 mm"),
+            ("z", "0 mm"),
+            ("sx", "3 mm"),
+            ("sy", "4 mm"),
+            ("sz", "5 mm"),
+        ],
+        &c,
+    )
+    .unwrap();
+    d.add_feature(id(31), "next", op, &[id(30)], params, &c)
+        .unwrap();
+    d.set_tip(Some(id(31)), &c).unwrap();
+    d
+}
+
+#[test]
+fn a_mirror_joins_the_input_and_its_reflection_and_follows_its_parameters() {
+    let c = cfg();
+    let mut d = lug(Op::Mirror, &[("axis", "0"), ("at", "0 mm")]);
+    let r = d.rebuild(&c).unwrap();
+    assert!(r.is_clean(), "{r:?}");
+    let s = d.result().unwrap();
+    assert_eq!(s.volume_nm3(), 2 * 3 * 4 * 5 * MM3);
+    assert_eq!(s.bounds().unwrap().0[0], -5_000_000);
+    assert_eq!(s.bounds().unwrap().1[0], 5_000_000);
+    // a plane across the box makes the two halves overlap and the union is smaller than twice
+    d.set_expression(id(31), Some("at"), "3 mm", &c).unwrap();
+    let r = d.rebuild(&c).unwrap();
+    assert!(r.is_clean(), "{r:?}");
+    // the box is [2, 5) and its reflection [1, 4): together [1, 5), four wide
+    assert_eq!(d.result().unwrap().volume_nm3(), 4 * 4 * 5 * MM3);
+    // the axis must be a whole number from 0 to 2
+    for axis in ["3", "-1", "1 / 2", "2 mm"] {
+        d.set_expression(id(31), Some("axis"), axis, &c).unwrap();
+        let r = d.rebuild(&c).unwrap();
+        assert_eq!(
+            r.report(id(31)).unwrap().code,
+            Some("PHOENIX-CAD-052"),
+            "{axis}"
+        );
+    }
+}
+
+#[test]
+fn a_turn_moves_the_input_by_quarters_and_is_read_back_from_the_file() {
+    let c = cfg();
+    let params = [
+        ("axis", "2"),
+        ("quarters", "1"),
+        ("cx", "0 mm"),
+        ("cy", "0 mm"),
+        ("cz", "0 mm"),
+    ];
+    let mut d = lug(Op::Rotate, &params);
+    let r = d.rebuild(&c).unwrap();
+    assert!(r.is_clean(), "{r:?}");
+    let s = d.result().unwrap().clone();
+    // (x, y) goes to (-y, x): the box [2,5) x [0,4) becomes [-4,0) x [2,5)
+    assert_eq!(s.bounds().unwrap().0, [-4_000_000, 2_000_000, 0]);
+    assert_eq!(s.bounds().unwrap().1, [0, 5_000_000, 5_000_000]);
+    assert_eq!(s.volume_nm3(), 3 * 4 * 5 * MM3);
+    // four quarters give the box back, and a quarter count may be a formula
+    d.set_expression(id(31), Some("quarters"), "2 + 2", &c)
+        .unwrap();
+    d.rebuild(&c).unwrap();
+    assert_eq!(d.result(), d.solid(id(30)));
+    // the file keeps the new operations in the canonical form and reads them back
+    let bytes = d.to_bytes();
+    let text = String::from_utf8(bytes.clone()).unwrap();
+    assert!(
+        text.contains("feature") && text.contains(" rotate next"),
+        "{text}"
+    );
+    let mut back = FeatureDag::from_bytes(&bytes, HistorySettings::defaults(), &c).unwrap();
+    assert_eq!(back.to_bytes(), bytes);
+    back.rebuild(&c).unwrap();
+    assert_eq!(back.result(), d.result());
+    // a feature that lacks a parameter of its operation is refused when it is added
+    let mut e = lug(Op::Rotate, &params);
+    let before = e.to_bytes();
+    assert!(e
+        .add_feature(id(32), "bad", Op::Mirror, &[id(31)], &[("axis", "0")], &c)
+        .is_err());
+    assert_eq!(e.to_bytes(), before);
+}
+
+#[test]
+fn a_seeded_family_of_mirrors_and_turns_always_keeps_the_volume_of_the_input() {
+    let c = cfg();
+    let mut seed = 0x6d69_7272u64;
+    let mut next = move |n: u64| {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (seed >> 33) % n
+    };
+    for case in 0..40 {
+        let axis = next(3).to_string();
+        let at = format!("{} mm", next(11) as i64 - 5);
+        let quarters = (next(9) as i64 - 4).to_string();
+        let centre = format!("{} mm", next(7));
+        let mut d = lug(
+            Op::Rotate,
+            &[
+                ("axis", &axis),
+                ("quarters", &quarters),
+                ("cx", &centre),
+                ("cy", &centre),
+                ("cz", &centre),
+            ],
+        );
+        let r = d.rebuild(&c).unwrap();
+        assert!(r.is_clean(), "case {case}: {r:?}");
+        assert_eq!(d.result().unwrap().volume_nm3(), 60 * MM3, "case {case}");
+        // the mirror: the volume is that of the union, never less than the input and never more than twice
+        let mut m = lug(Op::Mirror, &[("axis", &axis), ("at", &at)]);
+        assert!(m.rebuild(&c).unwrap().is_clean());
+        let v = m.result().unwrap().volume_nm3();
+        assert!((60 * MM3..=120 * MM3).contains(&v), "case {case}: {v}");
+    }
 }

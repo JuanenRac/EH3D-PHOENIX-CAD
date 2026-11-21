@@ -146,17 +146,24 @@ pub enum Op {
     Difference,
     /// What the two inputs have in common.
     Intersection,
+    /// The first input together with its reflection in the plane across `axis` at `at`.
+    Mirror,
+    /// The first input turned by `quarters` quarter turns about the line parallel to `axis`
+    /// through `cx cy cz`.
+    Rotate,
 }
 
 impl Op {
     /// Every operation.
-    pub const ALL: [Op; 6] = [
+    pub const ALL: [Op; 8] = [
         Op::Box,
         Op::Move,
         Op::Array,
         Op::Union,
         Op::Difference,
         Op::Intersection,
+        Op::Mirror,
+        Op::Rotate,
     ];
 
     /// The name written in the file.
@@ -168,6 +175,8 @@ impl Op {
             Op::Union => "union",
             Op::Difference => "difference",
             Op::Intersection => "intersection",
+            Op::Mirror => "mirror",
+            Op::Rotate => "rotate",
         }
     }
 
@@ -180,7 +189,7 @@ impl Op {
     pub fn inputs(self) -> usize {
         match self {
             Op::Box => 0,
-            Op::Move | Op::Array => 1,
+            Op::Move | Op::Array | Op::Mirror | Op::Rotate => 1,
             Op::Union | Op::Difference | Op::Intersection => 2,
         }
     }
@@ -191,6 +200,8 @@ impl Op {
             Op::Box => &["x", "y", "z", "sx", "sy", "sz"],
             Op::Move => &["dx", "dy", "dz"],
             Op::Array => &["count", "dx", "dy", "dz"],
+            Op::Mirror => &["axis", "at"],
+            Op::Rotate => &["axis", "quarters", "cx", "cy", "cz"],
             Op::Union | Op::Difference | Op::Intersection => &[],
         }
     }
@@ -1232,6 +1243,21 @@ fn compute(
                 })?;
                 eval(text)?.to_length(0)
             };
+            // a parameter that has to be a whole number inside a range
+            let whole = |key: &str, low: i128, high: i128| -> Result<i128, CadError> {
+                let text = params.get(key).ok_or_else(|| {
+                    CadError::FeatureFailed(format!("{}: no parameter {key}", node.name))
+                })?;
+                match eval(text)? {
+                    Value::Number(r) if r.is_integer() && (low..=high).contains(&r.numer()) => {
+                        Ok(r.numer())
+                    }
+                    _ => Err(CadError::FeatureFailed(format!(
+                        "{}: {key} is not a whole number from {low} to {high}",
+                        node.name
+                    ))),
+                }
+            };
             let solid: Result<Solid, CadError> = (|| match op {
                 Op::Box => {
                     let p = Prism::new(
@@ -1274,6 +1300,22 @@ fn compute(
                         all = all.union(&base.translate(by)?, limits)?;
                     }
                     Ok(all)
+                }
+                Op::Mirror => {
+                    let axis = whole("axis", 0, 2)?;
+                    let base = solid_of(0)?;
+                    let reflected = base.mirrored(axis as usize, length("at")?, limits)?;
+                    base.apply(Boolean::Union, &reflected, limits)
+                }
+                Op::Rotate => {
+                    let axis = whole("axis", 0, 2)?;
+                    let quarters = whole("quarters", -1_000_000, 1_000_000)?;
+                    solid_of(0)?.rotated(
+                        axis as usize,
+                        quarters as i64,
+                        [length("cx")?, length("cy")?, length("cz")?],
+                        limits,
+                    )
                 }
                 Op::Union => solid_of(0)?.apply(Boolean::Union, &solid_of(1)?, limits),
                 Op::Difference => solid_of(0)?.apply(Boolean::Difference, &solid_of(1)?, limits),
