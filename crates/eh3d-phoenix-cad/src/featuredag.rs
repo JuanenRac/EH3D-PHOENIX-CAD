@@ -911,6 +911,32 @@ impl FeatureDag {
         }
     }
 
+    /// The value of the expression of one parameter of a feature (its `count`, its `sx`...), worked
+    /// out with the parameters as the last rebuild left them.
+    pub fn eval_param(&self, id: Id, key: &str, cfg: &Settings) -> Result<Value, CadError> {
+        let node = self.nodes.get(&id).ok_or_else(|| missing(id))?;
+        let Kind::Feature { params, .. } = &node.kind else {
+            return Err(CadError::FeatureFailed(format!(
+                "{}: not a feature",
+                node.name
+            )));
+        };
+        let text = params
+            .get(key)
+            .ok_or_else(|| CadError::FeatureFailed(format!("{}: no parameter {key}", node.name)))?;
+        let mut local: BTreeMap<String, Value> = BTreeMap::new();
+        for (name, pid) in self.parameter_ids() {
+            if let Some(Product::Value(v)) = self.cache.get(&pid).map(|c| &c.value) {
+                local.insert(name.to_string(), *v);
+            }
+        }
+        let env = Env {
+            local,
+            constants: &cfg.constants,
+        };
+        parse(text, &cfg.expr)?.eval(&env, &cfg.expr)
+    }
+
     /// The solid of the tip in the last rebuild, or, when no tip is chosen, of the only feature
     /// that no other one takes.
     pub fn result(&self) -> Option<&Solid> {

@@ -142,6 +142,8 @@ pub mod partpattern;
 pub mod pattern;
 pub mod pdf;
 pub mod placement;
+pub mod plans;
+pub mod plans_cli;
 pub mod ply;
 pub mod printer;
 pub mod prism;
@@ -394,6 +396,18 @@ pub enum CadError {
     FeatureFailed(String),
     /// A solid of aligned prisms beyond the limits of the settings.
     PrismLimit(String),
+    /// A drawing sheet that is not valid: a file that is not one, a format, a scale, a layer or a
+    /// view that does not exist, a layer that is locked, a view that cannot be made or does not fit
+    /// the sheet, more records than the settings allow.
+    Plan(String),
+    /// A dimension whose references are gone: the node of the history or the element of the sketch it
+    /// was tied to no longer exists, or has no solid.
+    PlanOrphan(String),
+    /// A dimension that cannot be made: the wrong number of references, faces across different axes,
+    /// a kind of dimension that the view cannot show, lines that are parallel.
+    PlanDim(String),
+    /// A balloon whose part is not in the bill of the history.
+    PlanBalloon(String),
 }
 
 impl CadError {
@@ -453,6 +467,10 @@ impl CadError {
             CadError::History(_) => "PHOENIX-CAD-051",
             CadError::FeatureFailed(_) => "PHOENIX-CAD-052",
             CadError::PrismLimit(_) => "PHOENIX-CAD-053",
+            CadError::Plan(_) => "PHOENIX-CAD-054",
+            CadError::PlanOrphan(_) => "PHOENIX-CAD-055",
+            CadError::PlanDim(_) => "PHOENIX-CAD-056",
+            CadError::PlanBalloon(_) => "PHOENIX-CAD-057",
         }
     }
 }
@@ -519,7 +537,11 @@ impl fmt::Display for CadError {
             | CadError::ExportLimit(why)
             | CadError::History(why)
             | CadError::FeatureFailed(why)
-            | CadError::PrismLimit(why) => write!(f, "{title}: {why}"),
+            | CadError::PrismLimit(why)
+            | CadError::Plan(why)
+            | CadError::PlanOrphan(why)
+            | CadError::PlanDim(why)
+            | CadError::PlanBalloon(why) => write!(f, "{title}: {why}"),
         }
     }
 }
@@ -584,6 +606,10 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-051", "History of features not valid"),
     ("PHOENIX-CAD-052", "Feature could not be built"),
     ("PHOENIX-CAD-053", "Solid of prisms beyond the limits"),
+    ("PHOENIX-CAD-054", "Drawing sheet not valid"),
+    ("PHOENIX-CAD-055", "Dimension without the thing it measures"),
+    ("PHOENIX-CAD-056", "Dimension not valid"),
+    ("PHOENIX-CAD-057", "Balloon without its part"),
 ];
 
 #[cfg(test)]
@@ -790,6 +816,10 @@ mod tests {
             CadError::History("node".into()),
             CadError::FeatureFailed("size".into()),
             CadError::PrismLimit("cells".into()),
+            CadError::Plan("view".into()),
+            CadError::PlanOrphan("node".into()),
+            CadError::PlanDim("axes".into()),
+            CadError::PlanBalloon("part".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));

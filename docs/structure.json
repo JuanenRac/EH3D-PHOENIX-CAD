@@ -155,6 +155,19 @@
           }
         },
         {
+          "name": "DRAWING.md",
+          "desc": {
+            "en": "the drawing sheets: views, dimensions, balloons, layers",
+            "es": "las hojas de plano: vistas, cotas, globos y capas",
+            "de": "die Zeichenblätter: Ansichten, Maße, Positionsnummern, Ebenen",
+            "fr": "les feuilles de plan : vues, cotes, bulles et calques",
+            "it": "i fogli di disegno: viste, quote, pallini e livelli",
+            "ja": "図面シート：ビュー、寸法、バルーン、レイヤー",
+            "zh": "图纸页：视图、尺寸、气球与图层",
+            "pt": "as folhas de desenho: vistas, cotas, balões e camadas"
+          }
+        },
+        {
           "name": "CATALOG.md",
           "desc": {
             "en": "the catalog of parts: libraries, bill of materials, cut list",

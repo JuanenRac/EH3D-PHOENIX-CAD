@@ -20,6 +20,12 @@ State: **accepted** (records 0013 and 0014).
 
 No outside geometry kernel is linked. The constraint solver of the 2D sketch is written in this repository, as the crate `eh3d-phoenix-cad-solver` with no dependency. Until a CAD program has opened the plain STEP file this repository writes, the solid operations are the exact booleans between prisms aligned with the axes (`prism.rs`); a mesh evaluation may serve analysis but never the model. A general kernel is decided later, with a record of its own that states its licence, and the geometry that depends on it is limited by a setting until then.
 
+## Drawing sheets
+
+State: **accepted** (record 0016).
+
+A sheet is kept in its own optional domain `drawing`; a dimension keeps references (a face of the box of a node, an element of a sketch) by ids that do not change and its value is worked out from the model every time, an orphan is reported with `PHOENIX-CAD-055`; the bill of materials and the item numbers come from the history and the numbers are never given again; every tuned value is in the section `[sheet]` of the settings. The record is `adr/0016-drawing-sheets-tied-to-the-history.md`.
+
 ## Stable diagnostic codes
 
 State: **proposed**.

@@ -701,6 +701,58 @@ const TEXTS: &[Row] = &[
             "Sólido de prismas acima dos limites",
         ],
     ),
+    (
+        "PHOENIX-CAD-054",
+        [
+            "Drawing sheet not valid",
+            "Hoja de plano no válida",
+            "Zeichenblatt ungültig",
+            "Feuille de plan non valide",
+            "Foglio di disegno non valido",
+            "図面シートが正しくありません",
+            "图纸页无效",
+            "Folha de desenho inválida",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-055",
+        [
+            "Dimension without the thing it measures",
+            "Cota sin el elemento que mide",
+            "Maß ohne das Element, das es misst",
+            "Cote sans l'élément qu'elle mesure",
+            "Quota senza l'elemento che misura",
+            "寸法が測定対象を失っています",
+            "尺寸失去了所测量的对象",
+            "Cota sem o elemento que mede",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-056",
+        [
+            "Dimension not valid",
+            "Cota no válida",
+            "Maß ungültig",
+            "Cote non valide",
+            "Quota non valida",
+            "寸法が正しくありません",
+            "尺寸无效",
+            "Cota inválida",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-057",
+        [
+            "Balloon without its part",
+            "Globo sin su pieza",
+            "Positionsnummer ohne ihr Teil",
+            "Bulle sans sa pièce",
+            "Pallino senza il suo pezzo",
+            "バルーンの部品がありません",
+            "气球缺少对应零件",
+            "Balão sem a sua peça",
+        ],
+    ),
 ];
 
 /// The text of a diagnostic in a language (`en`, `es`, `de`, `fr`, `it`, `ja`, `zh` or `pt`), or

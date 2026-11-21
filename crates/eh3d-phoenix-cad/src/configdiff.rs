@@ -59,6 +59,8 @@ pub fn diff(user_text: &str) -> Result<Vec<Row>, CadError> {
         Config::parse(DEFAULT_CONFIG)?,
         Config::parse(crate::uiconfig::default_file())?,
         Config::parse(crate::sketch::settings::default_file())?,
+        Config::parse(crate::featuredag::default_file())?,
+        Config::parse(crate::plans::settings::default_file())?,
     ];
     let mut rows = Vec::new();
     for key in user.keys() {

@@ -68,7 +68,9 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad iso-fit SIZE CLASS|HOLE/SHAFT [--table FILE] [--csv] [--lang CODE]   the limits of a class of tolerance (H7, g6) or of a fit (H7/g6) at a nominal size up to 500 mm, from a table of data that says whether it is verified (the shipped one is not)
   eh3d-phoenix-cad history-check PROJECT.phoenixproj [--text] [--glb OUT.glb [--overwrite]] [--lang CODE] [--config FILE]   builds the history of features of a project (parameters with expressions and operations that depend on each other: boxes, moves, arrays and the union, difference and intersection of aligned prisms) and reports every node as comma separated values (node,name,state,code,detail) or, with --text, as lines in the language of --lang; with --glb the solid of the history is written as a binary glTF file (the profile phoenix-cad-glb/1: metres, one mesh, flat normals, never over a file that exists unless --overwrite is given); it exits with 0 when every node was built, with 2 when the verification did not pass (a node failed or depends on one that failed) and with 1 when it could not run
   eh3d-phoenix-cad history-graph PROJECT.phoenixproj [--lang CODE] [--config FILE]   the graph of dependencies of the history of a project as a file for Graphviz
-  eh3d-phoenix-cad config                                                         every setting of the library, of the window, of the sketch and of the history with its default value, as a file for --config
+  eh3d-phoenix-cad drawing-check PROJECT.phoenixproj [--text] [--lang CODE] [--config FILE]   builds the history and the sketches of a project and works its drawing sheet out against them: the views of the solids (front, top, right and isometric, with the visible and the hidden edges), the dimensions tied to the nodes of the history and the elements of the sketches (a dimension whose node or element is gone is an orphan, PHOENIX-CAD-055), the balloons tied to the bill of materials of the history; it reports every view, dimension and balloon as comma separated values (record,name,state,code,detail) or, with --text, as lines in the language of --lang; it exits with 0 when the sheet agrees with the model, with 2 when the verification did not pass and with 1 when it could not run
+  eh3d-phoenix-cad drawing-export PROJECT.phoenixproj OUT.svg|OUT.pdf|OUT.dxf|OUT.csv [--format svg|pdf|dxf|bom] [--create] [--sheet NAME] [--portrait] [--scale auto|N:D] [--force] [--overwrite] [--lang CODE] [--config FILE]   writes the drawing sheet of a project as an SVG, PDF or DXF file, or its bill of materials as comma separated values, the same bytes for the same project; it writes nothing while the check does not pass (exit 2) unless --force is given, never over a file that exists unless --overwrite is given, and --create makes the four views of the result of the history when the project has no sheet
+  eh3d-phoenix-cad config                                                         every setting of the library, of the window, of the sketch, of the history and of the drawing sheets with its default value, as a file for --config
 
 --open FILE is the same as giving the file by itself; a sketch file opens the window on the sketch. --lang takes en, es, de, fr, it, ja, zh or pt; without it the language of the system is used (the reports cutplan, clearance, placements, holes and balance and the answer of sketch-export are in English unless --lang is given; with --text the first four are lines for a person in that language instead of comma separated values).
 --shot writes a PNG file of the window (the exit code is 0 when it was written, 1 when it was not and 2 when the arguments are wrong); the window keeps no settings in that mode.
@@ -1672,10 +1674,11 @@ fn run(args: &[String]) -> Result<bool, String> {
                 return Err("config takes no arguments".to_owned());
             }
             print!(
-                "{DEFAULT_CONFIG}\n{}\n{}\n{}",
+                "{DEFAULT_CONFIG}\n{}\n{}\n{}\n{}",
                 default_file(),
                 eh3d_phoenix_cad::sketch::settings::default_file(),
-                eh3d_phoenix_cad::featuredag::default_file()
+                eh3d_phoenix_cad::featuredag::default_file(),
+                eh3d_phoenix_cad::plans::settings::default_file()
             );
             Ok(true)
         }
@@ -1831,12 +1834,17 @@ fn main() -> ExitCode {
             }
         };
     }
-    if let Some(command) = args
-        .first()
-        .filter(|c| eh3d_phoenix_cad::history_cli::COMMANDS.contains(&c.as_str()))
-    {
+    if let Some(command) = args.first().filter(|c| {
+        eh3d_phoenix_cad::history_cli::COMMANDS.contains(&c.as_str())
+            || eh3d_phoenix_cad::plans_cli::COMMANDS.contains(&c.as_str())
+    }) {
         // a check that does not pass exits with 2; a command that could not run exits with 1
-        return match eh3d_phoenix_cad::history_cli::run(command, &args[1..]) {
+        let ran = if eh3d_phoenix_cad::plans_cli::COMMANDS.contains(&command.as_str()) {
+            eh3d_phoenix_cad::plans_cli::run(command, &args[1..])
+        } else {
+            eh3d_phoenix_cad::history_cli::run(command, &args[1..])
+        };
+        return match ran {
             Ok((out, ok)) => {
                 print!("{out}");
                 if ok {
