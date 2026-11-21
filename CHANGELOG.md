@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.1.3] - Mirror and rotate in the history, wall thickness and mass properties of solids, solid STL and typed sketch points
+
 - **Mirror and turn in the history of features:** two new operations of `featuredag`, `mirror` (the input together with its reflection in the plane across the axis `axis` at `at`) and `rotate` (the input turned by `quarters` quarter turns about the line parallel to `axis` through `cx cy cz`, a negative count turning the other way), both exact in whole nanometres because only quarter turns keep the boxes aligned with the axes. The axis and the count are expressions that must give a whole number in their range, anything else is a failure of the node (`PHOENIX-CAD-052`) and the nodes that depend on it inherit it; the bill of the drawing sheets counts a mirror as two parts and a turn as the part it turns. `Solid::mirrored` and `Solid::rotated` are the plain operations underneath.
 
 - **Wall thickness of a solid (`solidquery`):** the run of material that a line parallel to an axis meets at a point (`thickness_at`), every run of material along an axis or only the ones thinner than a limit with the rectangle of lines that meet exactly that run (`walls`), and the thinnest one (`thinnest`), all on the grid that the planes of the prisms cut space into, so the answers are whole nanometres with no tolerance and the work is limited by `history.max_cells` (`PHOENIX-CAD-053`). The thickness is measured along the three axes only, never along a slanted line.
