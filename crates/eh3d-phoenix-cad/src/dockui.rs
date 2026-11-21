@@ -8,8 +8,8 @@
 //!
 //! The panels of the sector of mechanical design are the ones the suite proposes (`view3d`,
 //! `model_tree`, `properties`, `tasks`, `report`, `console`); this program adds the sheet of
-//! variables and the four parts of the sketch (the canvas, its tools, its constraints and its
-//! dimensions). The workspaces are the three of the sector: `Model` (the tree and the tasks on the
+//! variables, the four parts of the sketch (the canvas, its tools, its constraints and its
+//! dimensions) and the drawing sheets (views, dimensions, balloons, layers and the bill). The workspaces are the three of the sector: `Model` (the tree and the tasks on the
 //! left, the 3D view and the sketch as tabs in the middle, the console and the report below, the
 //! properties, variables, constraints and dimensions on the right), `Review` (the view with the
 //! report and the properties) and `Compact` (the view alone, the tree and the properties folded).
@@ -52,9 +52,11 @@ pub mod id {
     pub const CONSTRAINTS: &str = "constraints";
     /// The dimensions of the sketch.
     pub const DIMENSIONS: &str = "dimensions";
+    /// The 2D drawing sheets: views, dimensions, balloons, layers and the bill.
+    pub const DRAWING: &str = "drawing";
 
     /// Every panel, in the order of the View menu.
-    pub const ALL: [&str; 11] = [
+    pub const ALL: [&str; 12] = [
         VIEW3D,
         MODEL_TREE,
         PROPERTIES,
@@ -66,6 +68,7 @@ pub mod id {
         SKETCH_TOOLS,
         CONSTRAINTS,
         DIMENSIONS,
+        DRAWING,
     ];
 }
 
@@ -111,8 +114,8 @@ pub fn view_lang(lang: Lang) -> eh3d_view::texts::Lang {
         .unwrap_or(eh3d_view::texts::Lang::En)
 }
 
-/// The panels: the ones the suite proposes for mechanical design, and the five that this program
-/// adds (the sheet of variables and the four parts of the sketch).
+/// The panels: the ones the suite proposes for mechanical design, and the six that this program
+/// adds (the sheet of variables, the four parts of the sketch and the drawing sheets).
 pub fn defs() -> Vec<PanelDef> {
     let mut v = Sector::Cad.panels();
     v.push(
@@ -139,6 +142,11 @@ pub fn defs() -> Vec<PanelDef> {
         PanelDef::new(id::DIMENSIONS, t8(Msg::DimensionsTitle))
             .icon("D")
             .min(240.0, 160.0),
+    );
+    v.push(
+        PanelDef::new(id::DRAWING, t8(Msg::PlTitle))
+            .icon("Pl")
+            .min(280.0, 200.0),
     );
     v
 }
@@ -168,6 +176,7 @@ pub fn workspaces() -> Vec<Workspace> {
                         id::VARIABLES,
                         id::CONSTRAINTS,
                         id::DIMENSIONS,
+                        id::DRAWING,
                     ]),
                 ),
             ),
@@ -176,7 +185,7 @@ pub fn workspaces() -> Vec<Workspace> {
             WS_REVIEW,
             Node::row(
                 0.74,
-                t(&[id::VIEW3D]),
+                t(&[id::VIEW3D, id::DRAWING]),
                 Node::column(
                     0.5,
                     t(&[id::PROPERTIES, id::VARIABLES]),
@@ -225,6 +234,8 @@ pub enum Cmd {
     KeepSketch,
     /// Fit the views to what is drawn.
     FitView,
+    /// Show the panel of the drawing sheets.
+    ShowDrawings,
     /// Open one of the panels of the reports.
     Report(Panel),
     /// Change the language of the window.
@@ -316,6 +327,7 @@ pub fn menu_bar() -> MenuBar<Cmd> {
             Cmd::EditSketch,
         ))
         .entry(own("tools.keep_sketch", Msg::KeepSketch, Cmd::KeepSketch))
+        .entry(own("tools.drawings", Msg::PlTitle, Cmd::ShowDrawings))
         .sep()
         .submenu(reports)
         .sep()

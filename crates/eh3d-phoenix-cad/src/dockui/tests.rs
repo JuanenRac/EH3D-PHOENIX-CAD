@@ -27,9 +27,9 @@ fn entry_ids(bar: &MenuBar<Cmd>) -> Vec<String> {
 #[test]
 fn the_panels_have_names_that_hold_and_titles_in_the_eight_languages() {
     let d = defs();
-    assert_eq!(d.len(), 11);
+    assert_eq!(d.len(), 12);
     let names: Vec<&str> = d.iter().map(|p| p.id.as_str()).collect();
-    // the six of the sector first, then the five of this program
+    // the six of the sector first, then the six of this program
     assert_eq!(
         names[..6],
         [
@@ -398,4 +398,97 @@ fn a_damaged_settings_file_never_stops_the_frame_and_the_layout_is_always_sound_
         third.load_config(&dock_text_of(&again));
         assert_eq!(third.config_pairs(), dock.config_pairs(), "round {round}");
     }
+}
+
+#[test]
+fn an_arrangement_saved_before_the_drawing_panel_loads_whole_and_the_panel_can_be_shown() {
+    // the factory arrangement of the version before the panel of the drawing sheets
+    let t = |ids: &[&str]| Node::tabs(ids);
+    let old_ws = vec![
+        ws(
+            WS_MODEL,
+            Node::row(
+                0.2,
+                t(&[id::MODEL_TREE, id::SKETCH_TOOLS, id::TASKS]),
+                Node::row(
+                    0.76,
+                    Node::column(
+                        0.76,
+                        t(&[id::VIEW3D, id::SKETCH]),
+                        t(&[id::CONSOLE, id::REPORT]),
+                    ),
+                    t(&[
+                        id::PROPERTIES,
+                        id::VARIABLES,
+                        id::CONSTRAINTS,
+                        id::DIMENSIONS,
+                    ]),
+                ),
+            ),
+        ),
+        ws(
+            WS_REVIEW,
+            Node::row(
+                0.74,
+                t(&[id::VIEW3D]),
+                Node::column(
+                    0.5,
+                    t(&[id::PROPERTIES, id::VARIABLES]),
+                    t(&[id::REPORT, id::CONSOLE]),
+                ),
+            ),
+        ),
+        Workspace::new(
+            WS_COMPACT,
+            Layout::with_root(t(&[id::VIEW3D, id::SKETCH]))
+                .with_auto_hidden(id::MODEL_TREE, Side::Left)
+                .with_auto_hidden(id::PROPERTIES, Side::Right),
+        ),
+    ];
+    let old_defs: Vec<PanelDef> = defs().into_iter().filter(|p| p.id != id::DRAWING).collect();
+    let mut old = DockCore::new(old_defs, old_ws);
+    // the person had moved something before the version changed
+    old.apply(&eh3d_dock::menu::DockAction::HidePanel(
+        id::REPORT.to_string(),
+    ))
+    .unwrap();
+    let saved = with_dock_section("[window]\nwidth = 1180\n", &old.config_pairs());
+    assert!(saved.contains("[dock]"), "{saved}");
+    assert!(!saved.contains("drawing"), "{saved}");
+    // the new version reads it: nothing is warned about, nothing is lost, the panel is simply not shown
+    let mut now = core();
+    now.load_config(&dock_text_of(&saved));
+    // the only thing the frame does is put the new panel among the hidden ones (a repair, no loss)
+    assert!(
+        now.warnings()
+            .iter()
+            .all(|w| w.kind == eh3d_dock::workspaces::WarnKind::Repaired),
+        "{:?}",
+        now.warnings()
+    );
+    assert!(now.layout_is_sound());
+    assert_eq!(now.workspaces().names(), vec!["Model", "Review", "Compact"]);
+    assert!(
+        !now.layout().is_shown(id::REPORT),
+        "the arrangement of the person is kept"
+    );
+    assert!(now.layout().is_shown(id::VIEW3D));
+    assert!(!now.layout().is_shown(id::DRAWING));
+    // the menu brings it back, and it is then part of the arrangement that is kept
+    now.apply(&eh3d_dock::menu::DockAction::ShowPanel(
+        id::DRAWING.to_string(),
+    ))
+    .unwrap();
+    assert!(now.layout().is_shown(id::DRAWING) && now.layout_is_sound());
+    let again = with_dock_section(&saved, &now.config_pairs());
+    let mut third = core();
+    third.load_config(&dock_text_of(&again));
+    assert!(third.warnings().is_empty(), "{:?}", third.warnings());
+    assert!(third.layout().is_shown(id::DRAWING));
+    // a factory arrangement has the panel in the model workspace and in the review
+    let factory = core();
+    for w in factory.workspaces().factory().iter().take(2) {
+        assert!(w.layout.is_shown(id::DRAWING), "{}", w.name);
+    }
+    assert!(entry_ids(&menu_bar()).contains(&"tools.drawings".to_string()));
 }

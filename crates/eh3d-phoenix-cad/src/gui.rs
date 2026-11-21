@@ -12,6 +12,8 @@ use crate::enclosure::Face;
 use crate::export::Format;
 use crate::lang::{Lang, Msg};
 use crate::panels::{default_drawing_name, Panel, PanelState, SketchFormat};
+use crate::plans::panel::{PlanState, Tone as PlanTone};
+use crate::plans::prim::{Anchor as PlanAnchor, Shape as PlanShape};
 use crate::scene::{Kind, Line2};
 use crate::shot::{ShotRequest, ShotTheme, StartView, PATIENCE_FRAMES};
 use crate::sketch::file as sketch_file;
@@ -124,6 +126,9 @@ struct App {
     /// Whether the 3D view and the sketch were drawn in this frame.
     drew_view3d: bool,
     drew_sketch: bool,
+    /// The panel of the drawing sheets, and the project it was last read from.
+    plans: PlanState,
+    plans_seen: Option<PathBuf>,
 }
 
 impl App {
@@ -154,6 +159,8 @@ impl App {
             config_path: None,
             drew_view3d: false,
             drew_sketch: false,
+            plans: PlanState::with_defaults(),
+            plans_seen: None,
         }
     }
 
@@ -2700,6 +2707,197 @@ impl App {
         }
     }
 
+    /// The drawing sheets: the lines of the sheet of the project (views, dimensions, balloons, the
+    /// bill, the layers and the problems), the buttons that make it, update it, keep it and write it
+    /// as SVG, and a small picture of the sheet. What it does is in `crate::plans::panel`.
+    fn panel_drawing(&mut self, ui: &mut egui::Ui) {
+        let lang = self.win.lang;
+        // the project that is open is read when it changes
+        if self.plans_seen != self.win.path {
+            self.plans_seen = self.win.path.clone();
+            self.plans = PlanState::with_defaults();
+            if let Some(path) = self.win.path.clone() {
+                if let Err(e) = self.plans.load(&path, lang) {
+                    self.plans.note = Some(PlanState::error_line(&e, lang));
+                }
+            }
+        }
+        let mut action: Option<&'static str> = None;
+        let mut toggles: Vec<(String, bool)> = Vec::new();
+        let have_file = self.win.path.is_some();
+        let has_sheet = self.plans.has_sheet();
+        ui.horizontal_wrapped(|ui| {
+            if !has_sheet
+                && ui
+                    .add_enabled(have_file, egui::Button::new(Msg::PlCreate.tr(lang)))
+                    .clicked()
+            {
+                action = Some("create");
+            }
+            if has_sheet {
+                if ui.button(Msg::PlRefresh.tr(lang)).clicked() {
+                    action = Some("refresh");
+                }
+                if ui
+                    .add_enabled(self.plans.dirty, egui::Button::new(Msg::PlSave.tr(lang)))
+                    .clicked()
+                {
+                    action = Some("save");
+                }
+                if ui.button(Msg::PlExport.tr(lang)).clicked() {
+                    action = Some("svg");
+                }
+            }
+        });
+        let lines = self.plans.lines(lang);
+        let tone = |t: PlanTone| match t {
+            PlanTone::Plain => TEXT,
+            PlanTone::Good => OK,
+            PlanTone::Bad => DANGER,
+        };
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            if let Some(h) = &lines.head {
+                ui.label(egui::RichText::new(&h.text).color(tone(h.tone)).strong());
+            }
+            if let Some(n) = &self.plans.note {
+                ui.label(egui::RichText::new(&n.text).color(tone(n.tone)));
+            }
+            for (title, list) in [
+                (Msg::PlViews, &lines.views),
+                (Msg::PlDims, &lines.dims),
+                (Msg::PlBalloons, &lines.balloons),
+                (Msg::PlBomHead, &lines.bom),
+            ] {
+                if list.is_empty() {
+                    continue;
+                }
+                let name = if title == Msg::PlBomHead {
+                    crate::lang::fill(title.tr(lang), &[&list.len().to_string()])
+                } else {
+                    title.tr(lang).to_string()
+                };
+                ui.label(egui::RichText::new(name).color(ACCENT));
+                for l in list {
+                    ui.label(egui::RichText::new(&l.text).color(tone(l.tone)));
+                }
+            }
+            if !lines.layers.is_empty() {
+                ui.label(egui::RichText::new(Msg::PlLayers.tr(lang)).color(ACCENT));
+                for l in &lines.layers {
+                    let mut visible = l.visible;
+                    ui.horizontal(|ui| {
+                        if ui.checkbox(&mut visible, &l.text).changed() {
+                            toggles.push((l.name.clone(), false));
+                        }
+                        let mut locked = l.locked;
+                        if ui.checkbox(&mut locked, Msg::PlLocked.tr(lang)).changed() {
+                            toggles.push((l.name.clone(), true));
+                        }
+                    });
+                }
+            }
+            if !lines.issues.is_empty() {
+                ui.label(egui::RichText::new(Msg::PlIssues.tr(lang)).color(ACCENT));
+                for l in &lines.issues {
+                    ui.label(egui::RichText::new(&l.text).color(tone(l.tone)));
+                }
+            } else if has_sheet {
+                ui.label(egui::RichText::new(Msg::PlClean.tr(lang)).color(OK));
+            }
+            if let Some(eval) = &self.plans.eval {
+                let width = ui.available_width().max(120.0);
+                let scale = width / eval.scene.width_um as f32;
+                let size = Vec2::new(width, eval.scene.height_um as f32 * scale);
+                let (response, painter) = ui.allocate_painter(size, egui::Sense::hover());
+                let rect = response.rect;
+                painter.rect_filled(rect, 0.0, Color32::WHITE);
+                let at = |p: (i64, i64)| {
+                    Pos2::new(
+                        rect.left() + p.0 as f32 * scale,
+                        rect.bottom() - p.1 as f32 * scale,
+                    )
+                };
+                for prim in &eval.scene.prims {
+                    let Some((hex, _, _)) = eval.scene.layers.get(&prim.layer) else {
+                        continue;
+                    };
+                    let rgb = u32::from_str_radix(hex, 16).unwrap_or(0);
+                    let colour = Color32::from_rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8);
+                    let stroke = Stroke::new(1.0, colour);
+                    match &prim.shape {
+                        PlanShape::Line { a, b } => {
+                            painter.line_segment([at(*a), at(*b)], stroke);
+                        }
+                        PlanShape::Circle { c, r } => {
+                            painter.circle_stroke(at(*c), *r as f32 * scale, stroke);
+                        }
+                        PlanShape::Arc { c, r, a0, a1 } => {
+                            let steps = 24;
+                            let points: Vec<Pos2> = (0..=steps)
+                                .map(|k| {
+                                    let a = (a0 + (a1 - a0) * f64::from(k) / f64::from(steps))
+                                        .to_radians();
+                                    at((
+                                        c.0 + (*r as f64 * a.cos()) as i64,
+                                        c.1 + (*r as f64 * a.sin()) as i64,
+                                    ))
+                                })
+                                .collect();
+                            painter.add(egui::Shape::line(points, stroke));
+                        }
+                        PlanShape::Text {
+                            at: p,
+                            h,
+                            text,
+                            anchor,
+                            ..
+                        } => {
+                            let align = if *anchor == PlanAnchor::Middle {
+                                egui::Align2::CENTER_BOTTOM
+                            } else {
+                                egui::Align2::LEFT_BOTTOM
+                            };
+                            let size = (*h as f32 * scale).max(5.0);
+                            painter.text(
+                                at(*p),
+                                align,
+                                text,
+                                egui::FontId::proportional(size),
+                                colour,
+                            );
+                        }
+                    }
+                }
+            }
+        });
+        // what was asked is done after the lines are drawn
+        for (name, lock) in toggles {
+            let r = if lock {
+                self.plans.toggle_locked(&name, lang)
+            } else {
+                self.plans.toggle_visible(&name, lang)
+            };
+            if let Err(e) = r {
+                self.plans.note = Some(PlanState::error_line(&e, lang));
+            }
+        }
+        let result = match action {
+            Some("create") => self.plans.create_sheet(lang),
+            Some("refresh") => self.plans.refresh(lang),
+            Some("save") => self.plans.save(lang),
+            Some("svg") => match self.win.path.clone() {
+                Some(path) => self
+                    .plans
+                    .export_svg(&path.with_extension("svg"), false, lang),
+                None => Ok(()),
+            },
+            _ => Ok(()),
+        };
+        if let Err(e) = result {
+            self.plans.note = Some(PlanState::error_line(&e, lang));
+        }
+    }
+
     /// The sheet of variables as a panel of its own.
     fn panel_variables(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -2814,6 +3012,11 @@ impl App {
                 }
             }
             Cmd::KeepSketch => self.keep_sketch(),
+            Cmd::ShowDrawings => {
+                self.pending_dock
+                    .push(DockAction::ShowPanel(dockui::id::DRAWING.to_string()));
+                self.pending_active.push(dockui::id::DRAWING);
+            }
             Cmd::FitView => {
                 if sketch {
                     self.sketch.fit();
@@ -2881,7 +3084,7 @@ impl Shell {
         app.config_path = config;
         let app = Rc::new(RefCell::new(app));
         let mut dock = Dock::new(dockui::defs(), dockui::workspaces());
-        let draw: [(&str, PanelDraw); 11] = [
+        let draw: [(&str, PanelDraw); 12] = [
             (dockui::id::VIEW3D, App::panel_view3d),
             (dockui::id::MODEL_TREE, App::panel_model_tree),
             (dockui::id::PROPERTIES, App::panel_properties),
@@ -2893,6 +3096,7 @@ impl Shell {
             (dockui::id::SKETCH_TOOLS, App::panel_sketch_tools),
             (dockui::id::CONSTRAINTS, App::panel_constraints),
             (dockui::id::DIMENSIONS, App::panel_dimensions),
+            (dockui::id::DRAWING, App::panel_drawing),
         ];
         for (name, f) in draw {
             let a = app.clone();
