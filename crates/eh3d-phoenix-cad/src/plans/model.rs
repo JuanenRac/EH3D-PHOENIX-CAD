@@ -11,6 +11,9 @@
 //! scale <auto|n:d>
 //! projection <third|first>
 //! nextitem <n>
+//! nextrevision <n>                   (only when it is not 1)
+//! titleblock <name>                  (only when the sheet has chosen a block)
+//! linegroup <um>                     (only when the sheet has chosen a group of lines)
 //! field <key> <text>
 //! layer <NAME> <visible|locked|color|width> <value>
 //! x-<anything>                       (the lines of the head that a newer program added)
@@ -18,16 +21,27 @@
 //! part <node id>
 //! material <text>
 //! description <text>
+//! revision <number>
+//! date <text>
+//! description <text>
+//! author <text>
 //! view <id> <front|top|right|iso|sketch> <name>
 //! source <tip | node <id> | sketch <name>>
 //! at <x um> <y um>
 //! scale <n:d>
 //! hidden <0|1>
+//! section <parent view id> <label> <position nm>        (a section view; the kind says the axis)
+//! detail <parent view id> <label> circle <u nm> <v nm> <radius nm>
+//! detail <parent view id> <label> rect <u nm> <v nm> <width nm> <height nm>
+//! hatch <material>
 //! dim <id> <linear|radius|diameter|angle|cumulative> <name>
 //! ref face <node id> <x|y|z> <min|max>
 //! ref element <number> <sketch name>
 //! view <view id>
 //! offset <um>
+//! step <um>
+//! tol class <H7|g6|H7/g6>
+//! tol dev <upper nm> <lower nm>
 //! layer <NAME>
 //! balloon <id> <name>
 //! part <node id>
@@ -41,7 +55,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::settings::{is_word, parse_scale, SheetSettings};
+use super::settings::{is_word, parse_scale, RevisionNumbering, SheetSettings};
+pub use super::tol::Tol;
 use crate::enclosure::Id;
 use crate::project::Document;
 use crate::CadError;
@@ -92,6 +107,17 @@ impl ViewKind {
     pub fn from_name(name: &str) -> Option<ViewKind> {
         ViewKind::ALL.into_iter().find(|k| k.name() == name)
     }
+
+    /// The axis that a view of this kind looks along, which is the axis across a section made for
+    /// it: the front looks along `y`, the top along `z`, the right along `x`.
+    pub fn depth_axis(self) -> Option<Axis> {
+        match self {
+            ViewKind::Front => Some(Axis::Y),
+            ViewKind::Top => Some(Axis::Z),
+            ViewKind::Right => Some(Axis::X),
+            _ => None,
+        }
+    }
 }
 
 /// Where the solid of a view comes from.
@@ -131,8 +157,85 @@ pub struct View {
     pub scale: Option<(u32, u32)>,
     /// Whether it shows the hidden edges.
     pub hidden: bool,
+    /// When the view is the section of its source: where the cut is.
+    pub section: Option<SectionCut>,
+    /// When the view is the enlargement of a part of another view.
+    pub detail: Option<Detail>,
+    /// The material that the hatching of a section follows, when the person names one.
+    pub hatch: Option<String>,
     /// The lines of a newer program that the record keeps.
     pub extra: Vec<String>,
+}
+
+impl View {
+    /// A view of a solid with what the sheet usually has: placed by the rules of the projection,
+    /// at the scale of the sheet, no section and no detail.
+    pub fn plain(id: Id, name: &str, kind: ViewKind, source: Source, hidden: bool) -> View {
+        View {
+            id,
+            name: name.to_string(),
+            kind,
+            source,
+            place: Place::Auto,
+            scale: None,
+            hidden,
+            section: None,
+            detail: None,
+            hatch: None,
+            extra: Vec::new(),
+        }
+    }
+
+    /// Whether the view is a section or a detail, which the layout does not take for one of the
+    /// views of the projection.
+    pub fn is_derived(&self) -> bool {
+        self.section.is_some() || self.detail.is_some()
+    }
+}
+
+/// The cut of a section view: the plane across the axis that the view looks along, at a position,
+/// and the view in which the line of the cut is drawn. The material that stays is the one the
+/// view looks at from the side that the projection gives it: for the front view the part with
+/// `y` above the cut, for the top the part with `z` below it, for the right the part with `x`
+/// below it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionCut {
+    /// The view in which the line of the cut is drawn.
+    pub parent: Id,
+    /// Where the plane is along the axis of the view, in nanometres.
+    pub at_nm: i64,
+    /// The letters of the cut (one to three capitals or digits), as in `A-A`.
+    pub label: String,
+}
+
+/// The shape of the part of a view that a detail enlarges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetailShape {
+    /// A circle of this radius, in nanometres.
+    Circle {
+        /// The radius.
+        radius_nm: i64,
+    },
+    /// A rectangle of this size, in nanometres.
+    Rect {
+        /// The width, across the picture.
+        width_nm: i64,
+        /// The height, up the picture.
+        height_nm: i64,
+    },
+}
+
+/// A detail view: the part of another view inside a circle or a rectangle, drawn larger.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Detail {
+    /// The view that is enlarged; it comes before this one.
+    pub parent: Id,
+    /// The letter of the detail, as in `B (4:1)`.
+    pub label: String,
+    /// The centre of the shape, in nanometres, in the picture of the parent view.
+    pub centre: (i64, i64),
+    /// The shape.
+    pub shape: DetailShape,
 }
 
 /// An axis of the model.
@@ -185,18 +288,26 @@ pub enum DimKind {
     Diameter,
     /// The angle between two lines of a sketch.
     Angle,
-    /// The distances from the first face to each of the others along an axis, stacked.
+    /// The distances from the first face to each of the others along an axis, stacked (the
+    /// parallel dimensions, all from the datum).
     Cumulative,
+    /// The distances between each face and the next one along an axis, on one line (the chain).
+    Chain,
+    /// The distances from the first face to each of the others, as coordinates on one line from
+    /// a common origin, with no arrows.
+    Ordinate,
 }
 
 impl DimKind {
     /// Every kind.
-    pub const ALL: [DimKind; 5] = [
+    pub const ALL: [DimKind; 7] = [
         DimKind::Linear,
         DimKind::Radius,
         DimKind::Diameter,
         DimKind::Angle,
         DimKind::Cumulative,
+        DimKind::Chain,
+        DimKind::Ordinate,
     ];
 
     /// The word of the file.
@@ -207,6 +318,8 @@ impl DimKind {
             DimKind::Diameter => "diameter",
             DimKind::Angle => "angle",
             DimKind::Cumulative => "cumulative",
+            DimKind::Chain => "chain",
+            DimKind::Ordinate => "ordinate",
         }
     }
 
@@ -220,7 +333,7 @@ impl DimKind {
         match self {
             DimKind::Linear | DimKind::Angle => (2, 2),
             DimKind::Radius | DimKind::Diameter => (1, 1),
-            DimKind::Cumulative => (3, 16),
+            DimKind::Cumulative | DimKind::Chain | DimKind::Ordinate => (3, 16),
         }
     }
 }
@@ -259,8 +372,13 @@ pub struct Dim {
     pub refs: Vec<Ref>,
     /// The view it is drawn in.
     pub view: Id,
-    /// The distance of its first line from the view, when it is not the one of the style.
+    /// The distance of its first line from the view, when it is not the one of the style. A
+    /// dimension with none is placed by the sheet so that it does not lie on another one.
     pub offset_um: Option<i64>,
+    /// The distance between its stacked lines, when it is not the one of the style.
+    pub step_um: Option<i64>,
+    /// The tolerance written next to its value.
+    pub tol: Option<Tol>,
     /// The layer it is drawn on.
     pub layer: String,
     /// The lines of a newer program that the record keeps.
@@ -282,6 +400,74 @@ pub struct Balloon {
     pub to: (i64, i64),
     /// The lines of a newer program that the record keeps.
     pub extra: Vec<String>,
+}
+
+/// A line of the table of revisions. The number is given when the revision is added and is never
+/// given again; the date and the author are free texts (the program reads no clock).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Revision {
+    /// Its number, from 1.
+    pub number: u32,
+    /// The date, as the person writes it (may be empty).
+    pub date: String,
+    /// What changed.
+    pub description: String,
+    /// Who did it (may be empty).
+    pub author: String,
+    /// The lines of a newer program that the record keeps.
+    pub extra: Vec<String>,
+}
+
+/// The mark of a revision in the table: `A`, `B` ... `Z`, `AA` ... or its number.
+pub fn revision_label(number: u32, numbering: RevisionNumbering) -> String {
+    match numbering {
+        RevisionNumbering::Numbers => number.to_string(),
+        RevisionNumbering::Letters => {
+            let mut n = number;
+            let mut out = Vec::new();
+            while n > 0 {
+                n -= 1;
+                out.push(b'A' + (n % 26) as u8);
+                n /= 26;
+            }
+            out.reverse();
+            String::from_utf8(out).unwrap_or_default()
+        }
+    }
+}
+
+/// Whether a text is the letters of a cut or of a detail: one to three capitals or digits.
+pub fn valid_label(s: &str) -> bool {
+    (1..=3).contains(&s.len())
+        && s.bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+}
+
+/// The letters for the next cut or detail: `A` to `Z` without `I`, `O` and `Q` (they look like
+/// digits), then `AA`... The first that no view of the sheet uses.
+pub fn next_label(plan: &Plan) -> String {
+    let used = |l: &str| {
+        plan.views.iter().any(|v| {
+            v.section.as_ref().is_some_and(|c| c.label == l)
+                || v.detail.as_ref().is_some_and(|c| c.label == l)
+        })
+    };
+    let letters: Vec<char> = ('A'..='Z').filter(|c| !"IOQ".contains(*c)).collect();
+    for c in &letters {
+        let l = c.to_string();
+        if !used(&l) {
+            return l;
+        }
+    }
+    for a in &letters {
+        for b in &letters {
+            let l = format!("{a}{b}");
+            if !used(&l) {
+                return l;
+            }
+        }
+    }
+    "ZZZ".to_string()
 }
 
 /// What the person says about a part of the bill.
@@ -330,6 +516,14 @@ pub struct Plan {
     pub third_angle: bool,
     /// The next number of an item of the bill.
     pub next_item: u32,
+    /// The next number of a revision.
+    pub next_revision: u32,
+    /// The title block that the sheet has chosen, when it is not the one of the settings.
+    pub title_template: Option<String>,
+    /// The group of lines (the thick line, in micrometres) that the sheet has chosen.
+    pub line_group_um: Option<i64>,
+    /// The revisions, oldest first.
+    pub revisions: Vec<Revision>,
     /// The fields of the title block that the drawing fills.
     pub fields: BTreeMap<String, String>,
     /// What the drawing changes in the layers.
@@ -370,6 +564,10 @@ impl Plan {
             },
             third_angle: s.third_angle,
             next_item: 1,
+            next_revision: 1,
+            title_template: None,
+            line_group_um: None,
+            revisions: Vec::new(),
             fields: BTreeMap::new(),
             layers: BTreeMap::new(),
             head_extra: Vec::new(),
@@ -410,11 +608,129 @@ impl Plan {
 
     /// The width of the lines of a layer, in micrometres.
     pub fn layer_width_um(&self, name: &str, s: &SheetSettings) -> i64 {
+        let group = self.line_group_um.unwrap_or(s.line_group_um);
         self.layers
             .get(name)
             .and_then(|l| l.width_um)
-            .or_else(|| s.layer(name).map(|l| l.width_um))
-            .unwrap_or(s.line_group_um / 2)
+            .or_else(|| s.layer(name).map(|l| l.width.width_um(group)))
+            .unwrap_or(group / 2)
+    }
+
+    /// Chooses the group of lines of the sheet (one of the settings), or goes back to the one of
+    /// the settings with `None`. The layers whose width is thick, thin or extra follow it.
+    pub fn set_line_group(&mut self, um: Option<i64>, s: &SheetSettings) -> Result<(), CadError> {
+        if let Some(v) = um {
+            if !s.line_groups.contains(&v) {
+                return Err(bad(format!(
+                    "{v} um is not one of the groups of lines of the settings"
+                )));
+            }
+        }
+        self.line_group_um = um.filter(|v| *v != s.line_group_um);
+        Ok(())
+    }
+
+    /// Chooses the title block of the sheet (a name of the settings), or the one of the settings
+    /// with `None`.
+    pub fn set_title_template(
+        &mut self,
+        name: Option<&str>,
+        s: &SheetSettings,
+    ) -> Result<(), CadError> {
+        self.need_unlocked("FRAME", s)?;
+        if let Some(n) = name {
+            if s.title_block_of(Some(n)).is_none() {
+                return Err(bad(format!("the title block {n} is not in the settings")));
+            }
+        }
+        self.title_template = name.filter(|n| *n != s.title_template).map(str::to_string);
+        Ok(())
+    }
+
+    /// Adds a revision with the next number (a number is never given twice). The date and the
+    /// author may be empty. The layer FRAME must not be locked.
+    pub fn add_revision(
+        &mut self,
+        date: &str,
+        description: &str,
+        author: &str,
+        s: &SheetSettings,
+    ) -> Result<u32, CadError> {
+        self.need_unlocked("FRAME", s)?;
+        if self.revisions.len() >= s.revisions.max {
+            return Err(CadError::PlanRevision(format!(
+                "more than {} revisions",
+                s.revisions.max
+            )));
+        }
+        let mut next = self.clone();
+        let number = next.next_revision;
+        next.next_revision += 1;
+        next.revisions.push(Revision {
+            number,
+            date: date.to_string(),
+            description: description.to_string(),
+            author: author.to_string(),
+            extra: Vec::new(),
+        });
+        next.validate(s)?;
+        *self = next;
+        Ok(number)
+    }
+
+    /// Takes a revision away; its number is not given again.
+    pub fn remove_revision(&mut self, number: u32, s: &SheetSettings) -> Result<(), CadError> {
+        self.need_unlocked("FRAME", s)?;
+        let at = self
+            .revisions
+            .iter()
+            .position(|r| r.number == number)
+            .ok_or_else(|| CadError::UnknownName(number.to_string()))?;
+        self.revisions.remove(at);
+        Ok(())
+    }
+
+    /// Moves the line of a dimension: its distance from the view, or `None` to let the sheet
+    /// place it. The layer of the dimension must not be locked.
+    pub fn set_dim_offset(
+        &mut self,
+        id: Id,
+        offset_um: Option<i64>,
+        s: &SheetSettings,
+    ) -> Result<(), CadError> {
+        let at = self
+            .dims
+            .iter()
+            .position(|d| d.id == id)
+            .ok_or_else(|| CadError::UnknownName(id.to_string()))?;
+        self.need_unlocked(&self.dims[at].layer, s)?;
+        if let Some(o) = offset_um {
+            if !(-1_000_000..=1_000_000).contains(&o) {
+                return Err(bad("the offset of a dimension is within a metre"));
+            }
+        }
+        self.dims[at].offset_um = offset_um;
+        Ok(())
+    }
+
+    /// Sets the tolerance of a dimension, or takes it away with `None`.
+    pub fn set_dim_tol(
+        &mut self,
+        id: Id,
+        tol: Option<Tol>,
+        s: &SheetSettings,
+    ) -> Result<(), CadError> {
+        let at = self
+            .dims
+            .iter()
+            .position(|d| d.id == id)
+            .ok_or_else(|| CadError::UnknownName(id.to_string()))?;
+        self.need_unlocked(&self.dims[at].layer, s)?;
+        let mut next = self.clone();
+        next.dims[at].tol = tol;
+        next.validate(s)?;
+        *self = next;
+        Ok(())
     }
 
     fn id_in_use(&self, id: Id) -> bool {
@@ -709,6 +1025,7 @@ impl Plan {
                     return Err(bad("the name of a sketch is not valid"));
                 }
             }
+            self.validate_derived(v, s)?;
         }
         let view_ids: BTreeSet<Id> = self.views.iter().map(|v| v.id).collect();
         for d in &self.dims {
@@ -739,6 +1056,18 @@ impl Plan {
                 if !(-1_000_000..=1_000_000).contains(&o) {
                     return Err(bad("the offset of a dimension is within a metre"));
                 }
+            }
+            if let Some(st) = d.step_um {
+                if !(1000..=200_000).contains(&st) {
+                    return Err(CadError::PlanDim(format!(
+                        "{}: the step between lines is from 1 to 200 mm",
+                        d.name
+                    )));
+                }
+            }
+            if let Some(tol) = &d.tol {
+                super::tol::check(tol, d.kind)
+                    .map_err(|why| CadError::PlanTol(format!("{}: {why}", d.name)))?;
             }
             for r in &d.refs {
                 if let Ref::Element { sketch, .. } = r {
@@ -774,6 +1103,49 @@ impl Plan {
         if self.next_item == 0 {
             return Err(bad("the next item number is from 1"));
         }
+        if let Some(n) = &self.title_template {
+            if s.title_block_of(Some(n)).is_none() {
+                return Err(bad(format!("the title block {n} is not in the settings")));
+            }
+        }
+        if let Some(g) = self.line_group_um {
+            if !s.line_groups.contains(&g) {
+                return Err(bad(format!(
+                    "{g} um is not one of the groups of lines of the settings"
+                )));
+            }
+        }
+        let rev = |why: String| CadError::PlanRevision(why);
+        if self.next_revision == 0 || self.revisions.len() > s.revisions.max {
+            return Err(rev(format!(
+                "from 1 to {} revisions and the next number from 1",
+                s.revisions.max
+            )));
+        }
+        let mut last = 0;
+        for r in &self.revisions {
+            if r.number == 0 || r.number >= self.next_revision || r.number <= last {
+                return Err(rev(format!(
+                    "the revision {} is not in order below the next number",
+                    r.number
+                )));
+            }
+            last = r.number;
+            if !valid_text(&r.description, s.max_text) {
+                return Err(rev(format!(
+                    "the description of the revision {} is one line",
+                    r.number
+                )));
+            }
+            for t in [&r.date, &r.author] {
+                if !t.is_empty() && !valid_text(t, s.max_text) {
+                    return Err(rev(format!(
+                        "the date and the author of the revision {} are one line",
+                        r.number
+                    )));
+                }
+            }
+        }
         for p in self.parts.values() {
             for t in [&p.material, &p.description].into_iter().flatten() {
                 if !valid_text(t, s.max_text) {
@@ -787,6 +1159,7 @@ impl Plan {
             .chain(self.views.iter().flat_map(|v| v.extra.iter()))
             .chain(self.dims.iter().flat_map(|v| v.extra.iter()))
             .chain(self.balloons.iter().flat_map(|v| v.extra.iter()))
+            .chain(self.revisions.iter().flat_map(|v| v.extra.iter()))
             .chain(self.parts.values().flat_map(|v| v.extra.iter()));
         for l in lines {
             if l.len() > s.max_extra_bytes
@@ -810,9 +1183,100 @@ impl Plan {
                 .map(|v| v.extra.len())
                 .max()
                 .unwrap_or(0),
+            self.revisions
+                .iter()
+                .map(|v| v.extra.len())
+                .max()
+                .unwrap_or(0),
         ] {
             if rec > s.max_extra_lines {
                 return Err(bad("a record keeps more lines than the settings allow"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Checks the cut or the detail of a view.
+    fn validate_derived(&self, v: &View, s: &SheetSettings) -> Result<(), CadError> {
+        let sec = |why: String| CadError::PlanSection(format!("{}: {why}", v.name));
+        if v.section.is_some() && v.detail.is_some() {
+            return Err(sec("a view is a section or a detail, not both".into()));
+        }
+        if v.hatch.is_some() && v.section.is_none() {
+            return Err(sec("only a section is hatched".into()));
+        }
+        if let Some(h) = &v.hatch {
+            if !valid_text(h, s.max_text) {
+                return Err(sec("the material of the hatching is one line".into()));
+            }
+        }
+        let used = |label: &str| {
+            self.views
+                .iter()
+                .filter(|o| {
+                    o.section.as_ref().is_some_and(|c| c.label == label)
+                        || o.detail.as_ref().is_some_and(|c| c.label == label)
+                })
+                .count()
+        };
+        if let Some(c) = &v.section {
+            if v.kind.depth_axis().is_none() || matches!(v.source, Source::Sketch(_)) {
+                return Err(sec(
+                    "a section is a view of a solid, from the front, the top or the right".into(),
+                ));
+            }
+            if !valid_label(&c.label) {
+                return Err(sec("the letters of a cut are one to three capitals".into()));
+            }
+            if c.parent == v.id || self.view(c.parent).is_none() {
+                return Err(sec(
+                    "the view of the line of the cut is not another view".into()
+                ));
+            }
+            if c.at_nm.abs() > 1_000_000_000_000 {
+                return Err(sec("the cut is within a kilometre of the origin".into()));
+            }
+            if used(&c.label) > 1 {
+                return Err(sec(format!("the letters {} are used twice", c.label)));
+            }
+        }
+        if let Some(d) = &v.detail {
+            if !valid_label(&d.label) {
+                return Err(sec("the letter of a detail is one to three capitals".into()));
+            }
+            if used(&d.label) > 1 {
+                return Err(sec(format!("the letters {} are used twice", d.label)));
+            }
+            let me = self.views.iter().position(|o| o.id == v.id).unwrap_or(0);
+            let parent = self.views.iter().position(|o| o.id == d.parent);
+            match parent {
+                Some(i) if i < me => {
+                    let pv = &self.views[i];
+                    if pv.kind == ViewKind::Sketch || v.kind != pv.kind {
+                        return Err(sec(
+                            "a detail has the kind of its view, and that view is of a solid".into(),
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(sec(
+                        "the view that is enlarged comes before the detail".into()
+                    ))
+                }
+            }
+            let big = 1_000_000_000_000;
+            if d.centre.0.abs() > big || d.centre.1.abs() > big {
+                return Err(sec("the centre is within a kilometre of the origin".into()));
+            }
+            let ok = match d.shape {
+                DetailShape::Circle { radius_nm } => (1..=big).contains(&radius_nm),
+                DetailShape::Rect {
+                    width_nm,
+                    height_nm,
+                } => (1..=big).contains(&width_nm) && (1..=big).contains(&height_nm),
+            };
+            if !ok {
+                return Err(sec("the shape of a detail has a size above nothing".into()));
             }
         }
         Ok(())
@@ -846,6 +1310,15 @@ impl Plan {
             if self.third_angle { "third" } else { "first" }
         ));
         line(format!("nextitem {}", self.next_item));
+        if self.next_revision != 1 {
+            line(format!("nextrevision {}", self.next_revision));
+        }
+        if let Some(n) = &self.title_template {
+            line(format!("titleblock {n}"));
+        }
+        if let Some(g) = self.line_group_um {
+            line(format!("linegroup {g}"));
+        }
         for (k, v) in &self.fields {
             line(format!("field {k} {v}"));
         }
@@ -881,6 +1354,19 @@ impl Plan {
                 line(x.clone());
             }
         }
+        for r in &self.revisions {
+            line(format!("revision {}", r.number));
+            if !r.date.is_empty() {
+                line(format!("date {}", r.date));
+            }
+            line(format!("description {}", r.description));
+            if !r.author.is_empty() {
+                line(format!("author {}", r.author));
+            }
+            for x in &r.extra {
+                line(x.clone());
+            }
+        }
         for v in &self.views {
             line(format!("view {} {} {}", v.id, v.kind.name(), v.name));
             line(match &v.source {
@@ -895,6 +1381,27 @@ impl Plan {
                 line(format!("scale {n}:{d}"));
             }
             line(format!("hidden {}", u8::from(v.hidden)));
+            if let Some(c) = &v.section {
+                line(format!("section {} {} {}", c.parent, c.label, c.at_nm));
+            }
+            if let Some(d) = &v.detail {
+                match d.shape {
+                    DetailShape::Circle { radius_nm } => line(format!(
+                        "detail {} {} circle {} {} {radius_nm}",
+                        d.parent, d.label, d.centre.0, d.centre.1
+                    )),
+                    DetailShape::Rect {
+                        width_nm,
+                        height_nm,
+                    } => line(format!(
+                        "detail {} {} rect {} {} {width_nm} {height_nm}",
+                        d.parent, d.label, d.centre.0, d.centre.1
+                    )),
+                }
+            }
+            if let Some(h) = &v.hatch {
+                line(format!("hatch {h}"));
+            }
             for x in &v.extra {
                 line(x.clone());
             }
@@ -914,6 +1421,16 @@ impl Plan {
             line(format!("view {}", d.view));
             if let Some(o) = d.offset_um {
                 line(format!("offset {o}"));
+            }
+            if let Some(st) = d.step_um {
+                line(format!("step {st}"));
+            }
+            match &d.tol {
+                Some(Tol::Class(c)) => line(format!("tol class {c}")),
+                Some(Tol::Dev { upper_nm, lower_nm }) => {
+                    line(format!("tol dev {upper_nm} {lower_nm}"));
+                }
+                None => {}
             }
             line(format!("layer {}", d.layer));
             for x in &d.extra {
@@ -952,6 +1469,7 @@ impl Plan {
         let lines: Vec<&str> = it.collect();
         let mut p = Plan::new(s);
         p.next_item = 0;
+        p.title_template = None;
         let mut cur = Cur::Head;
         let mut head_done = false;
         for (n, l) in lines.iter().enumerate() {
@@ -1004,6 +1522,11 @@ impl Plan {
                             x.extra.push(line);
                         }
                     }
+                    Cur::Revision => {
+                        if let Some(x) = p.revisions.last_mut() {
+                            x.extra.push(line);
+                        }
+                    }
                 }
                 continue;
             }
@@ -1037,6 +1560,14 @@ impl Plan {
                     p.next_item = u32::try_from(int(rest)?)
                         .map_err(|_| bad(format!("line {at}: not a number of item")))?
                 }
+                (Cur::Head, "nextrevision") if !head_done => {
+                    p.next_revision = u32::try_from(int(rest)?)
+                        .map_err(|_| bad(format!("line {at}: not a number of revision")))?
+                }
+                (Cur::Head, "titleblock") if !head_done => {
+                    p.title_template = Some(rest.to_string())
+                }
+                (Cur::Head, "linegroup") if !head_done => p.line_group_um = Some(int(rest)?),
                 (Cur::Head, "field") if !head_done => {
                     let (k, v) = rest
                         .split_once(' ')
@@ -1083,6 +1614,34 @@ impl Plan {
                             }
                         }
                         _ => return Err(bad(format!("line {at}: no layer key {key:?}"))),
+                    }
+                }
+                (_, "revision") => {
+                    head_done = true;
+                    let number = u32::try_from(int(rest)?)
+                        .map_err(|_| bad(format!("line {at}: not a number of revision")))?;
+                    p.revisions.push(Revision {
+                        number,
+                        date: String::new(),
+                        description: String::new(),
+                        author: String::new(),
+                        extra: Vec::new(),
+                    });
+                    cur = Cur::Revision;
+                }
+                (Cur::Revision, "date")
+                | (Cur::Revision, "description")
+                | (Cur::Revision, "author") => {
+                    if let Some(r) = p.revisions.last_mut() {
+                        let slot = match word {
+                            "date" => &mut r.date,
+                            "description" => &mut r.description,
+                            _ => &mut r.author,
+                        };
+                        if !slot.is_empty() {
+                            return Err(bad(format!("line {at}: {word} twice")));
+                        }
+                        *slot = rest.to_string();
                     }
                 }
                 (_, "item") => {
@@ -1137,16 +1696,8 @@ impl Plan {
                     };
                     let kind = ViewKind::from_name(kind)
                         .ok_or_else(|| bad(format!("line {at}: no kind of view {kind:?}")))?;
-                    p.views.push(View {
-                        id,
-                        name: name.to_string(),
-                        kind,
-                        source: Source::Tip,
-                        place: Place::Auto,
-                        scale: None,
-                        hidden: false,
-                        extra: Vec::new(),
-                    });
+                    p.views
+                        .push(View::plain(id, name, kind, Source::Tip, false));
                     cur = Cur::View;
                 }
                 (Cur::View, "source") => {
@@ -1203,6 +1754,71 @@ impl Plan {
                         v.hidden = on;
                     }
                 }
+                (Cur::View, "section") => {
+                    let f: Vec<&str> = rest.split(' ').collect();
+                    let [parent, label, pos] = f.as_slice() else {
+                        return Err(bad(format!(
+                            "line {at}: section needs a view, letters and a position"
+                        )));
+                    };
+                    let cut = SectionCut {
+                        parent: id_of(parent)?,
+                        label: (*label).to_string(),
+                        at_nm: int(pos)?,
+                    };
+                    if let Some(v) = p.views.last_mut() {
+                        if v.section.replace(cut).is_some() {
+                            return Err(bad(format!("line {at}: section twice")));
+                        }
+                    }
+                }
+                (Cur::View, "detail") => {
+                    let f: Vec<&str> = rest.split(' ').collect();
+                    let (parent, label, shape) = match f.as_slice() {
+                        [a, b, c, tail @ ..] => (id_of(a)?, (*b).to_string(), (*c, tail)),
+                        _ => {
+                            return Err(bad(format!(
+                                "line {at}: detail needs a view, a letter and a shape"
+                            )))
+                        }
+                    };
+                    let (centre, shape) = match shape {
+                        ("circle", [u, v, r]) => (
+                            (int(u)?, int(v)?),
+                            DetailShape::Circle { radius_nm: int(r)? },
+                        ),
+                        ("rect", [u, v, w, h]) => (
+                            (int(u)?, int(v)?),
+                            DetailShape::Rect {
+                                width_nm: int(w)?,
+                                height_nm: int(h)?,
+                            },
+                        ),
+                        _ => {
+                            return Err(bad(format!(
+                                "line {at}: a detail is a circle (centre, radius) or a rect (centre, size)"
+                            )))
+                        }
+                    };
+                    if let Some(v) = p.views.last_mut() {
+                        let d = Detail {
+                            parent,
+                            label,
+                            centre,
+                            shape,
+                        };
+                        if v.detail.replace(d).is_some() {
+                            return Err(bad(format!("line {at}: detail twice")));
+                        }
+                    }
+                }
+                (Cur::View, "hatch") => {
+                    if let Some(v) = p.views.last_mut() {
+                        if v.hatch.replace(rest.to_string()).is_some() {
+                            return Err(bad(format!("line {at}: hatch twice")));
+                        }
+                    }
+                }
                 (_, "dim") => {
                     head_done = true;
                     let mut f = rest.splitn(3, ' ');
@@ -1223,6 +1839,8 @@ impl Plan {
                         refs: Vec::new(),
                         view: id,
                         offset_um: None,
+                        step_um: None,
+                        tol: None,
                         layer: "DIMENSION".to_string(),
                         extra: Vec::new(),
                     });
@@ -1278,6 +1896,32 @@ impl Plan {
                         d.offset_um = Some(v);
                     }
                 }
+                (Cur::Dim, "step") => {
+                    let v = int(rest)?;
+                    if let Some(d) = p.dims.last_mut() {
+                        d.step_um = Some(v);
+                    }
+                }
+                (Cur::Dim, "tol") => {
+                    let f: Vec<&str> = rest.split(' ').collect();
+                    let tol = match f.as_slice() {
+                        ["class", c] => Tol::Class((*c).to_string()),
+                        ["dev", u, l] => Tol::Dev {
+                            upper_nm: int(u)?,
+                            lower_nm: int(l)?,
+                        },
+                        _ => {
+                            return Err(bad(format!(
+                                "line {at}: a tolerance is `class H7/g6` or `dev UPPER LOWER`"
+                            )))
+                        }
+                    };
+                    if let Some(d) = p.dims.last_mut() {
+                        if d.tol.replace(tol).is_some() {
+                            return Err(bad(format!("line {at}: tol twice")));
+                        }
+                    }
+                }
                 (Cur::Dim, "layer") => {
                     if let Some(d) = p.dims.last_mut() {
                         d.layer = rest.to_string();
@@ -1306,8 +1950,17 @@ impl Plan {
             return Err(bad("the head has no `nextitem` line"));
         }
         p.validate(s)?;
-        if p.to_bytes() != bytes {
-            return Err(bad("the drawing is not in the one canonical form"));
+        let written = p.to_bytes();
+        if written != bytes {
+            let first = written
+                .split(|b| *b == b'\n')
+                .zip(bytes.split(|b| *b == b'\n'))
+                .position(|(x, y)| x != y)
+                .map_or(0, |n| n + 1);
+            return Err(bad(format!(
+                "the drawing is not in the one canonical form (the first line that differs is {})",
+                first + 1
+            )));
         }
         Ok(p)
     }
@@ -1319,6 +1972,7 @@ enum Cur {
     View,
     Dim,
     Balloon,
+    Revision,
 }
 
 impl Document {

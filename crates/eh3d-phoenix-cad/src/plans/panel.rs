@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use eh3d_container::IdGenerator;
 
 use super::measure::{Issue, Model};
-use super::model::{Plan, Source, View, ViewKind};
+use super::model::{revision_label, Plan, Source, View, ViewKind};
 use super::out;
 use super::scene::{evaluate, Evaluation};
 use super::settings::SheetSettings;
@@ -76,6 +76,10 @@ pub struct PanelLines {
     pub balloons: Vec<Line>,
     /// The bill.
     pub bom: Vec<Line>,
+    /// The revisions of the table, oldest first.
+    pub revisions: Vec<Line>,
+    /// Notes that are not problems (the table of ISO 286 has not been checked).
+    pub notes: Vec<Line>,
     /// The layers.
     pub layers: Vec<LayerLine>,
     /// The problems.
@@ -158,6 +162,24 @@ pub fn lines_of(plan: &Plan, eval: &Evaluation, s: &SheetSettings, lang: Lang) -
             Tone::Plain,
         ));
     }
+    for r in &plan.revisions {
+        out.revisions.push(line(
+            fill(
+                Msg::PlRevRow.tr(lang),
+                &[
+                    &revision_label(r.number, s.revisions.numbering),
+                    &r.date,
+                    &r.description,
+                    &r.author,
+                ],
+            ),
+            Tone::Plain,
+        ));
+    }
+    if eval.unverified_table {
+        out.notes
+            .push(line(Msg::IsoUnverified.tr(lang).to_string(), Tone::Plain));
+    }
     for (name, _) in &s.layers {
         let visible = plan.layer_visible(name, s);
         let locked = plan.layer_locked(name, s);
@@ -202,6 +224,8 @@ pub struct PlanState {
     pub dirty: bool,
     /// What the last action said, as text, and whether it is a problem.
     pub note: Option<Line>,
+    /// The dimension whose line is being dragged.
+    pub drag: Option<Id>,
     dag: Option<FeatureDag>,
     sketches: Vec<Sketch>,
     ids: IdGenerator<eh3d_container::SystemClock, eh3d_container::SystemRandom>,
@@ -228,6 +252,7 @@ impl PlanState {
             eval: None,
             dirty: false,
             note: None,
+            drag: None,
             dag: None,
             sketches: Vec::new(),
             ids: IdGenerator::system(),
@@ -329,6 +354,9 @@ impl PlanState {
                     place: super::model::Place::Auto,
                     scale: None,
                     hidden: self.sheet.hidden_lines,
+                    section: None,
+                    detail: None,
+                    hatch: None,
                     extra: Vec::new(),
                 },
                 &self.sheet,
@@ -337,6 +365,69 @@ impl PlanState {
         self.plan = Some(plan);
         self.dirty = true;
         self.evaluate(lang)
+    }
+
+    /// The dimension whose line is under a point of the sheet (micrometres), within `tolerance`.
+    /// The nearest line wins when two are under the point.
+    pub fn pick_dim(&self, pointer: (i64, i64), tolerance: i64) -> Option<Id> {
+        let eval = self.eval.as_ref()?;
+        eval.dims
+            .iter()
+            .filter_map(|d| d.line.map(|l| (d.id, l)))
+            .filter(|(_, l)| l.hit(pointer, tolerance))
+            .min_by_key(|(_, l)| {
+                let across = if l.horizontal { pointer.1 } else { pointer.0 };
+                (across - l.line_at()).abs()
+            })
+            .map(|(id, _)| id)
+    }
+
+    /// Starts to drag the line of the dimension under the point, when there is one.
+    pub fn begin_drag(&mut self, pointer: (i64, i64)) -> bool {
+        let tolerance = self.sheet.dim.drag_snap_um.max(2000);
+        self.drag = self.pick_dim(pointer, tolerance);
+        self.drag.is_some()
+    }
+
+    /// Moves the line that is being dragged to the point; the distance lands on a multiple of
+    /// `sheet.dim.drag_snap`. Returns the new distance from the view.
+    pub fn drag_to(&mut self, pointer: (i64, i64), lang: Lang) -> Result<Option<i64>, CadError> {
+        let (Some(id), Some(eval)) = (self.drag, self.eval.as_ref()) else {
+            return Ok(None);
+        };
+        let Some(line) = eval.dims.iter().find(|d| d.id == id).and_then(|d| d.line) else {
+            return Ok(None);
+        };
+        let offset = line.offset_for(pointer, self.sheet.dim.drag_snap_um);
+        let Some(plan) = self.plan.as_mut() else {
+            return Ok(None);
+        };
+        plan.set_dim_offset(id, Some(offset), &self.sheet)?;
+        self.dirty = true;
+        self.evaluate(lang)?;
+        Ok(Some(offset))
+    }
+
+    /// Ends the dragging of a line.
+    pub fn end_drag(&mut self) {
+        self.drag = None;
+    }
+
+    /// Adds a revision to the table of the sheet (the date and the author are free texts).
+    pub fn add_revision(
+        &mut self,
+        date: &str,
+        description: &str,
+        author: &str,
+        lang: Lang,
+    ) -> Result<u32, CadError> {
+        let Some(plan) = self.plan.as_mut() else {
+            return Err(CadError::PlanRevision("there is no sheet".to_string()));
+        };
+        let n = plan.add_revision(date, description, author, &self.sheet)?;
+        self.dirty = true;
+        self.evaluate(lang)?;
+        Ok(n)
     }
 
     /// Shows or hides a layer.

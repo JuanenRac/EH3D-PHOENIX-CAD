@@ -7,20 +7,33 @@
 use std::collections::BTreeMap;
 
 use super::bom::{part_nodes, BomLine};
+use super::extended::{place as place_dims, DimLine, Slot};
 use super::geom::{bounds_of, view_segments};
-use super::measure::{draw, measure, Frame, Issue, Measured, Model};
-use super::model::{DimKind, Place, Plan, SheetScale, Source, View, ViewKind};
+use super::measure::{draw, face_place, measure, view_axes, Frame, Issue, Measured, Model};
+use super::model::{
+    revision_label, Detail, DetailShape, DimKind, Place, Plan, SheetScale, Source, View, ViewKind,
+};
 use super::prim::{mm_text, Anchor, Prim, Shape};
-use super::settings::SheetSettings;
+use super::sectioning::{
+    clip_detail, clip_solid, cut_face, cut_marks, detail_box, hatch_lines, CutLayers, Rect,
+};
+use super::settings::{DashPattern, DimStyle, SheetSettings};
+use super::tol::annotate;
 use crate::config::Settings;
 use crate::enclosure::Id;
+use crate::iso286::Table;
 use crate::lang::{Lang, Msg};
+use crate::prism::Limits;
 use crate::sketch::{Element, ElementId, Sketch};
 use crate::CadError;
 
 const BAD_VIEW: &str = "PHOENIX-CAD-054";
 const BAD_DIM: &str = "PHOENIX-CAD-056";
 const BAD_BALLOON: &str = "PHOENIX-CAD-057";
+const BAD_TOL: &str = "PHOENIX-CAD-058";
+const BAD_SECTION: &str = "PHOENIX-CAD-059";
+
+type Fail = (&'static str, String);
 
 /// The sheet as primitives.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +46,10 @@ pub struct Scene {
     pub prims: Vec<Prim>,
     /// The colour, width and line type of every layer that is drawn on, by name.
     pub layers: BTreeMap<String, (String, i64, super::settings::LineType)>,
+    /// The pattern of the dashed lines (from the settings).
+    pub dashed: DashPattern,
+    /// The pattern of the dash-dot lines (from the settings).
+    pub dash_dot: DashPattern,
 }
 
 /// What became of a view.
@@ -65,8 +82,11 @@ pub struct DimReport {
     pub name: String,
     /// What it measures.
     pub kind: DimKind,
-    /// The texts of its values, empty when it has an issue.
+    /// The texts of its values (with the tolerance), empty when it has an issue.
     pub texts: Vec<String>,
+    /// Where its line is on the sheet, for picking it and dragging it; `None` for the kinds that
+    /// are drawn with a leader or an arc.
+    pub line: Option<DimLine>,
 }
 
 /// What became of a balloon.
@@ -97,6 +117,9 @@ pub struct Evaluation {
     pub bom: Vec<BomLine>,
     /// The problems, in the order of the records.
     pub issues: Vec<Issue>,
+    /// Whether a tolerance of the sheet was worked out from a table of ISO 286 that says it has
+    /// not been checked against the standard.
+    pub unverified_table: bool,
 }
 
 impl Evaluation {
@@ -114,6 +137,17 @@ struct Built {
     hi: (i64, i64),
     visible: usize,
     hidden: usize,
+    /// The faces the cut of a section leaves open, in the picture of the view.
+    cut: Vec<Rect>,
+}
+
+/// The layer to draw on: the one asked for when the settings have it, else the outline.
+fn layer_for<'a>(s: &SheetSettings, want: &'a str) -> &'a str {
+    if s.layer(want).is_some() {
+        want
+    } else {
+        "OUTLINE"
+    }
 }
 
 fn sketch_items(sk: &Sketch) -> Option<Built> {
@@ -185,30 +219,74 @@ fn sketch_items(sk: &Sketch) -> Option<Built> {
             hi,
             visible,
             hidden: 0,
+            cut: Vec::new(),
         })
     }
 }
 
-fn build_view(v: &View, model: &Model, s: &SheetSettings) -> Result<Built, String> {
+fn build_view(
+    v: &View,
+    model: &Model,
+    s: &SheetSettings,
+    prior: &[(usize, &View, Built)],
+) -> Result<Built, Fail> {
+    if let Some(d) = &v.detail {
+        return build_detail(d, prior);
+    }
+    let bad = |why: String| -> Fail { (BAD_VIEW, why) };
     if let Source::Sketch(name) = &v.source {
         let sk = model
             .sketches
             .iter()
             .find(|k| k.name() == name)
-            .ok_or_else(|| format!("the sketch {name} is not in the project"))?;
-        return sketch_items(sk).ok_or_else(|| format!("the sketch {name} has nothing to draw"));
+            .ok_or_else(|| bad(format!("the sketch {name} is not in the project")))?;
+        return sketch_items(sk)
+            .ok_or_else(|| bad(format!("the sketch {name} has nothing to draw")));
     }
-    let dag = model.dag.ok_or("the project has no history of features")?;
+    let dag = model
+        .dag
+        .ok_or_else(|| bad("the project has no history of features".to_string()))?;
     let solid = match &v.source {
-        Source::Tip => dag.result().ok_or("the history has no result")?,
+        Source::Tip => dag
+            .result()
+            .ok_or_else(|| bad("the history has no result".to_string()))?,
         Source::Node(id) => dag
             .solid(*id)
-            .ok_or_else(|| format!("the node {id} has no solid in the last rebuild"))?,
-        Source::Sketch(_) => return Err("not a sketch".to_string()),
+            .ok_or_else(|| bad(format!("the node {id} has no solid in the last rebuild")))?,
+        Source::Sketch(_) => return Err(bad("not a sketch".to_string())),
     };
     if solid.is_empty() {
-        return Err("the solid is empty".to_string());
+        return Err(bad("the solid is empty".to_string()));
     }
+    let clipped;
+    let mut cut = Vec::new();
+    let solid = if let Some(c) = &v.section {
+        let limits = Limits {
+            max_cells: s.max_cells,
+            max_prisms: 100_000,
+        };
+        clipped = clip_solid(solid, v.kind, c.at_nm, &limits)
+            .map_err(|e| (BAD_SECTION, e.to_string()))?;
+        if clipped.is_empty() {
+            return Err((
+                BAD_SECTION,
+                "the cut leaves nothing of the solid".to_string(),
+            ));
+        }
+        cut = cut_face(&clipped, v.kind, c.at_nm);
+        if cut.is_empty() {
+            return Err((
+                BAD_SECTION,
+                format!(
+                    "the plane at {} mm does not cut the solid",
+                    mm_text(c.at_nm / 1000)
+                ),
+            ));
+        }
+        &clipped
+    } else {
+        solid
+    };
     let segs = view_segments(
         solid,
         v.kind,
@@ -217,8 +295,9 @@ fn build_view(v: &View, model: &Model, s: &SheetSettings) -> Result<Built, Strin
         s.max_edges,
         s.max_iso_tests,
     )
-    .map_err(|e| e.to_string())?;
-    let (lo, hi) = bounds_of(&segs).ok_or("nothing to draw in this view")?;
+    .map_err(|e| bad(e.to_string()))?;
+    let (lo, hi) =
+        bounds_of(&segs).ok_or_else(|| bad("nothing to draw in this view".to_string()))?;
     let hidden = segs.iter().filter(|g| g.hidden).count();
     let items = segs
         .into_iter()
@@ -236,7 +315,101 @@ fn build_view(v: &View, model: &Model, s: &SheetSettings) -> Result<Built, Strin
         hi,
         visible,
         hidden,
+        cut,
     })
+}
+
+/// A detail: the lines of the view it enlarges that are inside its circle or rectangle, and the
+/// border of that shape.
+fn build_detail(d: &Detail, prior: &[(usize, &View, Built)]) -> Result<Built, Fail> {
+    let parent = prior.iter().find(|(_, v, _)| v.id == d.parent).ok_or((
+        BAD_SECTION,
+        "the view that is enlarged could not be made".to_string(),
+    ))?;
+    let (lo, hi) = detail_box(d.centre, d.shape);
+    let mut items: Vec<Item> = Vec::new();
+    let (mut visible, mut hidden) = (0, 0);
+    for (layer, shape) in &parent.2.items {
+        if let Shape::Line { a, b } = shape {
+            if let Some((p, q)) = clip_detail(*a, *b, d.centre, d.shape) {
+                items.push((layer, Shape::Line { a: p, b: q }));
+                if *layer == "HIDDEN" {
+                    hidden += 1;
+                } else {
+                    visible += 1;
+                }
+            }
+        }
+    }
+    if items.is_empty() {
+        return Err((
+            BAD_SECTION,
+            "nothing of the view is inside the shape of the detail".to_string(),
+        ));
+    }
+    match d.shape {
+        DetailShape::Circle { radius_nm } => items.push((
+            "DETAIL",
+            Shape::Circle {
+                c: d.centre,
+                r: radius_nm,
+            },
+        )),
+        DetailShape::Rect { .. } => {
+            for (a, b) in [
+                ((lo.0, lo.1), (hi.0, lo.1)),
+                ((hi.0, lo.1), (hi.0, hi.1)),
+                ((hi.0, hi.1), (lo.0, hi.1)),
+                ((lo.0, hi.1), (lo.0, lo.1)),
+            ] {
+                items.push(("DETAIL", Shape::Line { a, b }));
+            }
+        }
+    }
+    Ok(Built {
+        items,
+        lo,
+        hi,
+        visible,
+        hidden,
+        cut: Vec::new(),
+    })
+}
+
+/// The marks of a detail in the view it was taken from: the circle or the rectangle and its letter.
+fn detail_marks(d: &Detail, parent: &Frame, layer: &str, text_h: i64) -> Vec<Prim> {
+    let c = parent.map(d.centre);
+    match d.shape {
+        DetailShape::Circle { radius_nm } => {
+            let r = parent.len(radius_nm);
+            vec![
+                Prim {
+                    layer: layer.to_string(),
+                    shape: Shape::Circle { c, r },
+                },
+                Prim::text(
+                    "TEXT",
+                    (c.0 + r * 7 / 10 + text_h / 2, c.1 + r * 7 / 10 + text_h / 2),
+                    text_h,
+                    &d.label,
+                    Anchor::Start,
+                ),
+            ]
+        }
+        DetailShape::Rect { .. } => {
+            let (lo, hi) = detail_box(d.centre, d.shape);
+            let (a, b) = (parent.map(lo), parent.map(hi));
+            let mut out = rect(layer, a.0, a.1, b.0, b.1);
+            out.push(Prim::text(
+                "TEXT",
+                (b.0 + text_h / 3, b.1 + text_h / 3),
+                text_h,
+                &d.label,
+                Anchor::Start,
+            ));
+            out
+        }
+    }
 }
 
 fn map_shape(shape: &Shape, f: &Frame) -> Shape {
@@ -316,7 +489,8 @@ fn layout(
     let mut placed: Vec<Placed> = Vec::new();
     if let Some(base) = auto
         .iter()
-        .find(|(_, v, _)| v.kind == ViewKind::Front)
+        .find(|(_, v, _)| v.kind == ViewKind::Front && !v.is_derived())
+        .or_else(|| auto.iter().find(|(_, v, _)| !v.is_derived()))
         .or_else(|| auto.first())
     {
         let (bsc, bsize, bframe) = measure_of(base.1, base.2);
@@ -330,10 +504,10 @@ fn layout(
         let mut taken = vec![base.0];
         let mut top: Option<(i64, i64)> = None;
         let mut right: Option<(i64, i64)> = None;
-        if base.1.kind == ViewKind::Front {
+        if base.1.kind == ViewKind::Front && !base.1.is_derived() {
             if let Some(t) = auto
                 .iter()
-                .find(|(i, v, _)| !taken.contains(i) && v.kind == ViewKind::Top)
+                .find(|(i, v, _)| !taken.contains(i) && v.kind == ViewKind::Top && !v.is_derived())
             {
                 let (sc, sz, _) = measure_of(t.1, t.2);
                 let x = bframe.len(t.2.lo.0 - base.2.lo.0);
@@ -352,10 +526,9 @@ fn layout(
                 taken.push(t.0);
                 top = Some((x, y));
             }
-            if let Some(r) = auto
-                .iter()
-                .find(|(i, v, _)| !taken.contains(i) && v.kind == ViewKind::Right)
-            {
+            if let Some(r) = auto.iter().find(|(i, v, _)| {
+                !taken.contains(i) && v.kind == ViewKind::Right && !v.is_derived()
+            }) {
                 let (sc, sz, _) = measure_of(r.1, r.2);
                 let x = if plan.third_angle {
                     bsize.0 + gap
@@ -374,10 +547,9 @@ fn layout(
                 right = Some((x, y));
             }
             if let (true, Some(t), Some(r)) = (plan.third_angle, top, right) {
-                if let Some(i) = auto
-                    .iter()
-                    .find(|(i, v, _)| !taken.contains(i) && v.kind == ViewKind::Iso)
-                {
+                if let Some(i) = auto.iter().find(|(i, v, _)| {
+                    !taken.contains(i) && v.kind == ViewKind::Iso && !v.is_derived()
+                }) {
                     let (sc, sz, _) = measure_of(i.1, i.2);
                     placed.push(Placed {
                         index: i.0,
@@ -507,10 +679,10 @@ pub fn evaluate(
     // the views
     let mut built: Vec<(usize, &View, Built)> = Vec::new();
     for (i, v) in plan.views.iter().enumerate() {
-        match build_view(v, model, s) {
+        match build_view(v, model, s, &built) {
             Ok(b) => built.push((i, v, b)),
-            Err(why) => issues.push(Issue {
-                code: BAD_VIEW,
+            Err((code, why)) => issues.push(Issue {
+                code,
                 subject: format!("view {}", v.name),
                 detail: why,
             }),
@@ -519,12 +691,22 @@ pub fn evaluate(
     let refs: Vec<(usize, &View, &Built)> = built.iter().map(|(i, v, b)| (*i, *v, b)).collect();
     // the room
     let margin = s.margin_um;
-    let rows = if s.title_block && !s.title_fields.is_empty() {
-        (s.title_fields.len() as i64 + i64::from(s.title_columns) - 1) / i64::from(s.title_columns)
+    let tpl = s
+        .title_block_of(plan.title_template.as_deref())
+        .or_else(|| s.title_block_of(Some("default")))
+        .ok_or_else(|| CadError::Plan("the title block is not in the settings".into()))?;
+    let rows = if s.title_block && !tpl.fields.is_empty() {
+        (tpl.fields.len() as i64 + i64::from(tpl.columns) - 1) / i64::from(tpl.columns)
     } else {
         0
     };
-    let title_h = rows * s.title_row_um;
+    let title_h = rows * tpl.row_um;
+    let rev_rows = if s.revisions.table && !plan.revisions.is_empty() {
+        plan.revisions.len() as i64 + 1
+    } else {
+        0
+    };
+    let rev_h = rev_rows * s.revisions.row_um;
     let bom_h = if s.bom_table && !bom.is_empty() {
         (bom.len() as i64 + 1) * s.bom_row_um
     } else {
@@ -537,7 +719,7 @@ pub fn evaluate(
         ),
         (
             sw - margin - s.view_gap_um / 2,
-            sh - margin - s.view_gap_um / 2,
+            sh - margin - s.view_gap_um / 2 - rev_h,
         ),
     );
     // the scale
@@ -591,9 +773,56 @@ pub fn evaluate(
         }
         for (layer, shape) in &b.items {
             prims.push(Prim {
-                layer: (*layer).to_string(),
+                layer: layer_for(s, layer).to_string(),
                 shape: map_shape(shape, &frame),
             });
+        }
+        if !b.cut.is_empty() {
+            let rects: Vec<Rect> = b
+                .cut
+                .iter()
+                .map(|(lo, hi)| (frame.map(*lo), frame.map(*hi)))
+                .collect();
+            let material = v.hatch.clone().or_else(|| match &v.source {
+                Source::Node(n) => plan.parts.get(n).and_then(|i| i.material.clone()),
+                _ => None,
+            });
+            let style = material
+                .and_then(|m| s.hatch.materials.get(&m.to_lowercase()).copied())
+                .unwrap_or(s.hatch.default);
+            match hatch_lines(&rects, style, s.hatch.max_lines) {
+                Ok(lines) => {
+                    for (a, c) in lines {
+                        prims.push(Prim::line(layer_for(s, "HATCH"), a, c));
+                    }
+                }
+                Err(n) => issues.push(Issue {
+                    code: BAD_SECTION,
+                    subject: format!("view {}", v.name),
+                    detail: format!(
+                        "the hatching needs {n} lines, the settings allow {}",
+                        s.hatch.max_lines
+                    ),
+                }),
+            }
+        }
+        let caption = match (&v.section, &v.detail) {
+            (Some(c), _) => Some(format!("{0}-{0}", c.label)),
+            (_, Some(d)) => Some(format!("{} ({}:{})", d.label, p.scale.0, p.scale.1)),
+            _ => None,
+        };
+        if let Some(text) = caption {
+            let th = s.section.text_height_um;
+            prims.push(Prim::text(
+                "TEXT",
+                (
+                    p.origin.0 + p.size.0 / 2,
+                    p.origin.1 - s.section.caption_gap_um - th,
+                ),
+                th,
+                &text,
+                Anchor::Middle,
+            ));
         }
         frames.insert(v.id, frame);
         view_reports.push(ViewReport {
@@ -607,29 +836,128 @@ pub fn evaluate(
             hidden: b.hidden,
         });
     }
-    // the dimensions
-    let mut dim_reports = Vec::new();
+    // the lines of the cuts and the marks of the details, in the views they are drawn in
+    for (_, v, _) in &built {
+        if let Some(c) = &v.section {
+            let layers = CutLayers {
+                line: layer_for(s, "SECTION").to_string(),
+                mark: layer_for(s, "OUTLINE").to_string(),
+                text: "TEXT".to_string(),
+            };
+            let drawn = frames.get(&c.parent).map(|pf| {
+                cut_marks(
+                    pf,
+                    v.kind,
+                    c.at_nm,
+                    &c.label,
+                    &s.section,
+                    s.dim.arrow_length_um,
+                    s.dim.arrow_width_um,
+                    &layers,
+                )
+            });
+            match drawn {
+                Some(Some(ps)) => prims.extend(ps),
+                Some(None) => issues.push(Issue {
+                    code: BAD_SECTION,
+                    subject: format!("view {}", v.name),
+                    detail: "the view of the line of the cut does not show the axis of the cut"
+                        .to_string(),
+                }),
+                None => issues.push(Issue {
+                    code: BAD_SECTION,
+                    subject: format!("view {}", v.name),
+                    detail: "the view of the line of the cut could not be made".to_string(),
+                }),
+            }
+        }
+        if let Some(d) = &v.detail {
+            if let Some(pf) = frames.get(&d.parent) {
+                prims.extend(detail_marks(
+                    d,
+                    pf,
+                    layer_for(s, "DETAIL"),
+                    s.section.text_height_um,
+                ));
+            }
+        }
+    }
+    // the dimensions: measured first (with their tolerances), then the ones that were not given a
+    // place are put on lines where they do not meet another, then drawn
+    let table = plan
+        .dims
+        .iter()
+        .any(|d| d.tol.is_some())
+        .then(Table::shipped);
+    let mut pending: Vec<(&super::model::Dim, Result<Measured, Fail>)> = Vec::new();
+    let mut slots: Vec<Slot> = Vec::new();
     for d in &plan.dims {
-        let subject = format!("dimension {}", d.name);
         // what the dimension is tied to is looked for first: a thing that is gone is an orphan,
         // whatever became of the view
-        let measured: Result<Measured, _> = measure(d, model, &s.dim);
+        let mut measured: Result<Measured, Fail> = measure(d, model, &s.dim);
+        if let (Ok(m), Some(tol), Some(table)) = (measured.as_mut(), d.tol.as_ref(), table.as_ref())
+        {
+            if let Err(why) = write_tolerance(m, tol, table, &s.dim) {
+                measured = Err((BAD_TOL, format!("{}: {why}", d.name)));
+            }
+        }
+        if let (Ok(m), None, Some(frame)) = (&measured, d.offset_um, frames.get(&d.view)) {
+            if slots.len() < s.max_auto_dims {
+                if let Some((horizontal, lo, hi)) = extent_of(d.kind, m, frame) {
+                    slots.push(Slot {
+                        id: d.id,
+                        view: d.view,
+                        horizontal,
+                        lo,
+                        hi,
+                        step: d.step_um.unwrap_or(s.dim.step_um),
+                        lines: if d.kind == DimKind::Cumulative {
+                            m.refs.len() as i64 - 1
+                        } else {
+                            1
+                        },
+                    });
+                }
+            }
+        }
+        pending.push((d, measured));
+    }
+    let bases = place_dims(&slots, s.dim.clearance_um);
+    let mut dim_reports = Vec::new();
+    for (d, measured) in pending {
+        let subject = format!("dimension {}", d.name);
         let sketch_name = plan.view(d.view).and_then(|v| match &v.source {
             Source::Sketch(n) => Some(n.as_str()),
             _ => None,
         });
+        let mut placed = d.clone();
+        if d.offset_um.is_none() {
+            if let Some(base) = bases.get(&d.id).filter(|b| **b != 0) {
+                placed.offset_um = Some(s.dim.offset_um + base);
+            }
+        }
         let drawn = measured.and_then(|m| match frames.get(&d.view) {
-            Some(frame) => draw(d, &m, frame, &s.dim, sketch_name).map(|p| (m, p)),
+            Some(frame) => draw(&placed, &m, frame, &s.dim, sketch_name).map(|p| (m, p)),
             None => Err((BAD_DIM, "its view could not be made".to_string())),
         });
         match drawn {
             Ok((m, ps)) => {
                 prims.extend(ps);
+                let line = frames.get(&d.view).and_then(|frame| {
+                    extent_of(d.kind, &m, frame).map(|(horizontal, lo, hi)| DimLine {
+                        horizontal,
+                        view_origin: frame.origin,
+                        level_um: placed.offset_um.unwrap_or(s.dim.offset_um),
+                        lo,
+                        hi,
+                    })
+                });
                 dim_reports.push(DimReport {
                     id: d.id,
                     name: d.name.clone(),
                     kind: d.kind,
                     texts: m.texts,
+                    line,
                 });
             }
             Err((code, detail)) => issues.push(Issue {
@@ -643,15 +971,15 @@ pub fn evaluate(
     let right = sw - margin;
     let mut y = margin;
     if s.title_block && rows > 0 {
-        let w = s.title_width_um.min(sw - 2 * margin);
+        let w = tpl.width_um.min(sw - 2 * margin);
         let x0 = right - w;
-        let cols = i64::from(s.title_columns);
+        let cols = i64::from(tpl.columns);
         let cw = w / cols;
         prims.extend(rect("FRAME", x0, y, x0 + cw * cols, y + title_h));
-        for (k, key) in s.title_fields.iter().enumerate() {
+        for (k, key) in tpl.fields.iter().enumerate() {
             let (col, row) = (k as i64 % cols, k as i64 / cols);
-            let (cx, cy) = (x0 + col * cw, y + title_h - (row + 1) * s.title_row_um);
-            prims.extend(rect("FRAME", cx, cy, cx + cw, cy + s.title_row_um));
+            let (cx, cy) = (x0 + col * cw, y + title_h - (row + 1) * tpl.row_um);
+            prims.extend(rect("FRAME", cx, cy, cx + cw, cy + tpl.row_um));
             let value = match key.as_str() {
                 "scale" => format!("{}:{}", scale.0, scale.1),
                 "sheet" => "1/1".to_string(),
@@ -662,11 +990,11 @@ pub fn evaluate(
                     .cloned()
                     .unwrap_or_default(),
             };
-            let label_h = s.title_row_um * 22 / 100;
-            let value_h = s.title_row_um * 40 / 100;
+            let label_h = tpl.row_um * 22 / 100;
+            let value_h = tpl.row_um * 40 / 100;
             prims.push(Prim::text(
                 "TEXT",
-                (cx + label_h / 2, cy + s.title_row_um - label_h * 12 / 10),
+                (cx + label_h / 2, cy + tpl.row_um - label_h * 12 / 10),
                 label_h,
                 &field_label(key, lang),
                 Anchor::Start,
@@ -724,6 +1052,55 @@ pub fn evaluate(
                     (cols[c] + th / 3, ry + rh / 4),
                     th,
                     t,
+                    Anchor::Start,
+                ));
+            }
+        }
+    }
+    // the table of revisions, at the upper right corner of the frame
+    if rev_h > 0 {
+        let w = s.revisions.width_um.min(sw - 2 * margin);
+        let x0 = right - w;
+        let top = sh - margin;
+        let widths = [w / 10, w / 5, w * 5 / 10, w - w / 10 - w / 5 - w * 5 / 10];
+        let cols = [
+            x0,
+            x0 + widths[0],
+            x0 + widths[0] + widths[1],
+            x0 + widths[0] + widths[1] + widths[2],
+            right,
+        ];
+        let rh = s.revisions.row_um;
+        let th = rh * 55 / 100;
+        let heads = [
+            Msg::TbRevision,
+            Msg::TbDate,
+            Msg::PlDescription,
+            Msg::TbAuthor,
+        ];
+        for r in 0..rev_rows {
+            let ry = top - (r + 1) * rh;
+            prims.extend(rect("FRAME", x0, ry, right, ry + rh));
+            for x in &cols[1..4] {
+                prims.push(Prim::line("FRAME", (*x, ry), (*x, ry + rh)));
+            }
+            let texts: [String; 4] = if r == 0 {
+                heads.map(|m| m.tr(lang).to_string())
+            } else {
+                let rev = &plan.revisions[(r - 1) as usize];
+                [
+                    revision_label(rev.number, s.revisions.numbering),
+                    rev.date.clone(),
+                    rev.description.clone(),
+                    rev.author.clone(),
+                ]
+            };
+            for (c, text) in texts.iter().enumerate() {
+                prims.push(Prim::text(
+                    "TEXT",
+                    (cols[c] + th / 3, ry + rh / 4),
+                    th,
+                    text,
                     Anchor::Start,
                 ));
             }
@@ -797,6 +1174,8 @@ pub fn evaluate(
             height_um: sh,
             prims,
             layers,
+            dashed: s.dashed,
+            dash_dot: s.dash_dot,
         },
         scale,
         views: view_reports,
@@ -804,5 +1183,51 @@ pub fn evaluate(
         balloons: balloon_reports,
         bom,
         issues,
+        unverified_table: table.is_some_and(|t| !t.verified),
     })
+}
+
+/// Writes the tolerance next to every value of a measured dimension.
+fn write_tolerance(
+    m: &mut Measured,
+    tol: &super::tol::Tol,
+    table: &Table,
+    style: &DimStyle,
+) -> Result<(), String> {
+    for k in 0..m.values.len() {
+        m.texts[k] = annotate(
+            &m.texts[k],
+            tol,
+            m.values[k].abs(),
+            table,
+            style.tol_style,
+            style.tol_decimals,
+        )?;
+    }
+    Ok(())
+}
+
+/// Whether the lines of a dimension of lengths run across the sheet, and the stretch of the sheet
+/// they cover along the line, for the kinds drawn between faces of a view of a solid.
+fn extent_of(kind: DimKind, m: &Measured, frame: &Frame) -> Option<(bool, i64, i64)> {
+    if !matches!(
+        kind,
+        DimKind::Linear | DimKind::Cumulative | DimKind::Chain | DimKind::Ordinate
+    ) {
+        return None;
+    }
+    let (u, v) = view_axes(frame.kind)?;
+    let super::measure::Resolved::Face { axis, .. } = m.refs.first()? else {
+        return None;
+    };
+    let horizontal = *axis == u;
+    if !horizontal && *axis != v {
+        return None;
+    }
+    let along: Vec<i64> = m
+        .refs
+        .iter()
+        .map(|r| face_place(r, frame, horizontal, u, v).0)
+        .collect();
+    Some((horizontal, *along.iter().min()?, *along.iter().max()?))
 }

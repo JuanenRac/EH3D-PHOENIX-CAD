@@ -107,6 +107,9 @@ fn view(n: u16, kind: ViewKind, hidden: bool) -> View {
         place: Place::Auto,
         scale: None,
         hidden,
+        section: None,
+        detail: None,
+        hatch: None,
         extra: Vec::new(),
     }
 }
@@ -134,6 +137,8 @@ fn dim(n: u16, kind: DimKind, refs: Vec<Ref>, view: Id) -> Dim {
         refs,
         view,
         offset_um: None,
+        step_um: None,
+        tol: None,
         layer: "DIMENSION".to_string(),
         extra: Vec::new(),
     }
@@ -1485,7 +1490,7 @@ fn panel_flow() {
         "{:?}",
         l.views
     );
-    assert_eq!(l.layers.len(), 7);
+    assert_eq!(l.layers.len(), 10);
     assert!(l.issues.is_empty());
     assert_eq!(
         st.lines(Lang::Es).head.unwrap().text,
@@ -1725,4 +1730,1216 @@ fn fuzz_config() {
         }
     }
     assert!(ok > 0);
+}
+
+// ----- the second set of drawings: sections, details, tolerances, extended dimensions, revisions -----
+
+use super::extended::{place as place_dims, DimLine, Slot};
+use super::prim::Shape;
+use super::scene::Evaluation;
+use super::sectioning::{
+    clip_solid, clip_to_circle, clip_to_rect, cut_face, hatch_lines, keeps_high,
+};
+use super::settings::{HatchStyle, RevisionNumbering, TolDisplay};
+use super::tol::{annotate, apply, check, pair_text};
+
+fn run(p: &Plan, d: &FeatureDag) -> Evaluation {
+    evaluate(
+        p,
+        &Model {
+            dag: Some(d),
+            sketches: &[],
+        },
+        &cfg(),
+        &sheet(),
+        Lang::En,
+    )
+    .unwrap()
+}
+
+fn count_layer(ev: &Evaluation, layer: &str) -> usize {
+    ev.scene.prims.iter().filter(|p| p.layer == layer).count()
+}
+
+fn has_text(ev: &Evaluation, wanted: &str) -> bool {
+    ev.scene
+        .prims
+        .iter()
+        .any(|p| matches!(&p.shape, Shape::Text { text, .. } if text == wanted))
+}
+
+fn section_of(n: u16, kind: ViewKind, parent: u16, at_mm: i64, label: &str) -> View {
+    let mut v = View::plain(id(110 + n), label, kind, Source::Tip, false);
+    v.section = Some(SectionCut {
+        parent: id(parent),
+        at_nm: at_mm * 1_000_000,
+        label: label.to_string(),
+    });
+    v
+}
+
+fn code(e: crate::CadError) -> &'static str {
+    e.code()
+}
+
+#[test]
+fn cut_clips() {
+    let d = hollow("40 mm");
+    let solid = d.result().unwrap();
+    let lim = Limits::default();
+    // the right view keeps what lies below the cut in x, the front what lies above it in y
+    let right = clip_solid(solid, ViewKind::Right, 15_000_000, &lim).unwrap();
+    let (lo, hi) = right.bounds().unwrap();
+    assert_eq!((lo[0], hi[0]), (0, 15_000_000));
+    let front = clip_solid(solid, ViewKind::Front, 5_000_000, &lim).unwrap();
+    let (lo, hi) = front.bounds().unwrap();
+    assert_eq!((lo[1], hi[1]), (5_000_000, 20_000_000));
+    assert!(keeps_high(ViewKind::Front) && !keeps_high(ViewKind::Top));
+    // the cut face is the ring round the cavity: its area is the section of the box less the cavity
+    let faces = cut_face(&right, ViewKind::Right, 15_000_000);
+    let area: i128 = faces
+        .iter()
+        .map(|((a, b), (c, d))| i128::from(c - a) * i128::from(d - b))
+        .sum();
+    assert_eq!(area, (20 * 10 - 10 * 6) * 1_000_000_000_000);
+    // a plane beyond the solid cuts nothing, and a view along the iso axis has no section
+    let beyond = clip_solid(solid, ViewKind::Right, 90_000_000, &lim).unwrap();
+    assert!(cut_face(&beyond, ViewKind::Right, 90_000_000).is_empty());
+    assert!(clip_solid(solid, ViewKind::Iso, 0, &lim).is_err());
+}
+
+#[test]
+fn hatch_joins() {
+    let two = [((0, 0), (5000, 10_000)), ((5000, 0), (10_000, 10_000))];
+    let style = |a| HatchStyle {
+        angle_deg: a,
+        spacing_um: 1000,
+    };
+    // horizontal lines run across both rectangles as one line each
+    let h = hatch_lines(&two, style(0), 1000).unwrap();
+    assert_eq!(h.len(), 11);
+    assert!(h
+        .iter()
+        .all(|(a, b)| a.0 == 0 && b.0 == 10_000 && a.1 == b.1));
+    // vertical lines: the shared edge is one line
+    let v = hatch_lines(&two, style(90), 1000).unwrap();
+    assert_eq!(v.len(), 11);
+    // slanted lines stay inside the box and are the same twice
+    let a = hatch_lines(&two, style(45), 1000).unwrap();
+    assert!(a.len() >= 15 && a.len() <= 25, "{}", a.len());
+    for (p, q) in &a {
+        for r in [p, q] {
+            assert!(
+                (0..=10_000).contains(&r.0) && (0..=10_000).contains(&r.1),
+                "{r:?}"
+            );
+        }
+    }
+    assert_eq!(a, hatch_lines(&two, style(45), 1000).unwrap());
+    // a hole in the middle breaks the lines it crosses
+    let ring = [
+        ((0, 0), (10_000, 4000)),
+        ((0, 6000), (10_000, 10_000)),
+        ((0, 4000), (4000, 6000)),
+        ((6000, 4000), (10_000, 6000)),
+    ];
+    let r = hatch_lines(&ring, style(90), 1000).unwrap();
+    assert!(r.len() > 11, "{}", r.len());
+    // too many lines is refused with the count
+    assert!(hatch_lines(&two, style(45), 5).is_err());
+}
+
+#[test]
+fn clip_shapes() {
+    let c = (0, 0);
+    // through the centre: the diameter; outside: nothing; inside: whole
+    assert_eq!(
+        clip_to_circle((-10, 0), (10, 0), c, 5),
+        Some(((-5, 0), (5, 0)))
+    );
+    assert_eq!(clip_to_circle((-10, 9), (10, 9), c, 5), None);
+    assert_eq!(
+        clip_to_circle((-1, 0), (1, 0), c, 5),
+        Some(((-1, 0), (1, 0)))
+    );
+    assert_eq!(clip_to_circle((3, 3), (3, 3), c, 5), None);
+    let rect = ((0, 0), (10, 10));
+    assert_eq!(
+        clip_to_rect((-5, 5), (15, 5), rect),
+        Some(((0, 5), (10, 5)))
+    );
+    assert_eq!(clip_to_rect((-5, 11), (15, 11), rect), None);
+    assert_eq!(clip_to_rect((2, 2), (4, 4), rect), Some(((2, 2), (4, 4))));
+    assert_eq!(
+        clip_to_rect((-5, -5), (15, 15), rect),
+        Some(((0, 0), (10, 10)))
+    );
+}
+
+#[test]
+fn section_view() {
+    let s = sheet();
+    let d = hollow("40 mm");
+    let mut p = Plan::new(&s);
+    four_views(&mut p);
+    p.add_view(section_of(0, ViewKind::Right, 100, 15, "A"), &s)
+        .unwrap();
+    let ev = run(&p, &d);
+    assert!(ev.is_clean(), "{:?}", ev.issues);
+    // the hatching, the line of the cut with its letters at both ends, and the caption
+    assert!(count_layer(&ev, "HATCH") > 5);
+    assert!(count_layer(&ev, "SECTION") >= 1);
+    assert!(has_text(&ev, "A-A"));
+    let letters = ev
+        .scene
+        .prims
+        .iter()
+        .filter(|p| matches!(&p.shape, Shape::Text { text, .. } if text == "A"))
+        .count();
+    // the two ends of the cut line and the value of the field revision of the title block
+    assert_eq!(letters, 3);
+    // the section is not the right view of the projection: the right view is still beside the front one
+    let right = ev.views.iter().find(|v| v.name == "right").unwrap();
+    let front = ev.views.iter().find(|v| v.name == "front").unwrap();
+    assert_eq!(
+        right.origin.0,
+        front.origin.0 + front.size.0 + s.view_gap_um
+    );
+    // no hatching line enters the cavity (y 5 to 15 mm, z 2 to 8 mm of the section view)
+    let sec = ev.views.iter().find(|v| v.name == "A").unwrap();
+    let (n, dd) = (i64::from(sec.scale.0), i64::from(sec.scale.1));
+    let at = |y_mm: i64, z_mm: i64| {
+        (
+            sec.origin.0 + y_mm * 1000 * n / dd,
+            sec.origin.1 + z_mm * 1000 * n / dd,
+        )
+    };
+    let (lo, hi) = (at(5, 2), at(15, 8));
+    for prim in ev.scene.prims.iter().filter(|p| p.layer == "HATCH") {
+        if let Shape::Line { a, b } = prim.shape {
+            let mid = ((a.0 + b.0) / 2, (a.1 + b.1) / 2);
+            let inside =
+                mid.0 > lo.0 + 2 && mid.0 < hi.0 - 2 && mid.1 > lo.1 + 2 && mid.1 < hi.1 - 2;
+            assert!(!inside, "{a:?} {b:?}");
+        }
+    }
+    // the hatching follows the material: a part of aluminium goes the other way
+    let mut q = p.clone();
+    q.views.last_mut().unwrap().hatch = Some("aluminium".to_string());
+    let ev2 = run(&q, &d);
+    let slope = |ev: &Evaluation| {
+        ev.scene
+            .prims
+            .iter()
+            .find_map(|p| match (&p.layer[..], &p.shape) {
+                ("HATCH", Shape::Line { a, b }) => {
+                    Some((b.0 - a.0).signum() * (b.1 - a.1).signum())
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert_eq!(slope(&ev), 1);
+    assert_eq!(slope(&ev2), -1);
+    // the same sheet gives the same list
+    assert_eq!(ev.scene, run(&p, &d).scene);
+}
+
+#[test]
+fn section_marks() {
+    // a section of the front view, cut across y, drawn in the top view as a horizontal line
+    let s = sheet();
+    let d = hollow("40 mm");
+    let mut p = Plan::new(&s);
+    four_views(&mut p);
+    p.add_view(section_of(0, ViewKind::Front, 101, 10, "B"), &s)
+        .unwrap();
+    let ev = run(&p, &d);
+    assert!(ev.is_clean(), "{:?}", ev.issues);
+    let top = ev.views.iter().find(|v| v.name == "top").unwrap();
+    let line = ev
+        .scene
+        .prims
+        .iter()
+        .find_map(|p| match (&p.layer[..], &p.shape) {
+            ("SECTION", Shape::Line { a, b }) => Some((*a, *b)),
+            _ => None,
+        })
+        .unwrap();
+    // horizontal, 10 mm up the top view at the scale of the sheet, a little longer than the view
+    assert_eq!(line.0 .1, line.1 .1);
+    let (n, dd) = (i64::from(ev.scale.0), i64::from(ev.scale.1));
+    assert_eq!(line.0 .1, top.origin.1 + 10_000 * n / dd);
+    assert_eq!(
+        line.1 .0 - line.0 .0,
+        top.size.0 + 2 * s.section.overshoot_um
+    );
+    // a cut across y cannot be drawn in the front view, which looks along y
+    let mut q = Plan::new(&s);
+    four_views(&mut q);
+    q.add_view(section_of(0, ViewKind::Front, 100, 10, "B"), &s)
+        .unwrap();
+    let ev = run(&q, &d);
+    assert!(ev
+        .issues
+        .iter()
+        .any(|i| i.code == "PHOENIX-CAD-059" && i.detail.contains("does not show the axis")));
+}
+
+#[test]
+fn section_bad() {
+    let s = sheet();
+    let d = hollow("40 mm");
+    let mut p = Plan::new(&s);
+    four_views(&mut p);
+    // a plane that misses the solid is reported and the rest of the sheet is drawn
+    p.add_view(section_of(0, ViewKind::Right, 100, 90, "A"), &s)
+        .unwrap();
+    let ev = run(&p, &d);
+    assert_eq!(ev.issues.len(), 1);
+    assert_eq!(ev.issues[0].code, "PHOENIX-CAD-059");
+    assert_eq!(ev.views.len(), 4);
+    // the file refuses what cannot be a section
+    let mut q = Plan::new(&s);
+    four_views(&mut q);
+    q.add_view(section_of(0, ViewKind::Right, 100, 15, "A"), &s)
+        .unwrap();
+    for bad in [
+        section_of(1, ViewKind::Right, 100, 15, "A"),
+        section_of(1, ViewKind::Right, 999, 15, "C"),
+        section_of(1, ViewKind::Iso, 100, 15, "C"),
+        section_of(1, ViewKind::Right, 100, 15, "c1"),
+        section_of(1, ViewKind::Right, 100, 15, "ABCD"),
+    ] {
+        assert_eq!(code(q.add_view(bad, &s).unwrap_err()), "PHOENIX-CAD-059");
+    }
+    let mut hatched = view(9, ViewKind::Front, false);
+    hatched.hatch = Some("steel".to_string());
+    assert_eq!(
+        code(q.add_view(hatched, &s).unwrap_err()),
+        "PHOENIX-CAD-059"
+    );
+    // a section is not also a detail
+    let mut both = section_of(1, ViewKind::Right, 100, 15, "D");
+    both.detail = Some(Detail {
+        parent: id(100),
+        label: "E".into(),
+        centre: (0, 0),
+        shape: DetailShape::Circle { radius_nm: 1 },
+    });
+    assert_eq!(code(q.add_view(both, &s).unwrap_err()), "PHOENIX-CAD-059");
+    // the letters are given in order, without the ones that look like digits
+    assert_eq!(next_label(&q), "B");
+    for k in 0..30u16 {
+        let l = next_label(&q);
+        assert!(!l.contains(['I', 'O', 'Q']), "{l}");
+        let mut v = section_of(20 + k, ViewKind::Top, 100, 5, &l);
+        v.id = id(400 + k);
+        if q.add_view(v, &s).is_err() {
+            break;
+        }
+    }
+}
+
+fn detail_plan(s: &SheetSettings) -> Plan {
+    let mut p = Plan::new(s);
+    four_views(&mut p);
+    let mut det = View::plain(id(120), "detail", ViewKind::Front, Source::Tip, false);
+    det.scale = Some((4, 1));
+    det.detail = Some(Detail {
+        parent: id(100),
+        label: "B".into(),
+        centre: (10_000_000, 0),
+        shape: DetailShape::Circle {
+            radius_nm: 3_000_000,
+        },
+    });
+    p.add_view(det, s).unwrap();
+    p
+}
+
+#[test]
+fn detail_view() {
+    let s = sheet();
+    let d = plain_box();
+    let p = detail_plan(&s);
+    let ev = run(&p, &d);
+    assert!(ev.is_clean(), "{:?}", ev.issues);
+    // two edges of the corner are inside the circle; the circle is drawn in the view it was taken
+    // from and again as the border of the detail
+    let det = ev.views.iter().find(|v| v.name == "detail").unwrap();
+    assert_eq!((det.visible, det.hidden), (2, 0));
+    assert_eq!(det.scale, (4, 1));
+    let circles = ev
+        .scene
+        .prims
+        .iter()
+        .filter(|p| p.layer == "DETAIL" && matches!(p.shape, Shape::Circle { .. }))
+        .count();
+    assert_eq!(circles, 2);
+    assert!(has_text(&ev, "B (4:1)"));
+    // a rectangle does the same with lines
+    let mut q = p.clone();
+    q.views.last_mut().unwrap().detail.as_mut().unwrap().shape = DetailShape::Rect {
+        width_nm: 6_000_000,
+        height_nm: 6_000_000,
+    };
+    let ev = run(&q, &d);
+    assert!(ev.is_clean(), "{:?}", ev.issues);
+    assert_eq!(count_layer(&ev, "DETAIL"), 8);
+    // a shape with nothing of the view in it is a problem of the detail
+    let mut r = p.clone();
+    r.views.last_mut().unwrap().detail.as_mut().unwrap().centre = (5_000_000, 5_000_000);
+    let ev = run(&r, &d);
+    assert!(ev
+        .issues
+        .iter()
+        .any(|i| i.code == "PHOENIX-CAD-059" && i.detail.contains("nothing of the view")));
+    // the enlarged view comes first, and has the same kind
+    let mut bad = detail_plan(&s);
+    let mut v = bad.views.pop().unwrap();
+    v.kind = ViewKind::Top;
+    assert_eq!(code(bad.add_view(v, &s).unwrap_err()), "PHOENIX-CAD-059");
+    let mut early = Plan::new(&s);
+    let mut v = detail_plan(&s).views.pop().unwrap();
+    v.id = id(130);
+    assert_eq!(code(early.add_view(v, &s).unwrap_err()), "PHOENIX-CAD-059");
+    // the derived views stay where the person puts them
+    let mut placed = detail_plan(&s);
+    placed.views.last_mut().unwrap().place = Place::At(20_000, 20_000);
+    let ev = run(&placed, &d);
+    let det = ev.views.iter().find(|v| v.name == "detail").unwrap();
+    assert_eq!(det.origin, (20_000, 20_000));
+}
+
+fn rich_plan() -> Plan {
+    let s = sheet();
+    let mut p = full_plan();
+    p.add_view(section_of(0, ViewKind::Right, 100, 15, "A"), &s)
+        .unwrap();
+    p.views.last_mut().unwrap().hatch = Some("steel".into());
+    let mut det = View::plain(id(120), "detail", ViewKind::Front, Source::Tip, true);
+    det.scale = Some((4, 1));
+    det.detail = Some(Detail {
+        parent: id(100),
+        label: "B".into(),
+        centre: (10_000_000, -5),
+        shape: DetailShape::Rect {
+            width_nm: 6_000_000,
+            height_nm: 3_000_000,
+        },
+    });
+    p.add_view(det, &s).unwrap();
+    p.set_dim_tol(id(201), Some(Tol::Class("H7/g6".into())), &s)
+        .unwrap();
+    p.dims[0].step_um = Some(9000);
+    p.add_dim(
+        dim(
+            5,
+            DimKind::Chain,
+            vec![
+                face(2, Axis::X, Side::Min),
+                face(3, Axis::X, Side::Min),
+                face(3, Axis::X, Side::Max),
+            ],
+            id(100),
+        ),
+        &s,
+    )
+    .unwrap();
+    p.dims[1].tol = Some(Tol::Dev {
+        upper_nm: 100_000,
+        lower_nm: -20_000,
+    });
+    p.add_dim(
+        dim(
+            6,
+            DimKind::Ordinate,
+            vec![
+                face(2, Axis::Z, Side::Min),
+                face(3, Axis::Z, Side::Min),
+                face(3, Axis::Z, Side::Max),
+            ],
+            id(100),
+        ),
+        &s,
+    )
+    .unwrap();
+    p.add_revision("2026-01-05", "First issue", "A. Author", &s)
+        .unwrap();
+    p.add_revision("", "Hole moved", "", &s).unwrap();
+    p.set_title_template(Some("compact"), &s).unwrap();
+    p.set_line_group(Some(500), &s).unwrap();
+    p
+}
+
+#[test]
+fn file_second() {
+    let s = sheet();
+    let p = rich_plan();
+    let bytes = p.to_bytes();
+    let text = String::from_utf8(bytes.clone()).unwrap();
+    for line in [
+        "nextrevision 3",
+        "titleblock compact",
+        "linegroup 500",
+        "section ",
+        "detail ",
+        " rect 10000000 -5 6000000 3000000",
+        "hatch steel",
+        "step 9000",
+        "tol class H7/g6",
+        "tol dev 100000 -20000",
+        "revision 1",
+        "date 2026-01-05",
+        "description First issue",
+        "author A. Author",
+        "revision 2",
+    ] {
+        assert!(text.contains(line), "{line}\n{text}");
+    }
+    // a revision with no date and no author has only its description
+    assert!(text.contains("revision 2\ndescription Hole moved\n"));
+    assert_eq!(Plan::from_bytes(&bytes, &s).unwrap(), p);
+    // a sheet with none of the new records is written as before
+    let old = full_plan().to_bytes();
+    let old_text = String::from_utf8(old).unwrap();
+    for word in [
+        "nextrevision",
+        "titleblock",
+        "linegroup",
+        "section",
+        "detail",
+        "hatch",
+        "tol ",
+    ] {
+        assert!(!old_text.contains(word), "{word}");
+    }
+    // a line of a newer program after a revision is kept with it
+    let with_x = text.replace(
+        "description Hole moved\n",
+        "description Hole moved\nx-newer 1\n",
+    );
+    let back = Plan::from_bytes(with_x.as_bytes(), &s).unwrap();
+    assert_eq!(back.revisions[1].extra, vec!["x-newer 1".to_string()]);
+    assert_eq!(back.to_bytes(), with_x.as_bytes());
+    // what is wrong is refused with the code of the thing
+    let broken = |from: &str, to: &str| {
+        Plan::from_bytes(text.replace(from, to).as_bytes(), &s)
+            .unwrap_err()
+            .code()
+    };
+    assert_eq!(
+        broken("tol class H7/g6", "tol class H7/H7"),
+        "PHOENIX-CAD-058"
+    );
+    assert_eq!(
+        broken("tol dev 100000 -20000", "tol dev -5 5"),
+        "PHOENIX-CAD-058"
+    );
+    assert_eq!(broken("section ", "section 9 "), "PHOENIX-CAD-054");
+    assert_eq!(broken("revision 2\n", "revision 1\n"), "PHOENIX-CAD-060");
+    assert_eq!(
+        broken("titleblock compact", "titleblock nothing"),
+        "PHOENIX-CAD-054"
+    );
+    assert_eq!(broken("linegroup 500", "linegroup 400"), "PHOENIX-CAD-054");
+    assert_eq!(
+        broken("nextrevision 3", "nextrevision 2"),
+        "PHOENIX-CAD-060"
+    );
+    assert_eq!(
+        broken("hatch steel", "hatch steel\nhatch wood"),
+        "PHOENIX-CAD-054"
+    );
+}
+
+#[test]
+fn tol_text() {
+    let table = crate::iso286::Table::shipped();
+    let size = 25_000_000;
+    let note = |style, tol: &Tol| annotate("25.00", tol, size, &table, style, 3).unwrap();
+    let h7 = Tol::Class("H7".into());
+    assert_eq!(note(TolDisplay::Class, &h7), "25.00 H7");
+    assert_eq!(note(TolDisplay::Deviation, &h7), "25.00 +0.021/0");
+    assert_eq!(note(TolDisplay::Both, &h7), "25.00 H7 (+0.021/0)");
+    // a fit gives the hole and then the shaft, from the table
+    let fit = Tol::Class("H7/g6".into());
+    let t = note(TolDisplay::Both, &fit);
+    assert!(t.starts_with("25.00 H7/g6 (+0.021/0 | -"), "{t}");
+    let a = apply(&fit, size, &table).unwrap();
+    let want = crate::iso286::fit(&table, 25.0, "H7/g6").unwrap();
+    assert_eq!(a.devs[0], (want.hole.upper_dev_nm, want.hole.lower_dev_nm));
+    assert_eq!(
+        a.devs[1],
+        (want.shaft.upper_dev_nm, want.shaft.lower_dev_nm)
+    );
+    // deviations by hand: alike on both sides, or not
+    let sym = Tol::Dev {
+        upper_nm: 100_000,
+        lower_nm: -100_000,
+    };
+    assert_eq!(note(TolDisplay::Class, &sym), "25.00 \u{b1}0.100");
+    let asym = Tol::Dev {
+        upper_nm: 0,
+        lower_nm: -50_000,
+    };
+    assert_eq!(note(TolDisplay::Deviation, &asym), "25.00 0/-0.050");
+    assert_eq!(pair_text(5000, -2000, 3), "+0.005/-0.002");
+    assert_eq!(pair_text(0, 0, 3), "0/0");
+}
+
+#[test]
+fn tol_bad() {
+    let table = crate::iso286::Table::shipped();
+    let lin = DimKind::Linear;
+    assert!(check(&Tol::Class("H7".into()), lin).is_ok());
+    for bad in [
+        "H7/H7", "g6/H7", "X7", "H4", "H", "7", "H7 ", "H7/g6/h6", "",
+    ] {
+        assert!(check(&Tol::Class(bad.into()), lin).is_err(), "{bad}");
+    }
+    assert!(check(&Tol::Class("H7".into()), DimKind::Angle).is_err());
+    assert!(check(
+        &Tol::Dev {
+            upper_nm: -1,
+            lower_nm: 1
+        },
+        lin
+    )
+    .is_err());
+    // the combinations only the size can tell: a letter the grade has no value for, a size above
+    // the table, a size that is nothing
+    assert!(apply(&Tol::Class("k8".into()), 10_000_000, &table).is_err());
+    assert!(apply(&Tol::Class("H7".into()), 600_000_000, &table).is_err());
+    assert!(apply(&Tol::Class("H7".into()), 0, &table).is_err());
+    assert!(apply(&Tol::Class("H7".into()), 25_000_000, &table).is_ok());
+}
+
+#[test]
+fn tol_in_sheet() {
+    let s = SheetSettings::with_user_config("[sheet]\ndim.tol_style = deviation\n").unwrap();
+    let d = plain_box();
+    let mut p = Plan::new(&s);
+    four_views(&mut p);
+    p.add_dim(
+        dim(
+            1,
+            DimKind::Linear,
+            vec![face(2, Axis::X, Side::Min), face(2, Axis::X, Side::Max)],
+            id(100),
+        ),
+        &s,
+    )
+    .unwrap();
+    p.set_dim_tol(id(201), Some(Tol::Class("H7".into())), &s)
+        .unwrap();
+    let run_with = |p: &Plan| {
+        evaluate(
+            p,
+            &Model {
+                dag: Some(&d),
+                sketches: &[],
+            },
+            &cfg(),
+            &s,
+            Lang::En,
+        )
+        .unwrap()
+    };
+    let ev = run_with(&p);
+    assert!(ev.is_clean(), "{:?}", ev.issues);
+    assert_eq!(ev.dims[0].texts, vec!["10.00 +0.015/0".to_string()]);
+    assert!(has_text(&ev, "10.00 +0.015/0"));
+    // the table that ships is not checked, and the panel says so
+    assert!(ev.unverified_table);
+    let lines = lines_of(&p, &ev, &s, Lang::En);
+    assert_eq!(lines.notes.len(), 1);
+    assert!(lines.notes[0].text.contains("not"), "{:?}", lines.notes);
+    // a class that cannot be worked out at that size makes the dimension a problem, not a drawing
+    p.set_dim_tol(id(201), Some(Tol::Class("k8".into())), &s)
+        .unwrap();
+    let ev = run_with(&p);
+    assert!(ev.dims.is_empty());
+    assert_eq!(ev.issues[0].code, "PHOENIX-CAD-058");
+    // a hole over a hole is refused when it is set
+    let e = p
+        .set_dim_tol(id(201), Some(Tol::Class("H7/H7".into())), &s)
+        .unwrap_err();
+    assert_eq!(e.code(), "PHOENIX-CAD-058");
+    // an angle takes none
+    let e = p
+        .add_dim(
+            Dim {
+                tol: Some(Tol::Class("H7".into())),
+                ..dim(
+                    7,
+                    DimKind::Angle,
+                    vec![
+                        Ref::Element {
+                            sketch: "plate".into(),
+                            element: 1,
+                        },
+                        Ref::Element {
+                            sketch: "plate".into(),
+                            element: 2,
+                        },
+                    ],
+                    id(100),
+                )
+            },
+            &s,
+        )
+        .unwrap_err();
+    assert_eq!(e.code(), "PHOENIX-CAD-058");
+    // no tolerance, no note
+    let q = Plan::new(&s);
+    assert!(!run_with(&q).unverified_table);
+}
+
+#[test]
+fn dim_extended() {
+    let s = sheet();
+    let d = hollow("40 mm");
+    let mut p = Plan::new(&s);
+    four_views(&mut p);
+    let xs = vec![
+        face(2, Axis::X, Side::Min),
+        face(3, Axis::X, Side::Min),
+        face(3, Axis::X, Side::Max),
+        face(2, Axis::X, Side::Max),
+    ];
+    for (n, kind) in [DimKind::Chain, DimKind::Ordinate, DimKind::Cumulative]
+        .into_iter()
+        .enumerate()
+    {
+        let mut dm = dim(10 + n as u16, kind, xs.clone(), id(100));
+        dm.offset_um = Some(10_000 + 30_000 * n as i64);
+        p.add_dim(dm, &s).unwrap();
+    }
+    let ev = run(&p, &d);
+    assert!(ev.is_clean(), "{:?}", ev.issues);
+    let texts = |name: &str| {
+        ev.dims
+            .iter()
+            .find(|x| x.name == name)
+            .unwrap()
+            .texts
+            .clone()
+    };
+    // the chain: each face to the next one; the ordinate: each face from the first; the
+    // cumulative: the same distances, stacked
+    assert_eq!(texts("d10"), ["10.00", "10.00", "20.00"]);
+    assert_eq!(texts("d11"), ["10.00", "20.00", "40.00"]);
+    assert_eq!(texts("d12"), ["10.00", "20.00", "40.00"]);
+    // the ordinate writes its origin and has no arrows; the chain has an arrow at each end of each run
+    assert!(has_text(&ev, "0"));
+    assert!(count_layer(&ev, "DIMENSION") > 20);
+    // an ordinate that runs along z is drawn up the left of the view, with its text turned
+    let mut q = Plan::new(&s);
+    four_views(&mut q);
+    q.add_dim(
+        dim(
+            20,
+            DimKind::Ordinate,
+            vec![
+                face(2, Axis::Z, Side::Min),
+                face(3, Axis::Z, Side::Min),
+                face(3, Axis::Z, Side::Max),
+            ],
+            id(100),
+        ),
+        &s,
+    )
+    .unwrap();
+    let ev = run(&q, &d);
+    assert!(ev.is_clean(), "{:?}", ev.issues);
+    assert!(ev.scene.prims.iter().any(|p| matches!(
+        &p.shape,
+        Shape::Text { text, turn, .. } if text == "8.00" && *turn == 90.0
+    )));
+    // not in the iso view, and not across two axes
+    let mut bad = Plan::new(&s);
+    four_views(&mut bad);
+    bad.add_dim(dim(21, DimKind::Chain, xs.clone(), id(103)), &s)
+        .unwrap();
+    let ev = run(&bad, &d);
+    assert_eq!(ev.issues[0].code, "PHOENIX-CAD-056");
+    // three faces at least
+    assert_eq!(
+        code(
+            bad.add_dim(dim(22, DimKind::Ordinate, xs[..2].to_vec(), id(100)), &s)
+                .unwrap_err()
+        ),
+        "PHOENIX-CAD-056"
+    );
+}
+
+#[test]
+fn dim_levels() {
+    let slot = |n: u16, lo: i64, hi: i64, lines: i64| Slot {
+        id: id(n),
+        view: id(100),
+        horizontal: true,
+        lo,
+        hi,
+        step: 7000,
+        lines,
+    };
+    // overlapping ones climb, ones apart share the first line, and the room between them counts
+    let got = place_dims(
+        &[
+            slot(1, 0, 40_000, 1),
+            slot(2, 10_000, 20_000, 1),
+            slot(3, 22_000, 30_000, 1),
+            slot(4, 45_000, 60_000, 1),
+            slot(5, 41_000, 44_000, 2),
+        ],
+        2000,
+    );
+    assert_eq!(got[&id(1)], 0);
+    assert_eq!(got[&id(2)], 7000);
+    assert_eq!(got[&id(3)], 7000);
+    assert_eq!(got[&id(4)], 0);
+    // 5 meets 1 (41 < 40 + 2) and 4 (44 + 2 > 45): it goes above both
+    assert_eq!(got[&id(5)], 7000);
+    // another view or the other side does not meet them
+    let mut other = slot(6, 0, 40_000, 1);
+    other.view = id(101);
+    let mut vertical = slot(7, 0, 40_000, 1);
+    vertical.horizontal = false;
+    let got = place_dims(&[slot(1, 0, 40_000, 1), other, vertical], 2000);
+    assert!(got.values().all(|v| *v == 0));
+    // the same in the sheet: the second dimension over the first one is one step further out
+    let s = sheet();
+    let d = hollow("40 mm");
+    let mut p = Plan::new(&s);
+    four_views(&mut p);
+    for (n, (a, b)) in [(2, 2), (3, 3)].into_iter().enumerate() {
+        p.add_dim(
+            dim(
+                30 + n as u16,
+                DimKind::Linear,
+                vec![face(a, Axis::X, Side::Min), face(b, Axis::X, Side::Max)],
+                id(100),
+            ),
+            &s,
+        )
+        .unwrap();
+    }
+    let ev = run(&p, &d);
+    let level = |i: usize| ev.dims[i].line.unwrap().level_um;
+    assert_eq!(level(0), s.dim.offset_um);
+    assert_eq!(level(1), s.dim.offset_um + s.dim.step_um);
+    // one that was put by hand stays where it was put and takes no line
+    p.dims[1].offset_um = Some(30_000);
+    let ev = run(&p, &d);
+    assert_eq!(ev.dims[1].line.unwrap().level_um, 30_000);
+    assert_eq!(ev.dims[0].line.unwrap().level_um, s.dim.offset_um);
+}
+
+#[test]
+fn dim_drag() {
+    let line = DimLine {
+        horizontal: true,
+        view_origin: (50_000, 80_000),
+        level_um: 10_000,
+        lo: 50_000,
+        hi: 90_000,
+    };
+    assert_eq!(line.line_at(), 70_000);
+    assert!(line.hit((70_000, 70_500), 1000));
+    assert!(line.hit((50_000 - 500, 70_000), 1000));
+    assert!(!line.hit((70_000, 72_000), 1000));
+    assert!(!line.hit((95_000, 70_000), 1000));
+    // the pointer sets the distance from the view, on a multiple of the snap, within a metre
+    assert_eq!(line.offset_for((70_000, 64_400), 1000), 16_000);
+    assert_eq!(line.offset_for((70_000, 64_600), 1000), 15_000);
+    assert_eq!(line.offset_for((70_000, 90_000), 1000), -10_000);
+    assert_eq!(line.offset_for((0, -900_000_000), 1000), 1_000_000);
+    let side = DimLine {
+        horizontal: false,
+        view_origin: (50_000, 80_000),
+        level_um: 12_000,
+        lo: 80_000,
+        hi: 100_000,
+    };
+    assert_eq!(side.line_at(), 38_000);
+    assert!(side.hit((38_000, 90_000), 500));
+    assert_eq!(side.offset_for((30_000, 90_000), 1000), 20_000);
+    // in the panel: the nearest line under the pointer is taken and dragged, and the sheet is
+    // evaluated again with the dimension where it was dropped
+    let d = hollow("40 mm");
+    let s = sheet();
+    let mut st = PlanState::with_defaults();
+    st.load_bytes(&project_bytes(&d, None), None, Lang::En)
+        .unwrap();
+    st.create_sheet(Lang::En).unwrap();
+    let front = st.plan.as_ref().unwrap().views[0].id;
+    st.plan
+        .as_mut()
+        .unwrap()
+        .add_dim(
+            dim(
+                1,
+                DimKind::Linear,
+                vec![face(2, Axis::X, Side::Min), face(2, Axis::X, Side::Max)],
+                front,
+            ),
+            &s,
+        )
+        .unwrap();
+    st.evaluate(Lang::En).unwrap();
+    let l = st.eval.as_ref().unwrap().dims[0].line.unwrap();
+    let on = ((l.lo + l.hi) / 2, l.line_at());
+    assert_eq!(st.pick_dim(on, 1000), Some(id(201)));
+    assert_eq!(st.pick_dim((on.0, on.1 + 50_000), 1000), None);
+    assert!(!st.begin_drag((0, 0)));
+    assert!(st.begin_drag(on));
+    let to = (on.0, l.view_origin.1 - 25_300);
+    assert_eq!(st.drag_to(to, Lang::En).unwrap(), Some(25_000));
+    assert_eq!(st.plan.as_ref().unwrap().dims[0].offset_um, Some(25_000));
+    assert_eq!(
+        st.eval.as_ref().unwrap().dims[0].line.unwrap().level_um,
+        25_000
+    );
+    assert!(st.dirty);
+    st.end_drag();
+    assert_eq!(st.drag_to(to, Lang::En).unwrap(), None);
+    // a locked layer cannot be dragged
+    st.toggle_locked("DIMENSION", Lang::En).unwrap();
+    assert!(st.begin_drag((on.0, l.view_origin.1 - 25_000)));
+    assert_eq!(
+        st.drag_to(to, Lang::En).unwrap_err().code(),
+        "PHOENIX-CAD-054"
+    );
+}
+
+#[test]
+fn revisions() {
+    let s = sheet();
+    let mut p = Plan::new(&s);
+    assert_eq!(
+        p.add_revision("2026-02-01", "First issue", "A", &s)
+            .unwrap(),
+        1
+    );
+    assert_eq!(p.add_revision("", "Second", "", &s).unwrap(), 2);
+    assert_eq!(p.add_revision("later", "Third", "B", &s).unwrap(), 3);
+    // a number is never given twice, even after a revision is taken away
+    p.remove_revision(2, &s).unwrap();
+    assert_eq!(p.add_revision("", "Fourth", "", &s).unwrap(), 4);
+    let numbers: Vec<u32> = p.revisions.iter().map(|r| r.number).collect();
+    assert_eq!(numbers, [1, 3, 4]);
+    assert_eq!(
+        p.remove_revision(2, &s).unwrap_err().code(),
+        "PHOENIX-CAD-014"
+    );
+    // letters or numbers, past Z
+    let letters = RevisionNumbering::Letters;
+    assert_eq!(revision_label(1, letters), "A");
+    assert_eq!(revision_label(26, letters), "Z");
+    assert_eq!(revision_label(27, letters), "AA");
+    assert_eq!(revision_label(53, letters), "BA");
+    assert_eq!(revision_label(3, RevisionNumbering::Numbers), "3");
+    // a text of two lines, an empty description, a locked frame and too many are refused
+    for (date, what, who) in [
+        ("a\nb", "x", ""),
+        ("", "", ""),
+        ("", " x", ""),
+        ("", "x", "a\tb"),
+    ] {
+        assert_eq!(
+            p.add_revision(date, what, who, &s).unwrap_err().code(),
+            "PHOENIX-CAD-060"
+        );
+    }
+    assert_eq!(p.next_revision, 5);
+    let small = SheetSettings::with_user_config("[sheet]\nrevisions.max = 2\n").unwrap();
+    let mut q = Plan::new(&small);
+    q.add_revision("", "a", "", &small).unwrap();
+    q.add_revision("", "b", "", &small).unwrap();
+    assert_eq!(
+        q.add_revision("", "c", "", &small).unwrap_err().code(),
+        "PHOENIX-CAD-060"
+    );
+    p.set_layer_locked("FRAME", true, &s).unwrap();
+    assert_eq!(
+        p.add_revision("", "z", "", &s).unwrap_err().code(),
+        "PHOENIX-CAD-054"
+    );
+    p.set_layer_locked("FRAME", false, &s).unwrap();
+    // the table is drawn at the upper right corner with the oldest revision first, and the views
+    // leave room for it
+    let d = plain_box();
+    let mut sheet_plan = Plan::new(&s);
+    four_views(&mut sheet_plan);
+    let before = run(&sheet_plan, &d);
+    for r in &p.revisions {
+        sheet_plan
+            .add_revision(&r.date, &r.description, &r.author, &s)
+            .unwrap();
+    }
+    let ev = run(&sheet_plan, &d);
+    assert!(ev.is_clean(), "{:?}", ev.issues);
+    for t in [
+        "Revision",
+        "Date",
+        "First issue",
+        "Third",
+        "Fourth",
+        "A",
+        "B",
+        "C",
+        "later",
+    ] {
+        assert!(has_text(&ev, t), "{t}");
+    }
+    let top = |ev: &Evaluation| {
+        ev.views
+            .iter()
+            .map(|v| v.origin.1 + v.size.1)
+            .max()
+            .unwrap()
+    };
+    assert!(top(&ev) <= top(&before));
+    let row = s.revisions.row_um;
+    let header = ev
+        .scene
+        .prims
+        .iter()
+        .filter_map(|p| match &p.shape {
+            Shape::Text { text, at, .. } if text == "Revision" => Some(*at),
+            _ => None,
+        })
+        .max_by_key(|at| at.1)
+        .unwrap();
+    assert!(header.1 > ev.scene.height_um - s.margin_um - row);
+    // and it can be turned off, or in the panel
+    let off = SheetSettings::with_user_config("[sheet]\nrevisions.table = 0\n").unwrap();
+    let ev2 = evaluate(
+        &sheet_plan,
+        &Model {
+            dag: Some(&d),
+            sketches: &[],
+        },
+        &cfg(),
+        &off,
+        Lang::En,
+    )
+    .unwrap();
+    assert!(!has_text(&ev2, "First issue"));
+    let lines = lines_of(&sheet_plan, &ev, &s, Lang::En);
+    assert_eq!(lines.revisions.len(), 3);
+    assert_eq!(
+        lines.revisions[0].text,
+        "Revision A: 2026-02-01, First issue (A)"
+    );
+}
+
+#[test]
+fn title_blocks() {
+    let s = sheet();
+    let d = plain_box();
+    let mut p = Plan::new(&s);
+    four_views(&mut p);
+    let count_frame = |p: &Plan| count_layer(&run(p, &d), "FRAME");
+    let wide = count_frame(&p);
+    p.set_title_template(Some("compact"), &s).unwrap();
+    let ev = run(&p, &d);
+    // the compact block has four fields in two columns: fewer rectangles than the eight of the default
+    assert!(count_layer(&ev, "FRAME") < wide);
+    assert!(has_text(&ev, "Title") && !has_text(&ev, "Author"));
+    p.set_title_template(Some("default"), &s).unwrap();
+    assert_eq!(p.title_template, None);
+    assert_eq!(count_frame(&p), wide);
+    assert_eq!(
+        p.set_title_template(Some("missing"), &s)
+            .unwrap_err()
+            .code(),
+        "PHOENIX-CAD-054"
+    );
+    // the settings can make another block the one of a new sheet, and refuse one that is not there
+    let u = SheetSettings::with_user_config("[sheet]\ntitleblock.template = compact\n").unwrap();
+    assert_eq!(u.title_block_of(None).unwrap().fields.len(), 4);
+    assert!(SheetSettings::with_user_config("[sheet]\ntitleblock.template = nothing\n").is_err());
+    let more = "[sheet]\ntitleblock.templates = compact long\ntitleblock.template.long.width = 100 mm\ntitleblock.template.long.row = 5 mm\ntitleblock.template.long.columns = 1\ntitleblock.template.long.fields = title\n";
+    let m = SheetSettings::with_user_config(more).unwrap();
+    assert_eq!(m.title_block_of(Some("long")).unwrap().columns, 1);
+}
+
+#[test]
+fn line_groups() {
+    let s = sheet();
+    let mut p = Plan::new(&s);
+    assert_eq!(p.layer_width_um("OUTLINE", &s), 350);
+    assert_eq!(p.layer_width_um("DIMENSION", &s), 175);
+    // another group of the standard changes the thick, the thin and the extra thick lines
+    p.set_line_group(Some(700), &s).unwrap();
+    assert_eq!(p.layer_width_um("OUTLINE", &s), 700);
+    assert_eq!(p.layer_width_um("DIMENSION", &s), 350);
+    let wide = SheetSettings::with_user_config("[sheet]\nlayer.SECTION.width = extra\n").unwrap();
+    assert_eq!(p.layer_width_um("SECTION", &wide), 1400);
+    // a width in micrometres stays, and what the person set for a layer wins
+    let fixed = SheetSettings::with_user_config("[sheet]\nlayer.HATCH.width = 0.2 mm\n").unwrap();
+    assert_eq!(p.layer_width_um("HATCH", &fixed), 200);
+    p.set_layer_look("OUTLINE", "000000", 600, &s).unwrap();
+    assert_eq!(p.layer_width_um("OUTLINE", &s), 600);
+    // only the groups of the standard
+    assert_eq!(
+        p.set_line_group(Some(400), &s).unwrap_err().code(),
+        "PHOENIX-CAD-054"
+    );
+    p.set_line_group(Some(350), &s).unwrap();
+    assert_eq!(p.line_group_um, None);
+    assert!(SheetSettings::with_user_config("[sheet]\nline_group = 0.4 mm\n").is_err());
+    assert!(SheetSettings::with_user_config("[sheet]\nline_group = 0.5 mm\n").is_ok());
+    // the scene carries the sheet's widths, and the patterns of the dashes are the settings' own
+    let d = plain_box();
+    let mut q = Plan::new(&s);
+    four_views(&mut q);
+    q.set_line_group(Some(1000), &s).unwrap();
+    let ev = run(&q, &d);
+    assert_eq!(ev.scene.layers["OUTLINE"].1, 1000);
+    assert_eq!(ev.scene.dashed.dash, 80);
+    let slow = SheetSettings::with_user_config("[sheet]\nlinetype.dashed = 200 50\n").unwrap();
+    let ev = evaluate(
+        &q,
+        &Model {
+            dag: Some(&d),
+            sketches: &[],
+        },
+        &cfg(),
+        &slow,
+        Lang::En,
+    )
+    .unwrap();
+    assert_eq!((ev.scene.dashed.dash, ev.scene.dashed.gap), (200, 50));
+    assert!(out::to_svg(&ev.scene, "t").contains("stroke-dasharray"));
+    for bad in [
+        "linetype.dashed = 80",
+        "linetype.dashdot = 1 2 3",
+        "linetype.dashed = 0 4",
+    ] {
+        assert!(SheetSettings::with_user_config(&format!("[sheet]\n{bad}\n")).is_err());
+    }
+}
+
+#[test]
+fn settings_more() {
+    let s = sheet();
+    assert_eq!(s.layers.len(), 10);
+    assert_eq!(s.hatch.default.angle_deg, 45);
+    assert_eq!(s.hatch.materials["aluminium"].angle_deg, 135);
+    assert_eq!(s.section.end_length_um, 6000);
+    assert_eq!(s.dim.tol_style, TolDisplay::Class);
+    assert_eq!(s.revisions.numbering, RevisionNumbering::Letters);
+    assert_eq!(s.line_groups.len(), 7);
+    for bad in [
+        "hatch.angle = 180",
+        "hatch.spacing = 0.1 mm",
+        "hatch.materials = steel steel",
+        "hatch.materials = Steel",
+        "hatch.materials = copper",
+        "dim.tol_style = both and more",
+        "revisions.numbering = roman",
+        "section.text_height = 0 mm",
+        "titleblock.templates = default",
+        "dim.drag_snap = 1 um",
+    ] {
+        assert!(
+            SheetSettings::with_user_config(&format!("[sheet]\n{bad}\n")).is_err(),
+            "{bad}"
+        );
+    }
+    let copper = "[sheet]\nhatch.materials = copper\nhatch.material.copper.angle = 30\nhatch.material.copper.spacing = 2 mm\n";
+    assert_eq!(
+        SheetSettings::with_user_config(copper)
+            .unwrap()
+            .hatch
+            .materials["copper"],
+        HatchStyle {
+            angle_deg: 30,
+            spacing_um: 2000
+        }
+    );
+}
+
+#[test]
+fn fuzz_second() {
+    let s = sheet();
+    let base = rich_plan().to_bytes();
+    let mut rng = Rng(0x5eed_0022);
+    let mut accepted = 0;
+    for _ in 0..4000 {
+        let input = mutate(&mut rng, &base);
+        // the reader never panics; what it accepts is read back to the same bytes
+        if let Ok(p) = Plan::from_bytes(&input, &s) {
+            assert_eq!(p.to_bytes(), input);
+            accepted += 1;
+        }
+    }
+    assert!(accepted < 4000);
+    // the hatching: lines inside the box of the rectangles, the same for the same input, and
+    // never more than the limit
+    for _ in 0..300 {
+        let rects: Vec<((i64, i64), (i64, i64))> = (0..1 + rng.below(4))
+            .map(|_| {
+                let (x, y) = (rng.below(20_000) as i64, rng.below(20_000) as i64);
+                (
+                    (x, y),
+                    (
+                        x + 1 + rng.below(8000) as i64,
+                        y + 1 + rng.below(8000) as i64,
+                    ),
+                )
+            })
+            .collect();
+        let style = HatchStyle {
+            angle_deg: rng.below(180) as u32,
+            spacing_um: 200 + rng.below(3000) as i64,
+        };
+        let lo = (
+            rects.iter().map(|r| r.0 .0).min().unwrap() - 1,
+            rects.iter().map(|r| r.0 .1).min().unwrap() - 1,
+        );
+        let hi = (
+            rects.iter().map(|r| r.1 .0).max().unwrap() + 1,
+            rects.iter().map(|r| r.1 .1).max().unwrap() + 1,
+        );
+        match hatch_lines(&rects, style, 400) {
+            Ok(lines) => {
+                assert!(lines.len() <= 400);
+                for (a, b) in &lines {
+                    for p in [a, b] {
+                        assert!(p.0 >= lo.0 && p.0 <= hi.0 && p.1 >= lo.1 && p.1 <= hi.1);
+                    }
+                }
+                assert_eq!(lines, hatch_lines(&rects, style, 400).unwrap());
+            }
+            Err(n) => assert!(n > 400),
+        }
+    }
+    // the clipping: what is kept is inside the shape and inside the box of the segment
+    for _ in 0..2000 {
+        let rnd = |r: &mut Rng| r.below(2001) as i64 - 1000;
+        let (a, b) = (
+            (rnd(&mut rng), rnd(&mut rng)),
+            (rnd(&mut rng), rnd(&mut rng)),
+        );
+        let r = 1 + rng.below(800) as i64;
+        if let Some((p, q)) = clip_to_circle(a, b, (0, 0), r) {
+            for e in [p, q] {
+                let d = ((e.0 * e.0 + e.1 * e.1) as f64).sqrt();
+                assert!(d <= r as f64 + 1.5, "{e:?} {r}");
+                assert!(e.0 >= a.0.min(b.0) - 1 && e.0 <= a.0.max(b.0) + 1);
+            }
+        }
+        let rect = ((-r, -r / 2), (r, r));
+        if let Some((p, q)) = clip_to_rect(a, b, rect) {
+            for e in [p, q] {
+                assert!(e.0 >= -r - 1 && e.0 <= r + 1 && e.1 >= -r / 2 - 1 && e.1 <= r + 1);
+            }
+        }
+    }
 }

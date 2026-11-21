@@ -2724,6 +2724,8 @@ impl App {
         }
         let mut action: Option<&'static str> = None;
         let mut toggles: Vec<(String, bool)> = Vec::new();
+        // the pointer on the picture of the sheet, in micrometres: 0 pressed, 1 moved, 2 released
+        let mut pointer_events: Vec<(u8, (i64, i64))> = Vec::new();
         let have_file = self.win.path.is_some();
         let has_sheet = self.plans.has_sheet();
         ui.horizontal_wrapped(|ui| {
@@ -2767,6 +2769,7 @@ impl App {
                 (Msg::PlDims, &lines.dims),
                 (Msg::PlBalloons, &lines.balloons),
                 (Msg::PlBomHead, &lines.bom),
+                (Msg::TbRevision, &lines.revisions),
             ] {
                 if list.is_empty() {
                     continue;
@@ -2780,6 +2783,9 @@ impl App {
                 for l in list {
                     ui.label(egui::RichText::new(&l.text).color(tone(l.tone)));
                 }
+            }
+            for l in &lines.notes {
+                ui.label(egui::RichText::new(&l.text).color(tone(l.tone)));
             }
             if !lines.layers.is_empty() {
                 ui.label(egui::RichText::new(Msg::PlLayers.tr(lang)).color(ACCENT));
@@ -2808,8 +2814,26 @@ impl App {
                 let width = ui.available_width().max(120.0);
                 let scale = width / eval.scene.width_um as f32;
                 let size = Vec2::new(width, eval.scene.height_um as f32 * scale);
-                let (response, painter) = ui.allocate_painter(size, egui::Sense::hover());
+                let (response, painter) = ui.allocate_painter(size, egui::Sense::click_and_drag());
                 let rect = response.rect;
+                // a dimension line is taken with the pointer and dragged; the distance is worked
+                // out by `PlanState`
+                let to_sheet = |p: Pos2| -> (i64, i64) {
+                    (
+                        ((p.x - rect.left()) / scale) as i64,
+                        ((rect.bottom() - p.y) / scale) as i64,
+                    )
+                };
+                if let Some(p) = response.interact_pointer_pos() {
+                    if response.drag_started() {
+                        pointer_events.push((0, to_sheet(p)));
+                    } else if response.dragged() {
+                        pointer_events.push((1, to_sheet(p)));
+                    }
+                }
+                if response.drag_stopped() {
+                    pointer_events.push((2, (0, 0)));
+                }
                 painter.rect_filled(rect, 0.0, Color32::WHITE);
                 let at = |p: (i64, i64)| {
                     Pos2::new(
@@ -2871,6 +2895,22 @@ impl App {
             }
         });
         // what was asked is done after the lines are drawn
+        for (kind, point) in pointer_events {
+            let r = match kind {
+                0 => {
+                    self.plans.begin_drag(point);
+                    Ok(None)
+                }
+                1 => self.plans.drag_to(point, lang),
+                _ => {
+                    self.plans.end_drag();
+                    Ok(None)
+                }
+            };
+            if let Err(e) = r {
+                self.plans.note = Some(PlanState::error_line(&e, lang));
+            }
+        }
         for (name, lock) in toggles {
             let r = if lock {
                 self.plans.toggle_locked(&name, lang)

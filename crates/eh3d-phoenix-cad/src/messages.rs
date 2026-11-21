@@ -753,6 +753,45 @@ const TEXTS: &[Row] = &[
             "Balão sem a sua peça",
         ],
     ),
+    (
+        "PHOENIX-CAD-058",
+        [
+            "Tolerance not valid",
+            "Tolerancia no válida",
+            "Toleranz ungültig",
+            "Tolérance non valide",
+            "Tolleranza non valida",
+            "公差が正しくありません",
+            "公差无效",
+            "Tolerância inválida",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-059",
+        [
+            "Section or detail not valid",
+            "Sección o detalle no válido",
+            "Schnitt oder Detail ungültig",
+            "Coupe ou détail non valide",
+            "Sezione o dettaglio non valido",
+            "断面または詳細が正しくありません",
+            "剖视或局部放大无效",
+            "Corte ou pormenor inválido",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-060",
+        [
+            "Revision not valid",
+            "Revisión no válida",
+            "Revision ungültig",
+            "Révision non valide",
+            "Revisione non valida",
+            "改訂が正しくありません",
+            "修订无效",
+            "Revisão inválida",
+        ],
+    ),
 ];
 
 /// The text of a diagnostic in a language (`en`, `es`, `de`, `fr`, `it`, `ja`, `zh` or `pt`), or

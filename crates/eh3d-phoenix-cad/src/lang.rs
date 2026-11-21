@@ -679,6 +679,7 @@ messages! {
     TbNumber => ["Drawing number", "Número de plano", "Zeichnungsnummer", "Numéro de plan", "Numero del disegno", "図面番号", "图号", "Número do desenho"],
     TbRevision => ["Revision", "Revisión", "Revision", "Révision", "Revisione", "改訂", "版本", "Revisão"],
     TbAuthor => ["Author", "Autor", "Autor", "Auteur", "Autore", "作成者", "作者", "Autor"],
+    TbDate => ["Date", "Fecha", "Datum", "Date", "Data", "日付", "日期", "Data"],
     TbScale => ["Scale", "Escala", "Maßstab", "Échelle", "Scala", "縮尺", "比例", "Escala"],
     RevAngle => ["turn: {0} degrees", "giro: {0} grados", "Drehung: {0} Grad", "rotation : {0} degrés", "rotazione: {0} gradi", "回転: {0} 度", "旋转角度：{0} 度", "rotação: {0} graus"],
     RevArea => ["profile area: {0} mm2", "área del perfil: {0} mm2", "Fläche des Profils: {0} mm2", "aire du profil : {0} mm2", "area del profilo: {0} mm2", "断面積: {0} mm2", "轮廓面积：{0} mm2", "área do perfil: {0} mm2"],
@@ -892,6 +893,7 @@ messages! {
     PlBalloons => ["Balloons", "Globos", "Positionsnummern", "Bulles", "Pallini", "バルーン", "气球", "Balões"],
     PlIssues => ["Problems", "Problemas", "Probleme", "Problèmes", "Problemi", "問題", "问题", "Problemas"],
     PlBalloon => ["Balloon {0}: item {1}", "Globo {0}: elemento {1}", "Positionsnummer {0}: Position {1}", "Bulle {0} : article {1}", "Pallino {0}: voce {1}", "バルーン {0}：項目 {1}", "气球 {0}：第 {1} 项", "Balão {0}: item {1}"],
+    PlRevRow => ["Revision {0}: {1}, {2} ({3})", "Revisión {0}: {1}, {2} ({3})", "Revision {0}: {1}, {2} ({3})", "Révision {0} : {1}, {2} ({3})", "Revisione {0}: {1}, {2} ({3})", "改訂 {0}：{1}、{2}（{3}）", "修订 {0}：{1}，{2}（{3}）", "Revisão {0}: {1}, {2} ({3})"],
 }
 
 impl Msg {

@@ -46,13 +46,40 @@ impl LineType {
     }
 }
 
+/// How the width of the lines of a layer is given: as a share of the line group or as a length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WidthSpec {
+    /// The thick line of the group.
+    Thick,
+    /// The thin line, half of it.
+    Thin,
+    /// The extra thick line, twice the thick one.
+    Extra,
+    /// A length in micrometres.
+    Abs(i64),
+}
+
+impl WidthSpec {
+    /// The width in micrometres for a line group (the thick line).
+    pub fn width_um(self, group_um: i64) -> i64 {
+        match self {
+            WidthSpec::Thick => group_um,
+            WidthSpec::Thin => group_um / 2,
+            WidthSpec::Extra => group_um * 2,
+            WidthSpec::Abs(v) => v,
+        }
+    }
+}
+
 /// What a layer is like unless the drawing says otherwise.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayerStyle {
     /// Six hexadecimal digits.
     pub color: String,
-    /// The width of the lines, in micrometres.
+    /// The width of the lines, in micrometres, for the line group of the settings.
     pub width_um: i64,
+    /// How that width was given, so that another line group of the sheet can change it.
+    pub width: WidthSpec,
     /// The type of the lines.
     pub line: LineType,
     /// Whether the layer is shown.
@@ -86,6 +113,112 @@ pub struct DimStyle {
     pub leader_angle_deg: u32,
     /// The radius of the arc of an angle.
     pub arc_radius_um: i64,
+    /// The room kept between two dimensions that share a line of dimensions, along it.
+    pub clearance_um: i64,
+    /// A dimension line that is dragged lands on a multiple of this.
+    pub drag_snap_um: i64,
+    /// How the tolerance of a dimension is written.
+    pub tol_style: TolDisplay,
+    /// The decimals of a deviation, in millimetres (0 to 6).
+    pub tol_decimals: u32,
+}
+
+/// How the tolerance of a dimension is written next to its value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TolDisplay {
+    /// The class (`H7`, `H7/g6`).
+    Class,
+    /// The deviations (`+0.021/0`).
+    Deviation,
+    /// Both.
+    Both,
+}
+
+/// The hatching of one material: the angle from the first axis of the view and the distance
+/// between the lines, measured on the sheet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HatchStyle {
+    /// The angle in degrees, from 0 to 179.
+    pub angle_deg: u32,
+    /// The distance between two lines, in micrometres.
+    pub spacing_um: i64,
+}
+
+/// The hatching of the cut faces of the section views.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HatchSettings {
+    /// The hatching of a material that has none of its own.
+    pub default: HatchStyle,
+    /// The hatching of the materials by name (lower case).
+    pub materials: BTreeMap<String, HatchStyle>,
+    /// The most lines of the hatching of one view.
+    pub max_lines: usize,
+}
+
+/// The marks of the sections and the details, in micrometres.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionStyle {
+    /// How far the line of a cut goes past the view it is drawn in.
+    pub overshoot_um: i64,
+    /// The length of the thick mark at each end of the line of a cut.
+    pub end_length_um: i64,
+    /// The length of the stem with the arrow that shows where the cut is looked at from.
+    pub arrow_length_um: i64,
+    /// The height of the letters and of the captions.
+    pub text_height_um: i64,
+    /// The room between a view and its caption.
+    pub caption_gap_um: i64,
+}
+
+/// A block of the sheet that a person can choose for the title.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TitleTemplate {
+    /// The width of the block.
+    pub width_um: i64,
+    /// The height of a row.
+    pub row_um: i64,
+    /// The columns.
+    pub columns: u32,
+    /// The fields, in order.
+    pub fields: Vec<String>,
+}
+
+/// How the revisions are numbered in the table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RevisionNumbering {
+    /// A, B, C ... (after Z, AA, AB ...).
+    Letters,
+    /// 1, 2, 3 ...
+    Numbers,
+}
+
+/// The table of revisions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RevisionSettings {
+    /// Whether the table is drawn.
+    pub table: bool,
+    /// The height of a row.
+    pub row_um: i64,
+    /// The width of the table.
+    pub width_um: i64,
+    /// The most revisions a sheet keeps.
+    pub max: usize,
+    /// How they are numbered.
+    pub numbering: RevisionNumbering,
+}
+
+/// The pattern of a type of line, in tenths of the width of the line: the dash, the gap and, for
+/// the dash-dot, the dot and the second gap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DashPattern {
+    /// The dash.
+    pub dash: u32,
+    /// The gap after it.
+    pub gap: u32,
+    /// The dot (0 for a dashed line).
+    pub dot: u32,
+    /// The gap after the dot (0 for a dashed line).
+    pub gap2: u32,
 }
 
 /// The settings of the drawings, with their types.
@@ -139,6 +272,22 @@ pub struct SheetSettings {
     pub bom_width_um: i64,
     /// The layers by name, in the order of the settings.
     pub layers: Vec<(String, LayerStyle)>,
+    /// The standard widths of the thick line, in micrometres (the groups of lines).
+    pub line_groups: Vec<i64>,
+    /// The pattern of the dashed lines.
+    pub dashed: DashPattern,
+    /// The pattern of the dash-dot lines.
+    pub dash_dot: DashPattern,
+    /// The hatching of the cut faces.
+    pub hatch: HatchSettings,
+    /// The marks of sections and details.
+    pub section: SectionStyle,
+    /// The name of the title block that a new sheet has.
+    pub title_template: String,
+    /// The other blocks, by name.
+    pub title_templates: BTreeMap<String, TitleTemplate>,
+    /// The table of revisions.
+    pub revisions: RevisionSettings,
     /// The largest drawing file that is read.
     pub max_file_bytes: usize,
     /// The most views of a sheet.
@@ -159,6 +308,8 @@ pub struct SheetSettings {
     pub max_cells: usize,
     /// The most edges of a view.
     pub max_edges: usize,
+    /// The most dimensions placed by themselves in one view.
+    pub max_auto_dims: usize,
     /// The most tests of an edge against a prism in an isometric view.
     pub max_iso_tests: u64,
 }
@@ -238,14 +389,58 @@ impl SheetSettings {
 
     /// Reads the typed settings from a complete configuration.
     pub fn from_config(c: &Config) -> Result<SheetSettings, CadError> {
-        let width_of = |c: &Config, key: &str, line_group: i64| -> Result<i64, CadError> {
+        let width_of = |c: &Config, key: &str| -> Result<WidthSpec, CadError> {
             match text(c, key)? {
-                "thick" => Ok(line_group),
-                "thin" => Ok(line_group / 2),
-                _ => um(c, key, 10, 5000),
+                "thick" => Ok(WidthSpec::Thick),
+                "thin" => Ok(WidthSpec::Thin),
+                "extra" => Ok(WidthSpec::Extra),
+                _ => Ok(WidthSpec::Abs(um(c, key, 10, 5000)?)),
             }
         };
+        let mut line_groups = Vec::new();
+        for w in text(c, "sheet.line_groups")?.split_whitespace() {
+            let v: i64 = w.parse().map_err(|_| {
+                bad(format!(
+                    "sheet.line_groups: {w} is not a whole number of um"
+                ))
+            })?;
+            if !(50..=2000).contains(&v) || line_groups.contains(&v) {
+                return Err(bad(format!(
+                    "sheet.line_groups: {w} is twice or not from 50 to 2000 um"
+                )));
+            }
+            line_groups.push(v);
+        }
+        if line_groups.is_empty() || line_groups.len() > 16 {
+            return Err(bad("sheet.line_groups needs from 1 to 16 widths".into()));
+        }
         let line_group_um = um(c, "sheet.line_group", 50, 2000)?;
+        if !line_groups.contains(&line_group_um) {
+            return Err(bad(format!(
+                "sheet.line_group is {line_group_um} um, which is not one of sheet.line_groups"
+            )));
+        }
+        let pattern = |key: &str, dot: bool| -> Result<DashPattern, CadError> {
+            let v: Vec<u32> = text(c, key)?
+                .split_whitespace()
+                .map(|w| w.parse::<u32>())
+                .collect::<Result<_, _>>()
+                .map_err(|_| bad(format!("{key}: whole numbers of tenths of the line width")))?;
+            let want = if dot { 4 } else { 2 };
+            if v.len() != want || v.iter().any(|x| *x == 0 || *x > 1000) {
+                return Err(bad(format!(
+                    "{key}: {want} numbers from 1 to 1000 (tenths of the line width)"
+                )));
+            }
+            Ok(DashPattern {
+                dash: v[0],
+                gap: v[1],
+                dot: if dot { v[2] } else { 0 },
+                gap2: if dot { v[3] } else { 0 },
+            })
+        };
+        let dashed = pattern("sheet.linetype.dashed", false)?;
+        let dash_dot = pattern("sheet.linetype.dashdot", true)?;
         let mut formats = BTreeMap::new();
         for key in c.keys().filter(|k| k.starts_with("sheet.format.")) {
             let name = &key["sheet.format.".len()..];
@@ -311,6 +506,15 @@ impl SheetSettings {
             leader_length_um: um(c, "sheet.dim.leader_length", 1000, 200_000)?,
             leader_angle_deg: count(c, "sheet.dim.leader_angle", 0, 359)?,
             arc_radius_um: um(c, "sheet.dim.arc_radius", 1000, 200_000)?,
+            clearance_um: um(c, "sheet.dim.clearance", 0, 100_000)?,
+            drag_snap_um: um(c, "sheet.dim.drag_snap", 10, 100_000)?,
+            tol_style: match text(c, "sheet.dim.tol_style")? {
+                "class" => TolDisplay::Class,
+                "deviation" => TolDisplay::Deviation,
+                "both" => TolDisplay::Both,
+                _ => return Err(bad("sheet.dim.tol_style is class, deviation or both".into())),
+            },
+            tol_decimals: count(c, "sheet.dim.tol_decimals", 0, 6)?,
         };
         let title_fields: Vec<String> = text(c, "sheet.titleblock.fields")?
             .split_whitespace()
@@ -353,7 +557,8 @@ impl SheetSettings {
                 name.to_string(),
                 LayerStyle {
                     color,
-                    width_um: width_of(c, &k("width"), line_group_um)?,
+                    width_um: width_of(c, &k("width"))?.width_um(line_group_um),
+                    width: width_of(c, &k("width"))?,
                     line,
                     visible: flag(c, &k("visible"))?,
                     locked: flag(c, &k("locked"))?,
@@ -378,6 +583,88 @@ impl SheetSettings {
         }
         let columns = count(c, "sheet.titleblock.columns", 1, 4)?;
         let width_of_block = um(c, "sheet.titleblock.width", 40_000, 1_000_000)?;
+        let hatch_style = |angle: &str, spacing: &str| -> Result<HatchStyle, CadError> {
+            Ok(HatchStyle {
+                angle_deg: count(c, angle, 0, 179)?,
+                spacing_um: um(c, spacing, 200, 50_000)?,
+            })
+        };
+        let mut hatch_materials = BTreeMap::new();
+        for name in text(c, "sheet.hatch.materials")?.split_whitespace() {
+            if !is_word(name) || name.bytes().any(|b| b.is_ascii_uppercase()) {
+                return Err(bad(format!(
+                    "sheet.hatch.materials: {name} is not a name in lower case"
+                )));
+            }
+            let style = hatch_style(
+                &format!("sheet.hatch.material.{name}.angle"),
+                &format!("sheet.hatch.material.{name}.spacing"),
+            )?;
+            if hatch_materials.insert(name.to_string(), style).is_some() {
+                return Err(bad(format!("sheet.hatch.materials: {name} twice")));
+            }
+        }
+        if hatch_materials.len() > 64 {
+            return Err(bad("sheet.hatch.materials: up to 64 materials".into()));
+        }
+        let hatch = HatchSettings {
+            default: hatch_style("sheet.hatch.angle", "sheet.hatch.spacing")?,
+            materials: hatch_materials,
+            max_lines: count(c, "sheet.hatch.max_lines", 10, 1_000_000)? as usize,
+        };
+        let section = SectionStyle {
+            overshoot_um: um(c, "sheet.section.overshoot", 0, 200_000)?,
+            end_length_um: um(c, "sheet.section.end_length", 500, 200_000)?,
+            arrow_length_um: um(c, "sheet.section.arrow_length", 500, 200_000)?,
+            text_height_um: um(c, "sheet.section.text_height", 500, 100_000)?,
+            caption_gap_um: um(c, "sheet.section.caption_gap", 0, 200_000)?,
+        };
+        let template_of = |prefix: &str| -> Result<TitleTemplate, CadError> {
+            let fields: Vec<String> = text(c, &format!("{prefix}.fields"))?
+                .split_whitespace()
+                .map(str::to_string)
+                .collect();
+            if fields.len() > 24 || fields.iter().any(|f| !is_word(f)) {
+                return Err(bad(format!(
+                    "{prefix}.fields: up to 24 words of letters and digits"
+                )));
+            }
+            Ok(TitleTemplate {
+                width_um: um(c, &format!("{prefix}.width"), 40_000, 1_000_000)?,
+                row_um: um(c, &format!("{prefix}.row"), 3000, 50_000)?,
+                columns: count(c, &format!("{prefix}.columns"), 1, 4)?,
+                fields,
+            })
+        };
+        let mut title_templates = BTreeMap::new();
+        for name in text(c, "sheet.titleblock.templates")?.split_whitespace() {
+            if !is_word(name) || name == "default" {
+                return Err(bad(format!(
+                    "sheet.titleblock.templates: {name} is not a name (default is the block above)"
+                )));
+            }
+            let tpl = template_of(&format!("sheet.titleblock.template.{name}"))?;
+            if title_templates.insert(name.to_string(), tpl).is_some() {
+                return Err(bad(format!("sheet.titleblock.templates: {name} twice")));
+            }
+        }
+        let title_template = text(c, "sheet.titleblock.template")?.to_string();
+        if title_template != "default" && !title_templates.contains_key(&title_template) {
+            return Err(bad(format!(
+                "sheet.titleblock.template names no block ({title_template})"
+            )));
+        }
+        let revisions = RevisionSettings {
+            table: flag(c, "sheet.revisions.table")?,
+            row_um: um(c, "sheet.revisions.row", 3000, 50_000)?,
+            width_um: um(c, "sheet.revisions.width", 40_000, 1_000_000)?,
+            max: count(c, "sheet.revisions.max", 1, 256)? as usize,
+            numbering: match text(c, "sheet.revisions.numbering")? {
+                "letters" => RevisionNumbering::Letters,
+                "numbers" => RevisionNumbering::Numbers,
+                _ => return Err(bad("sheet.revisions.numbering is letters or numbers".into())),
+            },
+        };
         Ok(SheetSettings {
             default_format,
             default_portrait,
@@ -403,6 +690,14 @@ impl SheetSettings {
             bom_row_um: um(c, "sheet.bom.row", 3000, 50_000)?,
             bom_width_um: um(c, "sheet.bom.width", 40_000, 1_000_000)?,
             layers,
+            line_groups,
+            dashed,
+            dash_dot,
+            hatch,
+            section,
+            title_template,
+            title_templates,
+            revisions,
             max_file_bytes: count(c, "sheet.max_file_bytes", 1024, 1 << 30)? as usize,
             max_views: count(c, "sheet.max_views", 1, 256)? as usize,
             max_dims: count(c, "sheet.max_dims", 1, 100_000)? as usize,
@@ -413,6 +708,7 @@ impl SheetSettings {
             max_text: count(c, "sheet.max_text", 8, 1000)? as usize,
             max_cells: count(c, "sheet.max_cells", 8, 100_000_000)? as usize,
             max_edges: count(c, "sheet.max_edges", 8, 10_000_000)? as usize,
+            max_auto_dims: count(c, "sheet.max_auto_dims", 1, 100_000)? as usize,
             max_iso_tests: u64::from(count(c, "sheet.max_iso_tests", 1000, u32::MAX)?),
         })
     }
@@ -430,6 +726,22 @@ impl SheetSettings {
         } else {
             (long, short)
         })
+    }
+
+    /// The title block of a name (`default` is the one of the keys `sheet.titleblock.*`), or `None`
+    /// when no block has that name.
+    pub fn title_block_of(&self, name: Option<&str>) -> Option<TitleTemplate> {
+        let name = name.unwrap_or(&self.title_template);
+        if name == "default" {
+            Some(TitleTemplate {
+                width_um: self.title_width_um,
+                row_um: self.title_row_um,
+                columns: self.title_columns,
+                fields: self.title_fields.clone(),
+            })
+        } else {
+            self.title_templates.get(name).cloned()
+        }
     }
 
     /// A length of the settings in the range of lengths (for the callers that need a [`Length`]).

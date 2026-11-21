@@ -408,6 +408,17 @@ pub enum CadError {
     PlanDim(String),
     /// A balloon whose part is not in the bill of the history.
     PlanBalloon(String),
+    /// A tolerance of a dimension that is not valid: a class that is not in the table, a hole class
+    /// over a hole class, a size outside the table, deviations the wrong way round, a tolerance on
+    /// an angle.
+    PlanTol(String),
+    /// A section or a detail view that is not valid: letters used twice, a view of the line of the
+    /// cut that is not there, a detail of a view that comes after it, a shape without size, a cut
+    /// that the view it is drawn in cannot show.
+    PlanSection(String),
+    /// A revision of the table that is not valid: out of order, with a text of more than one line,
+    /// or more revisions than the settings allow.
+    PlanRevision(String),
 }
 
 impl CadError {
@@ -471,6 +482,9 @@ impl CadError {
             CadError::PlanOrphan(_) => "PHOENIX-CAD-055",
             CadError::PlanDim(_) => "PHOENIX-CAD-056",
             CadError::PlanBalloon(_) => "PHOENIX-CAD-057",
+            CadError::PlanTol(_) => "PHOENIX-CAD-058",
+            CadError::PlanSection(_) => "PHOENIX-CAD-059",
+            CadError::PlanRevision(_) => "PHOENIX-CAD-060",
         }
     }
 }
@@ -541,7 +555,10 @@ impl fmt::Display for CadError {
             | CadError::Plan(why)
             | CadError::PlanOrphan(why)
             | CadError::PlanDim(why)
-            | CadError::PlanBalloon(why) => write!(f, "{title}: {why}"),
+            | CadError::PlanBalloon(why)
+            | CadError::PlanTol(why)
+            | CadError::PlanSection(why)
+            | CadError::PlanRevision(why) => write!(f, "{title}: {why}"),
         }
     }
 }
@@ -610,6 +627,9 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-055", "Dimension without the thing it measures"),
     ("PHOENIX-CAD-056", "Dimension not valid"),
     ("PHOENIX-CAD-057", "Balloon without its part"),
+    ("PHOENIX-CAD-058", "Tolerance not valid"),
+    ("PHOENIX-CAD-059", "Section or detail not valid"),
+    ("PHOENIX-CAD-060", "Revision not valid"),
 ];
 
 #[cfg(test)]
@@ -820,6 +840,9 @@ mod tests {
             CadError::PlanOrphan("node".into()),
             CadError::PlanDim("axes".into()),
             CadError::PlanBalloon("part".into()),
+            CadError::PlanTol("class".into()),
+            CadError::PlanSection("label".into()),
+            CadError::PlanRevision("order".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));

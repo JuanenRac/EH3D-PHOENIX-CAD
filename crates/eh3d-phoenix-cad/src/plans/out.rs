@@ -28,13 +28,20 @@ fn angle6(a: f64) -> String {
     }
 }
 
-fn dash_of(t: LineType, width_um: i64) -> Option<(f64, f64, f64, f64)> {
-    // dash, gap, and for dash-dot the dot and the second gap, in millimetres
-    let w = (width_um as f64 / 1000.0).max(0.25);
+fn dash_of(scene: &Scene, t: LineType, width_um: i64) -> Option<(f64, f64, f64, f64)> {
+    // dash, gap, and for dash-dot the dot and the second gap, in millimetres: the patterns of the
+    // settings are tenths of the width of the line, taken as 0.25 mm at least
+    let w = (width_um as f64 / 1000.0).max(0.25) / 10.0;
+    let part = |p: u32| f64::from(p) * w;
     match t {
         LineType::Continuous => None,
-        LineType::Dashed => Some((w * 8.0, w * 4.0, 0.0, 0.0)),
-        LineType::DashDot => Some((w * 16.0, w * 3.0, w, w * 3.0)),
+        LineType::Dashed => Some((part(scene.dashed.dash), part(scene.dashed.gap), 0.0, 0.0)),
+        LineType::DashDot => Some((
+            part(scene.dash_dot.dash),
+            part(scene.dash_dot.gap),
+            part(scene.dash_dot.dot),
+            part(scene.dash_dot.gap2),
+        )),
     }
 }
 
@@ -70,7 +77,7 @@ pub fn to_svg(scene: &Scene, title: &str) -> String {
             color,
             mm_text(*width)
         );
-        if let Some((a, b, c, d)) = dash_of(*line, *width) {
+        if let Some((a, b, c, d)) = dash_of(scene, *line, *width) {
             let fmt = |v: f64| format!("{v:.2}");
             if c == 0.0 {
                 let _ = write!(o, " stroke-dasharray=\"{} {}\"", fmt(a), fmt(b));
@@ -383,7 +390,7 @@ pub fn to_pdf(scene: &Scene, title: &str) -> Vec<u8> {
         c.stroke(&hex_unit(color));
         c.fill(&hex_unit(color));
         c.width(*width as f64 / 1000.0);
-        c.dash(dash_of(*line, *width).map(|(a, b, _, _)| (a, b)));
+        c.dash(dash_of(scene, *line, *width).map(|(a, b, _, _)| (a, b)));
         for p in scene.prims.iter().filter(|p| &p.layer == name) {
             match &p.shape {
                 Shape::Line { a, b } => c.line(page(*a), page(*b)),
@@ -408,7 +415,7 @@ pub fn to_pdf(scene: &Scene, title: &str) -> Vec<u8> {
                         },
                         *turn,
                     );
-                    c.dash(dash_of(*line, *width).map(|(a, b, _, _)| (a, b)));
+                    c.dash(dash_of(scene, *line, *width).map(|(a, b, _, _)| (a, b)));
                 }
             }
         }

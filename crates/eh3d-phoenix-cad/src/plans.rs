@@ -13,6 +13,11 @@
 //! * [`measure`]: dimensions tied to the nodes of the history and the elements of the sketches by
 //!   their ids, worked out again from the model every time, with the orphans found and named;
 //! * [`bom`]: the bill of materials of the history and the stable numbers of its items;
+//! * [`sectioning`]: the section views (the cut, the hatching of the cut faces, the line of the cut)
+//!   and the detail views (the part of a view inside a circle or a rectangle, enlarged);
+//! * [`tol`]: the tolerances of a dimension, classes of ISO 286 (`H7`, `H7/g6`) or deviations;
+//! * [`extended`]: chain and ordinate dimensions, the placing of dimension lines so that they do
+//!   not lie on one another, and the dragging of a dimension line;
 //! * [`scene`]: the whole sheet as primitives on layers, with the problems found;
 //! * [`out`]: the SVG, PDF and DXF files of a sheet;
 //! * [`panel`]: the state and the lines of the panel of the window, with no window in it.
@@ -21,6 +26,7 @@
 //! by the tests only.
 
 pub mod bom;
+pub mod extended;
 pub mod geom;
 pub mod measure;
 pub mod model;
@@ -28,15 +34,17 @@ pub mod out;
 pub mod panel;
 pub mod prim;
 pub mod scene;
+pub mod sectioning;
 pub mod settings;
+pub mod tol;
 
 #[cfg(test)]
 mod tests;
 
 pub use measure::{Issue, Model};
 pub use model::{
-    Axis, Balloon, Dim, DimKind, Place, Plan, Ref, SheetScale, Side, Source, View, ViewKind,
-    DRAWING_DOMAIN,
+    Axis, Balloon, Detail, DetailShape, Dim, DimKind, Place, Plan, Ref, Revision, SectionCut,
+    SheetScale, Side, Source, Tol, View, ViewKind, DRAWING_DOMAIN,
 };
 pub use scene::{evaluate, Evaluation};
 pub use settings::SheetSettings;

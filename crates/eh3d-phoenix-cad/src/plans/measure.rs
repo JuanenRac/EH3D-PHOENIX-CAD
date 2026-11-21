@@ -166,7 +166,7 @@ pub fn measure(dim: &Dim, model: &Model, style: &DimStyle) -> Result<Measured, F
     }
     let mut values = Vec::new();
     match dim.kind {
-        DimKind::Linear | DimKind::Cumulative => {
+        DimKind::Linear | DimKind::Cumulative | DimKind::Chain | DimKind::Ordinate => {
             let mut axis = None;
             let mut pos = Vec::new();
             for r in &refs {
@@ -185,8 +185,22 @@ pub fn measure(dim: &Dim, model: &Model, style: &DimStyle) -> Result<Measured, F
                     _ => return Err((INVALID, format!("{} measures faces", dim.name))),
                 }
             }
-            for p in &pos[1..] {
-                values.push((p - pos[0]).abs());
+            match dim.kind {
+                DimKind::Chain => {
+                    for w in pos.windows(2) {
+                        values.push((w[1] - w[0]).abs());
+                    }
+                }
+                DimKind::Ordinate => {
+                    for p in &pos[1..] {
+                        values.push(p - pos[0]);
+                    }
+                }
+                _ => {
+                    for p in &pos[1..] {
+                        values.push((p - pos[0]).abs());
+                    }
+                }
             }
         }
         DimKind::Radius | DimKind::Diameter => match refs[0] {
@@ -278,6 +292,33 @@ impl Frame {
     }
 }
 
+/// Where a face is on the sheet: its position along the dimension and where the part starts
+/// across it (the side the dimension line is drawn on), in micrometres. A reference that is not a
+/// face gives `(0, 0)`.
+pub fn face_place(
+    r: &Resolved,
+    frame: &Frame,
+    horizontal: bool,
+    u_axis: Axis,
+    v_axis: Axis,
+) -> (i64, i64) {
+    match r {
+        Resolved::Face { pos, lo, .. } => {
+            let across = if horizontal {
+                lo[v_axis.index()]
+            } else {
+                lo[u_axis.index()]
+            };
+            if horizontal {
+                (frame.map((*pos, 0)).0, frame.map((0, across)).1)
+            } else {
+                (frame.map((0, *pos)).1, frame.map((across, 0)).0)
+            }
+        }
+        _ => (0, 0),
+    }
+}
+
 /// Draws a dimension that has been measured, in the frame of its view. A dimension that cannot be
 /// drawn in that kind of view is `PHOENIX-CAD-056`.
 pub fn draw(
@@ -292,6 +333,9 @@ pub fn draw(
     let h = style.text_height_um;
     let mut out = Vec::new();
     match dim.kind {
+        DimKind::Chain | DimKind::Ordinate => {
+            return super::extended::draw(dim, m, frame, style);
+        }
         DimKind::Linear | DimKind::Cumulative => {
             let (u_axis, v_axis) = view_axes(frame.kind).ok_or((
                 INVALID,
@@ -316,26 +360,13 @@ pub fn draw(
             }
             let place = |r: &Resolved| -> (i64, i64, i64) {
                 // the position along the dimension, and where the part starts across it
-                match r {
-                    Resolved::Face { pos, lo, .. } => {
-                        let across = if horizontal {
-                            lo[v_axis.index()]
-                        } else {
-                            lo[u_axis.index()]
-                        };
-                        if horizontal {
-                            (frame.map((*pos, 0)).0, frame.map((0, across)).1, 0)
-                        } else {
-                            (frame.map((0, *pos)).1, frame.map((across, 0)).0, 0)
-                        }
-                    }
-                    _ => (0, 0, 0),
-                }
+                let (along, across) = face_place(r, frame, horizontal, u_axis, v_axis);
+                (along, across, 0)
             };
             let datum = place(&m.refs[0]);
             for (k, r) in m.refs[1..].iter().enumerate() {
                 let end = place(r);
-                let level = offset + k as i64 * style.step_um;
+                let level = offset + k as i64 * dim.step_um.unwrap_or(style.step_um);
                 let (a, b) = (datum.0.min(end.0), datum.0.max(end.0));
                 let text = &m.texts[k];
                 if horizontal {
