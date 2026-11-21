@@ -67,6 +67,10 @@ There is no test for a shape of one body that passes through another body (a scr
 
 The file has not been opened in a slicer or in a CAD program.
 
+## The STL file of a history
+
+The solid of the history of a project is written with `history-check PROJECT --stl OUT.stl` (`docs/HISTORY.md`): only the faces on the surface, joined into rectangles, binary, in millimetres, the same bytes for the same solid. It is not the STL file of the box above, which comes from the enclosure; this one comes from the solid of prisms. A rectangle that meets a neighbour along part of its edge leaves a T-junction, and the file has not been opened in a slicer.
+
 ## The OBJ file and the 3MF package
 
 `eh3d_phoenix_cad::interchange` writes the solids that the STL file has (the box and every placed part, each checked against its exact volume, and every turned and swept body, checked to be closed) in two more formats, with the same triangles, in millimetres with six decimals and with the same bytes for the same model. The OBJ file has a group `o` for each solid, its vertices `v` and its faces `f` numbered from 1 over the whole file. The 3MF package holds `[Content_Types].xml`, `_rels/.rels` and `3D/3dmodel.model` (one `object` for each solid and one `item` of the build for each object); its entries are stored without compression and dated 1 January 1980, so the bytes do not depend on a compression library. Both are refused with the codes of the STL file (`PHOENIX-CAD-048` to `-050`) when the solid cannot be made. The 3MF package has not been opened in a slicer or a CAD program; the tests read it back and check every entry against its CRC-32.

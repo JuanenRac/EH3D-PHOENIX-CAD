@@ -17,6 +17,8 @@ A history is a set of **nodes** that depend on one another as a graph, not as a 
 | `union` | 2 | none | what is in either input |
 | `difference` | 2 | none | the first input without the second |
 | `intersection` | 2 | none | what is in both inputs |
+| `mirror` | 1 | `axis` (a whole number from 0 to 2), `at` (a length) | the input together with its reflection in the plane across the axis (0 for x, 1 for y, 2 for z) at `at` |
+| `rotate` | 1 | `axis` (0 to 2), `quarters` (a whole number, negative turns the other way), `cx cy cz` (lengths) | the input turned by that many quarter turns, counter-clockwise seen from the high end of the axis, about the line parallel to it through `cx cy cz` |
 
 A feature depends on its inputs and on the parameters its expressions name; a parameter depends on the parameters its expression names. The history can name one feature as its **tip**, the one that gives the result; without a tip the result is the only feature that no other one takes.
 
@@ -50,9 +52,23 @@ The nodes are listed by id; the ids are UUID v7 and never change, so a node keep
 
 What this does not do: a shape that is not a box (a cylinder, a rounded edge) has no representation here, and nothing in this module is written to a STEP file or a mesh yet. The rule of the geometry kernel is in the record 0014.
 
+## Measuring a solid
+
+`solidquery.rs` answers questions about a solid exactly, in whole nanometres, on the grid that the planes of its prisms cut space into (limited by `max_cells`, `PHOENIX-CAD-053`):
+
+* **Thickness.** `thickness_at` gives the run of material that a line parallel to an axis meets at a point, `walls` lists every run along an axis (or only the ones thinner than a limit) with the rectangle of lines that meet exactly that run, and `thinnest` gives the thinnest one. It is measured along the three axes only: a wall that is thin along a diagonal is not found.
+* **Surface.** The area counts the faces of the grid that have material on one side and none on the other, so the faces where two prisms touch are not surface and the walls of a closed cavity are.
+* **Centre of mass** of a solid of one material: the exact ratio of 128-bit sums, rounded half away from zero to the nanometre; a solid too large for the sums is refused.
+
+`Solid::mirrored` and `Solid::rotated` are the plain operations behind the features `mirror` and `rotate`; both give the canonical form and refuse a coordinate outside the range of lengths (`PHOENIX-CAD-001`).
+
 ## The glTF file
 
 `glb.rs` writes a solid of prisms as a binary glTF file in the profile `phoenix-cad-glb/1` (`eh3d-phoenix-cad history-check PROJECT --glb OUT.glb`): one scene, one node, one mesh of triangles, positions in `f32` metres, flat outward normals (each prism on its own, four vertices for each of its six faces), `u32` indices, the Z axis of the model turned into the Y axis of the viewers by the rotation of the node, the profile, the unit and the axes in the `extras`, no date, no host name and no program version, the JSON chunk padded with spaces and the binary one with zeros. The same solid always gives the same bytes. `check_glb` reads a file of the profile back (the header, the two chunks, the counts of the accessors against the binary chunk, the indices) and gives the vertices, the triangles, the bounds and the volume of the triangles, which the tests compare with the exact volume of the solid; bytes that are not a file of the profile are `PHOENIX-CAD-018`, never a panic. A file is never written over one that exists unless `--overwrite` is given. No viewer has opened a file this program wrote.
+
+## The STL file
+
+`history-check PROJECT --stl OUT.stl [--overwrite]` writes the solid as a binary STL file in millimetres (`stlsolid.rs`): only the faces on the surface, each rectangle of the grid that has material on one side joined to its neighbours of the same side by a greedy pass in a fixed order, so the same solid gives the same bytes. The faces where two prisms touch are not written and the faces of a cavity look into the cavity. The rectangles add up to the exact volume (the sum over the faces across x of the plane times the area) and the exact area of the solid, which the tests compare; the corners are 32-bit floats, so a coordinate beyond about 16 m loses its last nanometres in the file. A rectangle that meets a neighbour along part of its edge leaves a T-junction: a slicer repairs it, a check that wants every edge shared by exactly two triangles would count it. The file has not been opened in a slicer.
 
 ## The settings
 
@@ -69,6 +85,8 @@ The section `[history]` lives in `phoenix-cad-history.default.cfg` (printed by `
 ## The command
 
 `eh3d-phoenix-cad history-check PROJECT [--text] [--lang CODE] [--config FILE]` builds the history of a project and reports every node (`node,name,state,code,detail`, or lines for a person with `--text`). It exits with 0 when every node was built, with **2** when the verification did not pass (a node failed or inherits a failure) and with 1 when it could not run. `history-graph` writes the graph for Graphviz.
+
+`eh3d-phoenix-cad history-measure PROJECT [--text] [--min-wall LENGTH] [--lang CODE] [--config FILE]` builds the history and reports the volume, the surface, the centre of mass, the box and the thinnest wall along each axis (`quantity,axis,value,unit` in nanometres, or lines in millimetres for a person with `--text`). With `--min-wall` it also lists every wall thinner than the length (a bare number is in millimetres) with where it is and how thick, and exits with **2** when there is one. `history-check` takes `--stl OUT.stl` beside `--glb OUT.glb`, and `--overwrite` for both.
 
 ## The solver as a crate
 

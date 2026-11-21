@@ -26,6 +26,12 @@ State: **accepted** (record 0016).
 
 A sheet is kept in its own optional domain `drawing`; a dimension keeps references (a face of the box of a node, an element of a sketch) by ids that do not change and its value is worked out from the model every time, an orphan is reported with `PHOENIX-CAD-055`; the bill of materials and the item numbers come from the history and the numbers are never given again; every tuned value is in the section `[sheet]` of the settings. The record is `adr/0016-drawing-sheets-tied-to-the-history.md`. Sections, details, tolerances, ordinate and chain dimensions and revisions are additions to the same records (record 0017): a section and a detail are views with more lines, a tolerance is a line of the dimension read from the table of `iso286`, and the new diagnostics are `PHOENIX-CAD-058` to `060`. A broken view, the notes with a leader and the free attributes are more lines of the same records (record 0018), written as `drawing 2` only when used, with the diagnostics `PHOENIX-CAD-061` to `063`.
 
+## Questions about a solid, mirror and turn, and typed points
+
+State: **accepted** (record 0019).
+
+The questions about a solid of prisms (thickness, thin walls, surface, centre of mass) are answered on the grid that the planes of the prisms cut space into, in whole numbers, with no tolerance and under the limits of the booleans; the history gets `mirror` and `rotate` as exact operations (planes across the axes and quarter turns only); the STL file of a solid is its surface in rectangles with a fixed order; points typed as text are plain logic with no new diagnostic code (`PHOENIX-CAD-008` for text, `PHOENIX-CAD-001` for range). The record is `adr/0019-solid-questions-mirror-turn-and-typed-points.md`.
+
 ## Stable diagnostic codes
 
 State: **proposed**.
