@@ -419,6 +419,16 @@ pub enum CadError {
     /// A revision of the table that is not valid: out of order, with a text of more than one line,
     /// or more revisions than the settings allow.
     PlanRevision(String),
+    /// A broken view that is not valid: a range that is empty or lies outside the picture, a break
+    /// of a view that cannot have one (a section, a detail, a sketch or the isometric view), a
+    /// detail of a broken view, or a broken view that does not fit the frame of the sheet.
+    PlanBreak(String),
+    /// A note that is not valid: a text that is empty, longer than one line or longer than the
+    /// settings allow, an anchor that is not there, or more notes than the settings allow.
+    PlanNote(String),
+    /// An attribute of an object that is not valid: a key or a value with a character the settings
+    /// do not allow, one that is too long, a key twice, or more attributes than the settings allow.
+    PlanAttr(String),
 }
 
 impl CadError {
@@ -485,6 +495,9 @@ impl CadError {
             CadError::PlanTol(_) => "PHOENIX-CAD-058",
             CadError::PlanSection(_) => "PHOENIX-CAD-059",
             CadError::PlanRevision(_) => "PHOENIX-CAD-060",
+            CadError::PlanBreak(_) => "PHOENIX-CAD-061",
+            CadError::PlanNote(_) => "PHOENIX-CAD-062",
+            CadError::PlanAttr(_) => "PHOENIX-CAD-063",
         }
     }
 }
@@ -558,7 +571,10 @@ impl fmt::Display for CadError {
             | CadError::PlanBalloon(why)
             | CadError::PlanTol(why)
             | CadError::PlanSection(why)
-            | CadError::PlanRevision(why) => write!(f, "{title}: {why}"),
+            | CadError::PlanRevision(why)
+            | CadError::PlanBreak(why)
+            | CadError::PlanNote(why)
+            | CadError::PlanAttr(why) => write!(f, "{title}: {why}"),
         }
     }
 }
@@ -630,6 +646,9 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-058", "Tolerance not valid"),
     ("PHOENIX-CAD-059", "Section or detail not valid"),
     ("PHOENIX-CAD-060", "Revision not valid"),
+    ("PHOENIX-CAD-061", "Broken view not valid"),
+    ("PHOENIX-CAD-062", "Note not valid"),
+    ("PHOENIX-CAD-063", "Attribute not valid"),
 ];
 
 #[cfg(test)]
@@ -843,6 +862,9 @@ mod tests {
             CadError::PlanTol("class".into()),
             CadError::PlanSection("label".into()),
             CadError::PlanRevision("order".into()),
+            CadError::PlanBreak("range".into()),
+            CadError::PlanNote("text".into()),
+            CadError::PlanAttr("key".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));

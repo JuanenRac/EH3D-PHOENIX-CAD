@@ -5,7 +5,7 @@
 //! the lines it does not know (those that start with `x-`) kept where they were:
 //!
 //! ```text
-//! drawing 1
+//! drawing 1                          (`drawing 2` when the sheet has a break, a note or an attribute)
 //! format <name>
 //! orientation <landscape|portrait>
 //! scale <auto|n:d>
@@ -21,6 +21,7 @@
 //! part <node id>
 //! material <text>
 //! description <text>
+//! attr <key> <value>                 (a free attribute of the part; sorted by key)
 //! revision <number>
 //! date <text>
 //! description <text>
@@ -34,6 +35,7 @@
 //! detail <parent view id> <label> circle <u nm> <v nm> <radius nm>
 //! detail <parent view id> <label> rect <u nm> <v nm> <width nm> <height nm>
 //! hatch <material>
+//! break <u|v> <from nm> <to nm>                           (a broken view: the range is left out)
 //! dim <id> <linear|radius|diameter|angle|cumulative> <name>
 //! ref face <node id> <x|y|z> <min|max>
 //! ref element <number> <sketch name>
@@ -47,6 +49,12 @@
 //! part <node id>
 //! at <x um> <y um>
 //! to <x um> <y um>
+//! note <id> <text>
+//! anchor view <view id> <u nm> <v nm>
+//! anchor face <view id> <node id> <x|y|z> <min|max>
+//! at <x um> <y um>
+//! centre 1                           (only when the note marks a centre)
+//! layer <NAME>
 //! ```
 //!
 //! A record is followed by its own lines; an `x-` line after a record belongs to it. Everything
@@ -64,8 +72,13 @@ use crate::CadError;
 /// The domain of the project file that holds the drawing.
 pub const DRAWING_DOMAIN: &str = "drawing";
 
-/// The first line of the domain; the number is the version of its text.
+/// The first line of the domain; the number is the version of its text. Version 2 is written only
+/// when the sheet has a broken view, a note or an attribute, so a sheet without them is still read
+/// by a program that knows version 1 only.
 pub const HEADER: &str = "drawing 1";
+
+/// The first line of a sheet that has a broken view, a note or an attribute.
+pub const HEADER_2: &str = "drawing 2";
 
 /// What a view looks at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,6 +176,65 @@ pub struct View {
     pub detail: Option<Detail>,
     /// The material that the hatching of a section follows, when the person names one.
     pub hatch: Option<String>,
+    /// The range of the length that a broken view leaves out.
+    pub brk: Option<BreakCut>,
+    /// The lines of a newer program that the record keeps.
+    pub extra: Vec<String>,
+}
+
+/// The range that a broken view leaves out, in the coordinates of its picture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BreakCut {
+    /// Whether the range is along the axis across the picture (`u`) or up it (`v`).
+    pub along_u: bool,
+    /// Where the range starts, in nanometres.
+    pub from_nm: i64,
+    /// Where it ends, in nanometres.
+    pub to_nm: i64,
+}
+
+/// What a note points at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoteAnchor {
+    /// A point of the picture of a view, in nanometres; it moves with the view.
+    View {
+        /// The view.
+        view: Id,
+        /// The point across the picture.
+        u_nm: i64,
+        /// The point up the picture.
+        v_nm: i64,
+    },
+    /// A face of the box of a node of the history, as a view shows it; when the node is gone the
+    /// note is reported and not drawn.
+    Face {
+        /// The view that shows the face.
+        view: Id,
+        /// The node.
+        node: Id,
+        /// The axis across the face.
+        axis: Axis,
+        /// The low or the high face.
+        side: Side,
+    },
+}
+
+/// A note: a free text on the sheet with a leader to a view or to a face, and when the person
+/// wants it the mark of a centre where the leader ends. There is no roughness or welding symbol.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Note {
+    /// Its identity.
+    pub id: Id,
+    /// The text, one line.
+    pub text: String,
+    /// What it points at.
+    pub anchor: NoteAnchor,
+    /// Where the text starts, on the sheet, in micrometres.
+    pub at: (i64, i64),
+    /// Whether the end of the leader has the cross of a centre mark.
+    pub centre: bool,
+    /// The layer it is drawn on.
+    pub layer: String,
     /// The lines of a newer program that the record keeps.
     pub extra: Vec<String>,
 }
@@ -182,6 +254,7 @@ impl View {
             section: None,
             detail: None,
             hatch: None,
+            brk: None,
             extra: Vec::new(),
         }
     }
@@ -477,6 +550,8 @@ pub struct PartInfo {
     pub material: Option<String>,
     /// The description.
     pub description: Option<String>,
+    /// The free attributes, by key.
+    pub attrs: BTreeMap<String, String>,
     /// The lines of a newer program that the record keeps.
     pub extra: Vec<String>,
 }
@@ -540,6 +615,8 @@ pub struct Plan {
     pub dims: Vec<Dim>,
     /// The balloons, in order.
     pub balloons: Vec<Balloon>,
+    /// The notes, in order.
+    pub notes: Vec<Note>,
 }
 
 fn bad(why: impl Into<String>) -> CadError {
@@ -550,6 +627,34 @@ fn bad(why: impl Into<String>) -> CadError {
 /// space at either end, not empty and at most `max` characters.
 pub fn valid_text(s: &str, max: usize) -> bool {
     !s.is_empty() && s.chars().count() <= max && s.trim() == s && !s.chars().any(char::is_control)
+}
+
+/// Checks the key and the value of an attribute against the limits of the settings: a key of the
+/// characters of `sheet.attr.key_charset`, a value of one line with no space at either end, both
+/// not empty and not longer than the settings allow, a value in the character set the settings say.
+pub fn valid_attr(key: &str, value: &str, s: &SheetSettings) -> Result<(), CadError> {
+    let a = &s.attr;
+    let bad = |why: String| CadError::PlanAttr(why);
+    if key.is_empty() || key.chars().count() > a.key_max {
+        return Err(bad(format!("a key is from 1 to {} characters", a.key_max)));
+    }
+    if let Some(c) = key.chars().find(|c| !a.key_charset.contains(*c)) {
+        return Err(bad(format!(
+            "the key {key} has the character {c:?}, which the settings do not allow"
+        )));
+    }
+    if !valid_text(value, a.value_max) {
+        return Err(bad(format!(
+            "the value of {key} is one line of up to {} characters, with no space at either end",
+            a.value_max
+        )));
+    }
+    if a.value_charset == super::settings::ValueCharset::Ascii && !value.is_ascii() {
+        return Err(bad(format!(
+            "the value of {key} has a character that is not ASCII"
+        )));
+    }
+    Ok(())
 }
 
 impl Plan {
@@ -576,7 +681,15 @@ impl Plan {
             views: Vec::new(),
             dims: Vec::new(),
             balloons: Vec::new(),
+            notes: Vec::new(),
         }
+    }
+
+    /// Whether the sheet needs version 2 of the text: it has a broken view, a note or an attribute.
+    pub fn needs_v2(&self) -> bool {
+        !self.notes.is_empty()
+            || self.views.iter().any(|v| v.brk.is_some())
+            || self.parts.values().any(|p| !p.attrs.is_empty())
     }
 
     /// Whether a layer is shown (the drawing may change what the settings say).
@@ -737,6 +850,7 @@ impl Plan {
         self.views.iter().any(|v| v.id == id)
             || self.dims.iter().any(|d| d.id == id)
             || self.balloons.iter().any(|b| b.id == id)
+            || self.notes.iter().any(|n| n.id == id)
     }
 
     /// The view of an id.
@@ -947,9 +1061,150 @@ impl Plan {
         let p = self.parts.entry(node).or_default();
         p.material = (!material.is_empty()).then(|| material.to_string());
         p.description = (!description.is_empty()).then(|| description.to_string());
-        if p.material.is_none() && p.description.is_none() && p.extra.is_empty() {
+        if p.material.is_none()
+            && p.description.is_none()
+            && p.attrs.is_empty()
+            && p.extra.is_empty()
+        {
             self.parts.remove(&node);
         }
+        Ok(())
+    }
+
+    /// Sets a free attribute of a part (a node of the history), or changes its value. The keys,
+    /// the values and their number are under the limits of the settings.
+    pub fn set_attr(
+        &mut self,
+        node: Id,
+        key: &str,
+        value: &str,
+        s: &SheetSettings,
+    ) -> Result<(), CadError> {
+        valid_attr(key, value, s)?;
+        if !self.parts.contains_key(&node) && self.parts.len() >= s.max_parts {
+            return Err(bad(format!("more than {} parts", s.max_parts)));
+        }
+        let mut next = self.clone();
+        next.parts
+            .entry(node)
+            .or_default()
+            .attrs
+            .insert(key.to_string(), value.to_string());
+        next.validate(s)?;
+        *self = next;
+        Ok(())
+    }
+
+    /// Takes an attribute away; the key must be there.
+    pub fn remove_attr(&mut self, node: Id, key: &str) -> Result<(), CadError> {
+        let info = self
+            .parts
+            .get_mut(&node)
+            .ok_or_else(|| CadError::UnknownName(node.to_string()))?;
+        if info.attrs.remove(key).is_none() {
+            return Err(CadError::UnknownName(key.to_string()));
+        }
+        if info.material.is_none()
+            && info.description.is_none()
+            && info.attrs.is_empty()
+            && info.extra.is_empty()
+        {
+            self.parts.remove(&node);
+        }
+        Ok(())
+    }
+
+    /// The value of an attribute of a part.
+    pub fn attr(&self, node: Id, key: &str) -> Option<&str> {
+        self.parts
+            .get(&node)
+            .and_then(|p| p.attrs.get(key))
+            .map(String::as_str)
+    }
+
+    /// Makes a view a broken view with the range given, or an ordinary one with `None`. The layer
+    /// OUTLINE must not be locked.
+    pub fn set_break(
+        &mut self,
+        view: Id,
+        brk: Option<BreakCut>,
+        s: &SheetSettings,
+    ) -> Result<(), CadError> {
+        self.need_unlocked("OUTLINE", s)?;
+        let at = self
+            .views
+            .iter()
+            .position(|v| v.id == view)
+            .ok_or_else(|| CadError::UnknownName(view.to_string()))?;
+        let mut next = self.clone();
+        next.views[at].brk = brk;
+        next.validate(s)?;
+        *self = next;
+        Ok(())
+    }
+
+    /// Adds a note. Its layer must not be locked.
+    pub fn add_note(&mut self, note: Note, s: &SheetSettings) -> Result<(), CadError> {
+        self.need_unlocked(&note.layer, s)?;
+        if self.notes.len() >= s.max_notes {
+            return Err(CadError::PlanNote(format!(
+                "more than {} notes",
+                s.max_notes
+            )));
+        }
+        if self.id_in_use(note.id) {
+            return Err(CadError::Duplicate(note.id.to_string()));
+        }
+        let mut next = self.clone();
+        next.notes.push(note);
+        next.validate(s)?;
+        *self = next;
+        Ok(())
+    }
+
+    /// Takes a note away.
+    pub fn remove_note(&mut self, id: Id, s: &SheetSettings) -> Result<(), CadError> {
+        let at = self
+            .notes
+            .iter()
+            .position(|n| n.id == id)
+            .ok_or_else(|| CadError::UnknownName(id.to_string()))?;
+        self.need_unlocked(&self.notes[at].layer, s)?;
+        self.notes.remove(at);
+        Ok(())
+    }
+
+    /// Moves the text of a note (the leader follows). The layer of the note must not be locked.
+    pub fn move_note(&mut self, id: Id, at: (i64, i64), s: &SheetSettings) -> Result<(), CadError> {
+        let i = self
+            .notes
+            .iter()
+            .position(|n| n.id == id)
+            .ok_or_else(|| CadError::UnknownName(id.to_string()))?;
+        self.need_unlocked(&self.notes[i].layer, s)?;
+        if at.0.abs() > 100_000_000 || at.1.abs() > 100_000_000 {
+            return Err(CadError::PlanNote(
+                "a note is within a hundred metres of the origin".into(),
+            ));
+        }
+        self.notes[i].at = at;
+        Ok(())
+    }
+
+    /// Moves the plane of the cut of a section view. The layer SECTION must not be locked.
+    pub fn move_cut(&mut self, view: Id, at_nm: i64, s: &SheetSettings) -> Result<(), CadError> {
+        self.need_unlocked("SECTION", s)?;
+        let i = self
+            .views
+            .iter()
+            .position(|v| v.id == view && v.section.is_some())
+            .ok_or_else(|| CadError::UnknownName(view.to_string()))?;
+        let mut next = self.clone();
+        if let Some(c) = next.views[i].section.as_mut() {
+            c.at_nm = at_nm;
+        }
+        next.validate(s)?;
+        *self = next;
         Ok(())
     }
 
@@ -965,6 +1220,12 @@ impl Plan {
             if parse_scale(&format!("{n}:{d}")).is_none() {
                 return Err(bad("the scale is from 1:1000 to 1000:1"));
             }
+        }
+        if self.notes.len() > s.max_notes {
+            return Err(CadError::PlanNote(format!(
+                "more than {} notes",
+                s.max_notes
+            )));
         }
         if self.views.len() > s.max_views
             || self.dims.len() > s.max_dims
@@ -1090,6 +1351,46 @@ impl Plan {
                 }
             }
         }
+        for n in &self.notes {
+            if !ids.insert(n.id) {
+                return Err(bad(format!("the id {} is used twice", n.id)));
+            }
+            let note = |why: &str| CadError::PlanNote(why.to_string());
+            if !valid_text(&n.text, s.note.max_chars) {
+                return Err(note(&format!(
+                    "a note is one line of up to {} characters",
+                    s.note.max_chars
+                )));
+            }
+            if s.layer(&n.layer).is_none() {
+                return Err(bad(format!("the layer {} is not in the settings", n.layer)));
+            }
+            if n.at.0.abs() > 100_000_000 || n.at.1.abs() > 100_000_000 {
+                return Err(note("a note is within a hundred metres of the origin"));
+            }
+            let (view, big) = match &n.anchor {
+                NoteAnchor::View { view, u_nm, v_nm } => (
+                    *view,
+                    u_nm.abs() > 1_000_000_000_000 || v_nm.abs() > 1_000_000_000_000,
+                ),
+                NoteAnchor::Face { view, .. } => (*view, false),
+            };
+            if big {
+                return Err(note("the anchor is within a kilometre of the origin"));
+            }
+            match self.view(view) {
+                None => return Err(note("the note points into a view that is not there")),
+                Some(v) => {
+                    if matches!(n.anchor, NoteAnchor::Face { .. })
+                        && (v.kind.depth_axis().is_none() || matches!(v.source, Source::Sketch(_)))
+                    {
+                        return Err(note(
+                            "a face is shown by the front, the top or the right view of a solid",
+                        ));
+                    }
+                }
+            }
+        }
         for (node, n) in &self.numbers {
             if *n == 0 || *n >= self.next_item {
                 return Err(bad(format!(
@@ -1152,6 +1453,15 @@ impl Plan {
                     return Err(bad("a text of the bill is not valid"));
                 }
             }
+            if p.attrs.len() > s.attr.max_per_node {
+                return Err(CadError::PlanAttr(format!(
+                    "more than {} attributes in a part",
+                    s.attr.max_per_node
+                )));
+            }
+            for (k, v) in &p.attrs {
+                valid_attr(k, v, s)?;
+            }
         }
         let lines = self
             .head_extra
@@ -1159,6 +1469,7 @@ impl Plan {
             .chain(self.views.iter().flat_map(|v| v.extra.iter()))
             .chain(self.dims.iter().flat_map(|v| v.extra.iter()))
             .chain(self.balloons.iter().flat_map(|v| v.extra.iter()))
+            .chain(self.notes.iter().flat_map(|v| v.extra.iter()))
             .chain(self.revisions.iter().flat_map(|v| v.extra.iter()))
             .chain(self.parts.values().flat_map(|v| v.extra.iter()));
         for l in lines {
@@ -1178,6 +1489,7 @@ impl Plan {
                 .map(|v| v.extra.len())
                 .max()
                 .unwrap_or(0),
+            self.notes.iter().map(|v| v.extra.len()).max().unwrap_or(0),
             self.parts
                 .values()
                 .map(|v| v.extra.len())
@@ -1208,6 +1520,31 @@ impl Plan {
         if let Some(h) = &v.hatch {
             if !valid_text(h, s.max_text) {
                 return Err(sec("the material of the hatching is one line".into()));
+            }
+        }
+        if let Some(b) = &v.brk {
+            let brk = |why: String| CadError::PlanBreak(format!("{}: {why}", v.name));
+            if v.kind.depth_axis().is_none() || matches!(v.source, Source::Sketch(_)) {
+                return Err(brk(
+                    "a break is made in a view of a solid, from the front, the top or the right"
+                        .into(),
+                ));
+            }
+            if v.section.is_some() || v.detail.is_some() {
+                return Err(brk("a section or a detail view cannot be broken".into()));
+            }
+            let big = 1_000_000_000_000;
+            if b.from_nm.abs() > big || b.to_nm.abs() > big {
+                return Err(brk("the range is within a kilometre of the origin".into()));
+            }
+            if b.to_nm <= b.from_nm {
+                return Err(brk("the range ends before it starts".into()));
+            }
+            if b.to_nm - b.from_nm <= s.brk.gap_nm {
+                return Err(brk(format!(
+                    "the range is not longer than the gap of the break marks ({} nm)",
+                    s.brk.gap_nm
+                )));
             }
         }
         let used = |label: &str| {
@@ -1252,6 +1589,12 @@ impl Plan {
             match parent {
                 Some(i) if i < me => {
                     let pv = &self.views[i];
+                    if pv.brk.is_some() {
+                        return Err(CadError::PlanBreak(format!(
+                            "{}: a detail cannot enlarge a broken view",
+                            v.name
+                        )));
+                    }
                     if pv.kind == ViewKind::Sketch || v.kind != pv.kind {
                         return Err(sec(
                             "a detail has the kind of its view, and that view is of a solid".into(),
@@ -1291,7 +1634,7 @@ impl Plan {
             o.push_str(&s);
             o.push('\n');
         };
-        line(HEADER.to_string());
+        line(if self.needs_v2() { HEADER_2 } else { HEADER }.to_string());
         line(format!("format {}", self.format));
         line(format!(
             "orientation {}",
@@ -1350,6 +1693,9 @@ impl Plan {
             if let Some(d) = &p.description {
                 line(format!("description {d}"));
             }
+            for (k, v) in &p.attrs {
+                line(format!("attr {k} {v}"));
+            }
             for x in &p.extra {
                 line(x.clone());
             }
@@ -1402,6 +1748,14 @@ impl Plan {
             if let Some(h) = &v.hatch {
                 line(format!("hatch {h}"));
             }
+            if let Some(b) = &v.brk {
+                line(format!(
+                    "break {} {} {}",
+                    if b.along_u { "u" } else { "v" },
+                    b.from_nm,
+                    b.to_nm
+                ));
+            }
             for x in &v.extra {
                 line(x.clone());
             }
@@ -1446,6 +1800,32 @@ impl Plan {
                 line(x.clone());
             }
         }
+        for n in &self.notes {
+            line(format!("note {} {}", n.id, n.text));
+            line(match &n.anchor {
+                NoteAnchor::View { view, u_nm, v_nm } => {
+                    format!("anchor view {view} {u_nm} {v_nm}")
+                }
+                NoteAnchor::Face {
+                    view,
+                    node,
+                    axis,
+                    side,
+                } => format!(
+                    "anchor face {view} {node} {} {}",
+                    axis.name(),
+                    if *side == Side::Min { "min" } else { "max" }
+                ),
+            });
+            line(format!("at {} {}", n.at.0, n.at.1));
+            if n.centre {
+                line("centre 1".to_string());
+            }
+            line(format!("layer {}", n.layer));
+            for x in &n.extra {
+                line(x.clone());
+            }
+        }
         o.into_bytes()
     }
 
@@ -1461,9 +1841,9 @@ impl Plan {
         }
         let text = std::str::from_utf8(bytes).map_err(|_| bad("the drawing is not text"))?;
         let mut it = text.split('\n');
-        if it.next() != Some(HEADER) {
+        if !matches!(it.next(), Some(HEADER | HEADER_2)) {
             return Err(bad(
-                "the first line is not `drawing 1` (a newer version is not read)",
+                "the first line is not `drawing 1` or `drawing 2` (a newer version is not read)",
             ));
         }
         let lines: Vec<&str> = it.collect();
@@ -1519,6 +1899,11 @@ impl Plan {
                     }
                     Cur::Balloon => {
                         if let Some(x) = p.balloons.last_mut() {
+                            x.extra.push(line);
+                        }
+                    }
+                    Cur::Note => {
+                        if let Some(x) = p.notes.last_mut() {
                             x.extra.push(line);
                         }
                     }
@@ -1669,6 +2054,18 @@ impl Plan {
                     }
                     cur = Cur::Part(id);
                 }
+                (Cur::Part(id), "attr") => {
+                    let (k, v) = rest
+                        .split_once(' ')
+                        .ok_or_else(|| bad(format!("line {at}: attr needs a key and a value")))?;
+                    let info = p
+                        .parts
+                        .get_mut(id)
+                        .ok_or_else(|| bad(format!("line {at}: no part")))?;
+                    if info.attrs.insert(k.to_string(), v.to_string()).is_some() {
+                        return Err(bad(format!("line {at}: the attribute {k} twice")));
+                    }
+                }
                 (Cur::Part(id), "material") | (Cur::Part(id), "description") => {
                     let info = p
                         .parts
@@ -1812,6 +2209,29 @@ impl Plan {
                         }
                     }
                 }
+                (Cur::View, "break") => {
+                    let f: Vec<&str> = rest.split(' ').collect();
+                    let [axis, from, to] = f.as_slice() else {
+                        return Err(bad(format!(
+                            "line {at}: break needs u or v, a start and an end"
+                        )));
+                    };
+                    let along_u = match *axis {
+                        "u" => true,
+                        "v" => false,
+                        _ => return Err(bad(format!("line {at}: u or v"))),
+                    };
+                    let cut = BreakCut {
+                        along_u,
+                        from_nm: int(from)?,
+                        to_nm: int(to)?,
+                    };
+                    if let Some(v) = p.views.last_mut() {
+                        if v.brk.replace(cut).is_some() {
+                            return Err(bad(format!("line {at}: break twice")));
+                        }
+                    }
+                }
                 (Cur::View, "hatch") => {
                     if let Some(v) = p.views.last_mut() {
                         if v.hatch.replace(rest.to_string()).is_some() {
@@ -1927,6 +2347,78 @@ impl Plan {
                         d.layer = rest.to_string();
                     }
                 }
+                (_, "note") => {
+                    head_done = true;
+                    let (a, text) = rest
+                        .split_once(' ')
+                        .ok_or_else(|| bad(format!("line {at}: note needs an id and a text")))?;
+                    let id = id_of(a)?;
+                    p.notes.push(Note {
+                        id,
+                        text: text.to_string(),
+                        anchor: NoteAnchor::View {
+                            view: id,
+                            u_nm: 0,
+                            v_nm: 0,
+                        },
+                        at: (0, 0),
+                        centre: false,
+                        layer: "NOTE".to_string(),
+                        extra: Vec::new(),
+                    });
+                    cur = Cur::Note;
+                }
+                (Cur::Note, "anchor") => {
+                    let f: Vec<&str> = rest.split(' ').collect();
+                    let anchor = match f.as_slice() {
+                        ["view", v, u, w] => NoteAnchor::View {
+                            view: id_of(v)?,
+                            u_nm: int(u)?,
+                            v_nm: int(w)?,
+                        },
+                        ["face", v, n, a, sd] => NoteAnchor::Face {
+                            view: id_of(v)?,
+                            node: id_of(n)?,
+                            axis: Axis::from_name(a)
+                                .ok_or_else(|| bad(format!("line {at}: x, y or z")))?,
+                            side: match *sd {
+                                "min" => Side::Min,
+                                "max" => Side::Max,
+                                _ => return Err(bad(format!("line {at}: min or max"))),
+                            },
+                        },
+                        _ => {
+                            return Err(bad(format!(
+                            "line {at}: an anchor is `view VIEW U V` or `face VIEW NODE AXIS SIDE`"
+                        )))
+                        }
+                    };
+                    if let Some(n) = p.notes.last_mut() {
+                        n.anchor = anchor;
+                    }
+                }
+                (Cur::Note, "at") => {
+                    let (a, b) = rest
+                        .split_once(' ')
+                        .ok_or_else(|| bad(format!("line {at}: two numbers")))?;
+                    let pt = (int(a)?, int(b)?);
+                    if let Some(n) = p.notes.last_mut() {
+                        n.at = pt;
+                    }
+                }
+                (Cur::Note, "centre") => {
+                    if rest != "1" {
+                        return Err(bad(format!("line {at}: centre is 1 when it is there")));
+                    }
+                    if let Some(n) = p.notes.last_mut() {
+                        n.centre = true;
+                    }
+                }
+                (Cur::Note, "layer") => {
+                    if let Some(n) = p.notes.last_mut() {
+                        n.layer = rest.to_string();
+                    }
+                }
                 (_, "balloon") => {
                     head_done = true;
                     let (a, name) = rest
@@ -1973,6 +2465,7 @@ enum Cur {
     Dim,
     Balloon,
     Revision,
+    Note,
 }
 
 impl Document {

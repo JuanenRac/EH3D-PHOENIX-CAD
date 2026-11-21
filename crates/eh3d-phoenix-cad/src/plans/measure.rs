@@ -256,6 +256,8 @@ pub struct Frame {
     pub origin: (i64, i64),
     /// The scale `n:d`.
     pub scale: (u32, u32),
+    /// The squeeze of a broken view: `lo` and `hi` are the box of the picture after it.
+    pub brk: Option<super::brk::Warp>,
 }
 
 fn scaled(v: i64, n: u32, d: u32) -> i64 {
@@ -272,6 +274,7 @@ fn scaled(v: i64, n: u32, d: u32) -> i64 {
 impl Frame {
     /// A point of the picture on the sheet.
     pub fn map(&self, p: (i64, i64)) -> (i64, i64) {
+        let p = self.brk.map_or(p, |w| w.point(p));
         (
             self.origin.0 + scaled(p.0 - self.lo.0, self.scale.0, self.scale.1),
             self.origin.1 + scaled(p.1 - self.lo.1, self.scale.0, self.scale.1),

@@ -207,6 +207,57 @@ pub struct RevisionSettings {
     pub numbering: RevisionNumbering,
 }
 
+/// The broken view: how much of the length is left between the two break marks and how the marks
+/// are drawn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BreakStyle {
+    /// The length of the part that is left between the two marks, in nanometres of the model.
+    pub gap_nm: i64,
+    /// How far the zigzag of a mark goes to each side, on the sheet, in micrometres.
+    pub amplitude_um: i64,
+    /// The zigzags of one mark.
+    pub teeth: u32,
+    /// How far a mark goes past the part, on the sheet, in micrometres.
+    pub overshoot_um: i64,
+}
+
+/// The notes with a leader.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteStyle {
+    /// The most characters of a note.
+    pub max_chars: usize,
+    /// The height of the text, in micrometres.
+    pub text_height_um: i64,
+    /// Half the length of an arm of the cross of a centre mark, in micrometres.
+    pub centre_mark_um: i64,
+    /// A note, a balloon or a line of a cut that is dragged lands on a multiple of this.
+    pub drag_snap_um: i64,
+}
+
+/// Which characters the value of an attribute may have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueCharset {
+    /// Any character that is not a control one.
+    Printable,
+    /// Printable ASCII only.
+    Ascii,
+}
+
+/// The limits of the free attributes of an object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttrSettings {
+    /// The most attributes of one part.
+    pub max_per_node: usize,
+    /// The most characters of a key.
+    pub key_max: usize,
+    /// The most characters of a value.
+    pub value_max: usize,
+    /// The characters a key is made of.
+    pub key_charset: String,
+    /// The characters a value may have.
+    pub value_charset: ValueCharset,
+}
+
 /// The pattern of a type of line, in tenths of the width of the line: the dash, the gap and, for
 /// the dash-dot, the dot and the second gap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -288,6 +339,18 @@ pub struct SheetSettings {
     pub title_templates: BTreeMap<String, TitleTemplate>,
     /// The table of revisions.
     pub revisions: RevisionSettings,
+    /// The broken view.
+    pub brk: BreakStyle,
+    /// The notes.
+    pub note: NoteStyle,
+    /// The free attributes.
+    pub attr: AttrSettings,
+    /// The keys of the attributes shown as columns of the bill, in order.
+    pub bom_attr_columns: Vec<String>,
+    /// The fields of the title block that an attribute of the main part fills: (field, key).
+    pub title_from_attr: Vec<(String, String)>,
+    /// The most notes of a sheet.
+    pub max_notes: usize,
     /// The largest drawing file that is read.
     pub max_file_bytes: usize,
     /// The most views of a sheet.
@@ -665,6 +728,81 @@ impl SheetSettings {
                 _ => return Err(bad("sheet.revisions.numbering is letters or numbers".into())),
             },
         };
+        let brk = BreakStyle {
+            gap_nm: um(c, "sheet.break.gap", 1000, 1_000_000_000)? * 1000,
+            amplitude_um: um(c, "sheet.break.amplitude", 100, 50_000)?,
+            teeth: count(c, "sheet.break.teeth", 1, 16)?,
+            overshoot_um: um(c, "sheet.break.overshoot", 0, 100_000)?,
+        };
+        let note = NoteStyle {
+            max_chars: count(c, "sheet.note.max_chars", 8, 1000)? as usize,
+            text_height_um: um(c, "sheet.note.text_height", 500, 100_000)?,
+            centre_mark_um: um(c, "sheet.note.centre_mark", 500, 100_000)?,
+            drag_snap_um: um(c, "sheet.note.drag_snap", 10, 100_000)?,
+        };
+        let attr = AttrSettings {
+            max_per_node: count(c, "sheet.attr.max_per_node", 1, 256)? as usize,
+            key_max: count(c, "sheet.attr.key_max", 1, 64)? as usize,
+            value_max: count(c, "sheet.attr.value_max", 1, 1000)? as usize,
+            key_charset: {
+                let cs = text(c, "sheet.attr.key_charset")?;
+                if cs.is_empty()
+                    || cs.len() > 128
+                    || !cs.bytes().all(|b| b.is_ascii_graphic())
+                    || cs
+                        .bytes()
+                        .enumerate()
+                        .any(|(i, b)| cs.as_bytes()[..i].contains(&b))
+                {
+                    return Err(bad(
+                        "sheet.attr.key_charset: from 1 to 128 printable ASCII characters, none twice, no space".into(),
+                    ));
+                }
+                cs.to_string()
+            },
+            value_charset: match text(c, "sheet.attr.value_charset")? {
+                "printable" => ValueCharset::Printable,
+                "ascii" => ValueCharset::Ascii,
+                _ => return Err(bad("sheet.attr.value_charset is printable or ascii".into())),
+            },
+        };
+        let bom_attr_columns: Vec<String> = text(c, "sheet.bom.attr_columns")?
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+        if bom_attr_columns.len() > 4
+            || bom_attr_columns.iter().enumerate().any(|(i, k)| {
+                k.is_empty()
+                    || k.chars().count() > attr.key_max
+                    || !k.chars().all(|ch| attr.key_charset.contains(ch))
+                    || bom_attr_columns[..i].contains(k)
+            })
+        {
+            return Err(bad(
+                "sheet.bom.attr_columns: up to 4 different keys made of the characters of sheet.attr.key_charset".into(),
+            ));
+        }
+        let mut title_from_attr = Vec::new();
+        for pair in text(c, "sheet.titleblock.from_attr")?.split_whitespace() {
+            let (field, key) = pair.split_once(':').ok_or_else(|| {
+                bad(format!(
+                    "sheet.titleblock.from_attr: {pair} is not field:key"
+                ))
+            })?;
+            if !is_word(field)
+                || key.is_empty()
+                || key.chars().count() > attr.key_max
+                || !key.chars().all(|ch| attr.key_charset.contains(ch))
+                || title_from_attr
+                    .iter()
+                    .any(|(f, _): &(String, String)| f == field)
+            {
+                return Err(bad(format!(
+                    "sheet.titleblock.from_attr: {pair} is not a field of the title block and a key, each field once"
+                )));
+            }
+            title_from_attr.push((field.to_string(), key.to_string()));
+        }
         Ok(SheetSettings {
             default_format,
             default_portrait,
@@ -698,6 +836,12 @@ impl SheetSettings {
             title_template,
             title_templates,
             revisions,
+            brk,
+            note,
+            attr,
+            bom_attr_columns,
+            title_from_attr,
+            max_notes: count(c, "sheet.max_notes", 1, 100_000)? as usize,
             max_file_bytes: count(c, "sheet.max_file_bytes", 1024, 1 << 30)? as usize,
             max_views: count(c, "sheet.max_views", 1, 256)? as usize,
             max_dims: count(c, "sheet.max_dims", 1, 100_000)? as usize,

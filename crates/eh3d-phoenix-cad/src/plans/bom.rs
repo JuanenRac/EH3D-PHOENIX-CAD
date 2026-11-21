@@ -33,6 +33,9 @@ pub struct BomLine {
     pub description: String,
     /// What it is made of.
     pub material: String,
+    /// The values of the attributes that the settings show as columns, in the order of
+    /// `sheet.bom.attr_columns` (empty when the part has none of that key).
+    pub attrs: Vec<String>,
 }
 
 /// The nodes that are parts, with their quantity, in the order the walk finds them.
@@ -173,6 +176,11 @@ impl Plan {
                     material: info
                         .and_then(|p| p.material.clone())
                         .unwrap_or_else(|| s.default_material.clone()),
+                    attrs: s
+                        .bom_attr_columns
+                        .iter()
+                        .map(|k| self.attr(*id, k).unwrap_or_default().to_string())
+                        .collect(),
                 }
             })
             .collect();
@@ -185,6 +193,12 @@ impl Plan {
 /// `=`, `+`, `-`, `@` or a tab gets a quote in front, and a field with a comma or a quote is
 /// quoted.
 pub fn to_csv(lines: &[BomLine]) -> String {
+    to_csv_cols(lines, &[])
+}
+
+/// The bill as comma separated values with a column for each key of `columns` after the material
+/// (the values are those of [`BomLine::attrs`], so the keys are those of `sheet.bom.attr_columns`).
+pub fn to_csv_cols(lines: &[BomLine], columns: &[String]) -> String {
     fn field(t: &str) -> String {
         let t = if t.starts_with(['=', '+', '-', '@', '\t']) {
             format!("'{t}")
@@ -197,15 +211,25 @@ pub fn to_csv(lines: &[BomLine]) -> String {
             t
         }
     }
-    let mut out = String::from("item,quantity,description,material\n");
+    let mut out = String::from("item,quantity,description,material");
+    for k in columns {
+        out.push(',');
+        out.push_str(&field(k));
+    }
+    out.push('\n');
     for l in lines {
         out.push_str(&format!(
-            "{},{},{},{}\n",
+            "{},{},{},{}",
             l.number,
             l.quantity,
             field(&l.description),
             field(&l.material)
         ));
+        for k in 0..columns.len() {
+            out.push(',');
+            out.push_str(&field(l.attrs.get(k).map_or("", String::as_str)));
+        }
+        out.push('\n');
     }
     out
 }

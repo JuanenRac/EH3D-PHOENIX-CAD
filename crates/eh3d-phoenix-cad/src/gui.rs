@@ -12,7 +12,7 @@ use crate::enclosure::Face;
 use crate::export::Format;
 use crate::lang::{Lang, Msg};
 use crate::panels::{default_drawing_name, Panel, PanelState, SketchFormat};
-use crate::plans::panel::{PlanState, Tone as PlanTone};
+use crate::plans::panel::{FormAction, PlanForm, PlanState, Tone as PlanTone};
 use crate::plans::prim::{Anchor as PlanAnchor, Shape as PlanShape};
 use crate::scene::{Kind, Line2};
 use crate::shot::{ShotRequest, ShotTheme, StartView, PATIENCE_FRAMES};
@@ -128,6 +128,7 @@ struct App {
     drew_sketch: bool,
     /// The panel of the drawing sheets, and the project it was last read from.
     plans: PlanState,
+    plans_form: PlanForm,
     plans_seen: Option<PathBuf>,
 }
 
@@ -160,6 +161,7 @@ impl App {
             drew_view3d: false,
             drew_sketch: false,
             plans: PlanState::with_defaults(),
+            plans_form: PlanForm::default(),
             plans_seen: None,
         }
     }
@@ -2723,6 +2725,9 @@ impl App {
             }
         }
         let mut action: Option<&'static str> = None;
+        let mut form_action: Option<FormAction> = None;
+        let choices = self.plans.view_choices();
+        let kinds = self.plans_form.kinds(&self.plans);
         let mut toggles: Vec<(String, bool)> = Vec::new();
         // the pointer on the picture of the sheet, in micrometres: 0 pressed, 1 moved, 2 released
         let mut pointer_events: Vec<(u8, (i64, i64))> = Vec::new();
@@ -2764,10 +2769,117 @@ impl App {
             if let Some(n) = &self.plans.note {
                 ui.label(egui::RichText::new(&n.text).color(tone(n.tone)));
             }
+            if has_sheet && !choices.is_empty() {
+                // one set of buttons, with no modes: the sheet is changed from here and by dragging
+                let form = &mut self.plans_form;
+                egui::CollapsingHeader::new(Msg::PlEditSheet.tr(lang))
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        let name_of = |i: usize| {
+                            choices
+                                .get(i)
+                                .or_else(|| choices.last())
+                                .map(|(_, n)| n.clone())
+                                .unwrap_or_default()
+                        };
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(Msg::PlViewOne.tr(lang));
+                            egui::ComboBox::from_id_salt("plans_view")
+                                .selected_text(name_of(form.view))
+                                .show_ui(ui, |ui| {
+                                    for (i, (_, n)) in choices.iter().enumerate() {
+                                        ui.selectable_value(&mut form.view, i, n);
+                                    }
+                                });
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut form.date)
+                                    .hint_text(Msg::TbDate.tr(lang))
+                                    .desired_width(70.0),
+                            );
+                            ui.add(
+                                egui::TextEdit::singleline(&mut form.description)
+                                    .hint_text(Msg::PlDescription.tr(lang))
+                                    .desired_width(130.0),
+                            );
+                            ui.add(
+                                egui::TextEdit::singleline(&mut form.author)
+                                    .hint_text(Msg::TbAuthor.tr(lang))
+                                    .desired_width(70.0),
+                            );
+                            if ui.button(Msg::PlAddRevision.tr(lang)).clicked() {
+                                form_action = Some(FormAction::Revision);
+                            }
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button(Msg::PlAddDims.tr(lang)).clicked() {
+                                form_action = Some(FormAction::Dims);
+                            }
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            let shown = kinds
+                                .get(form.kind)
+                                .or_else(|| kinds.first())
+                                .map_or("-", |k| k.name());
+                            egui::ComboBox::from_id_salt("plans_kind")
+                                .selected_text(shown)
+                                .show_ui(ui, |ui| {
+                                    for (i, k) in kinds.iter().enumerate() {
+                                        ui.selectable_value(&mut form.kind, i, k.name());
+                                    }
+                                });
+                            ui.add(
+                                egui::TextEdit::singleline(&mut form.position)
+                                    .hint_text(Msg::PlPosition.tr(lang))
+                                    .desired_width(80.0),
+                            );
+                            if ui
+                                .add_enabled(
+                                    !kinds.is_empty(),
+                                    egui::Button::new(Msg::PlAddSection.tr(lang)),
+                                )
+                                .clicked()
+                            {
+                                form_action = Some(FormAction::Section);
+                            }
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut form.text)
+                                    .hint_text(Msg::PlText.tr(lang))
+                                    .desired_width(200.0),
+                            );
+                            if ui.button(Msg::PlAddNote.tr(lang)).clicked() {
+                                form_action = Some(FormAction::Note);
+                            }
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.checkbox(&mut form.along_u, "u");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut form.from)
+                                    .hint_text(Msg::PlFrom.tr(lang))
+                                    .desired_width(70.0),
+                            );
+                            ui.add(
+                                egui::TextEdit::singleline(&mut form.to)
+                                    .hint_text(Msg::PlTo.tr(lang))
+                                    .desired_width(70.0),
+                            );
+                            if ui.button(Msg::PlAddBreak.tr(lang)).clicked() {
+                                form_action = Some(FormAction::Break);
+                            }
+                            if ui.button("×").clicked() {
+                                form_action = Some(FormAction::Unbreak);
+                            }
+                        });
+                    });
+            }
             for (title, list) in [
                 (Msg::PlViews, &lines.views),
                 (Msg::PlDims, &lines.dims),
                 (Msg::PlBalloons, &lines.balloons),
+                (Msg::PlNotes, &lines.note_items),
                 (Msg::PlBomHead, &lines.bom),
                 (Msg::TbRevision, &lines.revisions),
             ] {
@@ -2919,6 +3031,12 @@ impl App {
             };
             if let Err(e) = r {
                 self.plans.note = Some(PlanState::error_line(&e, lang));
+            }
+        }
+        if let Some(fa) = form_action {
+            match self.plans_form.apply(&mut self.plans, fa, lang) {
+                Ok(l) => self.plans.note = Some(l),
+                Err(e) => self.plans.note = Some(PlanState::error_line(&e, lang)),
             }
         }
         let result = match action {

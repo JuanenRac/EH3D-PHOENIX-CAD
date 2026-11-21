@@ -9,21 +9,26 @@ use std::path::{Path, PathBuf};
 
 use eh3d_container::IdGenerator;
 
-use super::measure::{Issue, Model};
-use super::model::{revision_label, Plan, Source, View, ViewKind};
+use super::drag::{pick_balloon, pick_note, snap, BalloonPart};
+use super::measure::{view_axes, Issue, Model};
+use super::model::{
+    next_label, revision_label, BreakCut, Dim, DimKind, Note, NoteAnchor, Plan, Ref, SectionCut,
+    Side, Source, View, ViewKind,
+};
 use super::out;
 use super::scene::{evaluate, Evaluation};
 use super::settings::SheetSettings;
 use crate::config::Settings;
 use crate::enclosure::Id;
 use crate::export::write_bytes;
-use crate::featuredag::{FeatureDag, HistorySettings};
+use crate::featuredag::{FeatureDag, HistorySettings, Kind};
 use crate::lang::{fill, Lang, Msg};
 use crate::messages;
 use crate::project::Document;
 use crate::sketch::settings::SketchSettings;
 use crate::sketch::Sketch;
 use crate::store;
+use crate::units::parse_length;
 use crate::CadError;
 
 /// How a line of the panel is shown.
@@ -74,6 +79,8 @@ pub struct PanelLines {
     pub dims: Vec<Line>,
     /// The balloons.
     pub balloons: Vec<Line>,
+    /// The notes with a leader.
+    pub note_items: Vec<Line>,
     /// The bill.
     pub bom: Vec<Line>,
     /// The revisions of the table, oldest first.
@@ -121,16 +128,28 @@ pub fn lines_of(plan: &Plan, eval: &Evaluation, s: &SheetSettings, lang: Lang) -
         Tone::Plain,
     ));
     for v in &eval.views {
-        out.views.push(line(
-            fill(
-                Msg::PlView.tr(lang),
-                &[
-                    &v.name,
-                    v.kind.name(),
-                    &v.visible.to_string(),
-                    &v.hidden.to_string(),
-                ],
-            ),
+        let mut text = fill(
+            Msg::PlView.tr(lang),
+            &[
+                &v.name,
+                v.kind.name(),
+                &v.visible.to_string(),
+                &v.hidden.to_string(),
+            ],
+        );
+        if let Some(b) = plan.view(v.id).and_then(|p| p.brk) {
+            let removed = (b.to_nm - b.from_nm - s.brk.gap_nm).max(0);
+            text.push_str("; ");
+            text.push_str(&fill(
+                Msg::PlBroken.tr(lang),
+                &[&super::prim::nm_text(removed, 3)],
+            ));
+        }
+        out.views.push(line(text, Tone::Plain));
+    }
+    for n in &eval.notes {
+        out.note_items.push(line(
+            fill(Msg::PlNoteRow.tr(lang), &[&n.id.to_string(), &n.text]),
             Tone::Plain,
         ));
     }
@@ -203,6 +222,176 @@ pub fn lines_of(plan: &Plan, eval: &Evaluation, s: &SheetSettings, lang: Lang) -
     out
 }
 
+/// The only feature that no other one takes, which is the result of a history with no tip chosen.
+fn sole_sink(dag: &FeatureDag) -> Option<Id> {
+    let used: std::collections::BTreeSet<Id> = dag
+        .nodes()
+        .values()
+        .flat_map(|n| match &n.kind {
+            Kind::Feature { inputs, .. } => inputs.clone(),
+            Kind::Parameter { .. } => Vec::new(),
+        })
+        .collect();
+    let mut sinks = dag
+        .nodes()
+        .values()
+        .filter(|n| matches!(n.kind, Kind::Feature { .. }) && !used.contains(&n.id));
+    match (sinks.next(), sinks.next()) {
+        (Some(only), None) => Some(only.id),
+        _ => None,
+    }
+}
+
+/// What is being dragged with the pointer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DragTarget {
+    /// The line of a dimension.
+    Dim(Id),
+    /// A balloon: the circle or the end of its leader.
+    Balloon(Id, BalloonPart),
+    /// The line of the cut of a section view (the id is the one of the section view).
+    Cut(Id),
+    /// The text of a note.
+    Note(Id),
+}
+
+/// A length typed in millimetres: a bare number is millimetres, a number with a unit is read with it.
+pub fn parse_mm(text: &str) -> Result<i64, CadError> {
+    let t = text.trim();
+    let l = if t.chars().any(char::is_alphabetic) {
+        parse_length(t)?
+    } else {
+        parse_length(&format!("{t} mm"))?
+    };
+    Ok(l.get())
+}
+
+/// The kinds of section a view can be the line of the cut of: the views that look along an axis
+/// other than the one the parent shows across it (a top view shows `x` and `y`, so it can carry the
+/// cut of a front view, across `y`, or of a right view, across `x`).
+pub fn section_kinds_for(parent: ViewKind) -> Vec<ViewKind> {
+    let Some((u, v)) = view_axes(parent) else {
+        return Vec::new();
+    };
+    [ViewKind::Front, ViewKind::Top, ViewKind::Right]
+        .into_iter()
+        .filter(|k| k.depth_axis().is_some_and(|a| a == u || a == v) && *k != parent)
+        .collect()
+}
+
+/// What the buttons of the panel do. There is one set of them: no mode, no second view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormAction {
+    /// Add a revision to the table.
+    Revision,
+    /// Dimension the chosen view with its two overall sizes.
+    Dims,
+    /// Add a section cut from the chosen view.
+    Section,
+    /// Add a note to the chosen view.
+    Note,
+    /// Break the chosen view over a range.
+    Break,
+    /// Make the chosen view whole again.
+    Unbreak,
+}
+
+/// The texts and choices of the form of the panel, with no window in it: the window shows these
+/// and calls [`PlanForm::apply`] when a button is pressed; what the button does is decided and tested
+/// here.
+#[derive(Debug, Clone, Default)]
+pub struct PlanForm {
+    /// The date of a revision.
+    pub date: String,
+    /// What the revision says.
+    pub description: String,
+    /// Who made it.
+    pub author: String,
+    /// The text of a note.
+    pub text: String,
+    /// The position of a cut, in millimetres.
+    pub position: String,
+    /// Where the range of a break starts, in millimetres.
+    pub from: String,
+    /// Where it ends, in millimetres.
+    pub to: String,
+    /// The chosen view (an index into the views of the sheet).
+    pub view: usize,
+    /// The chosen kind of section (an index into [`PlanForm::kinds`]).
+    pub kind: usize,
+    /// Whether the break is along the axis across the picture.
+    pub along_u: bool,
+}
+
+impl PlanForm {
+    /// The view that is chosen, when the sheet has any (an index past the end is the last one).
+    pub fn chosen(&self, st: &PlanState) -> Option<(Id, ViewKind)> {
+        let plan = st.plan.as_ref()?;
+        let v = plan.views.get(self.view).or_else(|| plan.views.last())?;
+        Some((v.id, v.kind))
+    }
+
+    /// The kinds of section the chosen view can carry the line of the cut of.
+    pub fn kinds(&self, st: &PlanState) -> Vec<ViewKind> {
+        self.chosen(st)
+            .map(|(_, k)| section_kinds_for(k))
+            .unwrap_or_default()
+    }
+
+    /// Does what the button says with what the form holds, and says what was done.
+    pub fn apply(
+        &mut self,
+        st: &mut PlanState,
+        action: FormAction,
+        lang: Lang,
+    ) -> Result<Line, CadError> {
+        let done = |what: String| line(fill(Msg::PlAdded.tr(lang), &[&what]), Tone::Good);
+        let (view, _) = self
+            .chosen(st)
+            .ok_or_else(|| CadError::Plan(Msg::PlNone.tr(Lang::En).to_string()))?;
+        let out = match action {
+            FormAction::Revision => {
+                let n = st.add_revision(&self.date, &self.description, &self.author, lang)?;
+                self.description.clear();
+                let label = revision_label(n, st.sheet.revisions.numbering);
+                done(format!("{} {label}", Msg::TbRevision.tr(lang)))
+            }
+            FormAction::Dims => {
+                let n = st.add_overall_dims(view, lang)?;
+                done(format!("{} {n}", Msg::PlDims.tr(lang)))
+            }
+            FormAction::Section => {
+                let kinds = self.kinds(st);
+                let kind = kinds
+                    .get(self.kind)
+                    .or_else(|| kinds.first())
+                    .copied()
+                    .ok_or_else(|| {
+                        CadError::PlanSection(
+                            "the view shows no axis across which a cut can be made".to_string(),
+                        )
+                    })?;
+                let label = st.add_section(view, kind, &self.position, lang)?;
+                done(format!("{label}-{label}"))
+            }
+            FormAction::Note => {
+                st.add_note(&self.text, view, lang)?;
+                self.text.clear();
+                done(Msg::PlNotes.tr(lang).to_string())
+            }
+            FormAction::Break => {
+                st.add_break(view, self.along_u, &self.from, &self.to, lang)?;
+                done(Msg::PlAddBreak.tr(lang).to_string())
+            }
+            FormAction::Unbreak => {
+                st.remove_break(view, lang)?;
+                done(Msg::PlViewOne.tr(lang).to_string())
+            }
+        };
+        Ok(out)
+    }
+}
+
 /// What the panel keeps: the settings, the project it is on and the sheet.
 #[derive(Debug)]
 pub struct PlanState {
@@ -224,8 +413,8 @@ pub struct PlanState {
     pub dirty: bool,
     /// What the last action said, as text, and whether it is a problem.
     pub note: Option<Line>,
-    /// The dimension whose line is being dragged.
-    pub drag: Option<Id>,
+    /// What is being dragged.
+    pub drag: Option<DragTarget>,
     dag: Option<FeatureDag>,
     sketches: Vec<Sketch>,
     ids: IdGenerator<eh3d_container::SystemClock, eh3d_container::SystemRandom>,
@@ -357,6 +546,7 @@ impl PlanState {
                     section: None,
                     detail: None,
                     hatch: None,
+                    brk: None,
                     extra: Vec::new(),
                 },
                 &self.sheet,
@@ -382,35 +572,326 @@ impl PlanState {
             .map(|(id, _)| id)
     }
 
-    /// Starts to drag the line of the dimension under the point, when there is one.
-    pub fn begin_drag(&mut self, pointer: (i64, i64)) -> bool {
+    /// What is under a point of the sheet and can be dragged: a balloon (its circle or the end of
+    /// its leader), the text of a note, the line of a cut or the line of a dimension, in that order.
+    pub fn pick(&self, pointer: (i64, i64)) -> Option<DragTarget> {
+        let plan = self.plan.as_ref()?;
+        let eval = self.eval.as_ref()?;
         let tolerance = self.sheet.dim.drag_snap_um.max(2000);
-        self.drag = self.pick_dim(pointer, tolerance);
+        if let Some((id, part)) = pick_balloon(
+            &plan.balloons,
+            self.sheet.balloon_radius_um,
+            pointer,
+            tolerance,
+        ) {
+            return Some(DragTarget::Balloon(id, part));
+        }
+        if let Some(id) = pick_note(
+            &plan.notes,
+            self.sheet.note.text_height_um,
+            pointer,
+            tolerance,
+        ) {
+            return Some(DragTarget::Note(id));
+        }
+        if let Some(c) = eval
+            .cuts
+            .iter()
+            .filter(|c| c.draggable && c.hit(pointer, tolerance))
+            .min_by_key(|c| c.distance(pointer))
+        {
+            return Some(DragTarget::Cut(c.view));
+        }
+        self.pick_dim(pointer, tolerance).map(DragTarget::Dim)
+    }
+
+    /// Starts to drag what is under the point, when there is something.
+    pub fn begin_drag(&mut self, pointer: (i64, i64)) -> bool {
+        self.drag = self.pick(pointer);
         self.drag.is_some()
     }
 
-    /// Moves the line that is being dragged to the point; the distance lands on a multiple of
-    /// `sheet.dim.drag_snap`. Returns the new distance from the view.
+    /// Moves what is being dragged to the point. A line of a dimension lands on a multiple of
+    /// `sheet.dim.drag_snap` (the result is its distance from the view, in micrometres); the line
+    /// of a cut lands on a multiple of `sheet.note.drag_snap` of the sheet (the result is the
+    /// position of the plane in nanometres); a balloon and a note land on the same grid (the
+    /// result is 0).
     pub fn drag_to(&mut self, pointer: (i64, i64), lang: Lang) -> Result<Option<i64>, CadError> {
-        let (Some(id), Some(eval)) = (self.drag, self.eval.as_ref()) else {
+        let (Some(target), Some(eval)) = (self.drag, self.eval.as_ref()) else {
             return Ok(None);
         };
-        let Some(line) = eval.dims.iter().find(|d| d.id == id).and_then(|d| d.line) else {
-            return Ok(None);
+        let grid = self.sheet.note.drag_snap_um;
+        let result = match target {
+            DragTarget::Dim(id) => {
+                let Some(line) = eval.dims.iter().find(|d| d.id == id).and_then(|d| d.line) else {
+                    return Ok(None);
+                };
+                let offset = line.offset_for(pointer, self.sheet.dim.drag_snap_um);
+                let Some(plan) = self.plan.as_mut() else {
+                    return Ok(None);
+                };
+                plan.set_dim_offset(id, Some(offset), &self.sheet)?;
+                offset
+            }
+            DragTarget::Cut(view) => {
+                let Some(line) = eval.cuts.iter().find(|c| c.view == view).copied() else {
+                    return Ok(None);
+                };
+                let at_nm = line.at_nm_for(pointer, grid);
+                let Some(plan) = self.plan.as_mut() else {
+                    return Ok(None);
+                };
+                plan.move_cut(view, at_nm, &self.sheet)?;
+                at_nm
+            }
+            DragTarget::Balloon(id, part) => {
+                let Some(plan) = self.plan.as_mut() else {
+                    return Ok(None);
+                };
+                let Some(b) = plan.balloons.iter().find(|b| b.id == id) else {
+                    return Ok(None);
+                };
+                let p = snap(pointer, grid);
+                let (at, to) = match part {
+                    BalloonPart::Circle => (p, b.to),
+                    BalloonPart::Tip => (b.at, p),
+                };
+                plan.move_balloon(id, at, to, &self.sheet)?;
+                0
+            }
+            DragTarget::Note(id) => {
+                let Some(plan) = self.plan.as_mut() else {
+                    return Ok(None);
+                };
+                plan.move_note(id, snap(pointer, grid), &self.sheet)?;
+                0
+            }
         };
-        let offset = line.offset_for(pointer, self.sheet.dim.drag_snap_um);
-        let Some(plan) = self.plan.as_mut() else {
-            return Ok(None);
-        };
-        plan.set_dim_offset(id, Some(offset), &self.sheet)?;
         self.dirty = true;
         self.evaluate(lang)?;
-        Ok(Some(offset))
+        Ok(Some(result))
     }
 
-    /// Ends the dragging of a line.
+    /// Ends the dragging.
     pub fn end_drag(&mut self) {
         self.drag = None;
+    }
+
+    fn new_id(&mut self) -> Result<Id, CadError> {
+        self.ids
+            .generate()
+            .map_err(|e| CadError::Plan(e.to_string()))
+    }
+
+    /// The views of the sheet, for a list to choose from: the id and the name.
+    pub fn view_choices(&self) -> Vec<(Id, String)> {
+        self.plan
+            .as_ref()
+            .map(|p| p.views.iter().map(|v| (v.id, v.name.clone())).collect())
+            .unwrap_or_default()
+    }
+
+    /// Dimensions a view of the front, the top or the right with the two overall sizes of the part
+    /// it looks at (across the picture and up it), tied to the faces of its node of the history.
+    /// Returns how many were added.
+    pub fn add_overall_dims(&mut self, view: Id, lang: Lang) -> Result<usize, CadError> {
+        let node = {
+            let plan = self
+                .plan
+                .as_ref()
+                .ok_or_else(|| CadError::PlanDim("there is no sheet".to_string()))?;
+            let v = plan
+                .view(view)
+                .ok_or_else(|| CadError::UnknownName(view.to_string()))?;
+            match (&v.source, self.dag.as_ref()) {
+                (Source::Node(n), _) => *n,
+                (Source::Tip, Some(d)) => d
+                    .tip()
+                    .or_else(|| sole_sink(d))
+                    .ok_or_else(|| CadError::PlanDim("the history has no result".to_string()))?,
+                _ => {
+                    return Err(CadError::PlanDim(
+                        "the view looks at no solid of the history".to_string(),
+                    ))
+                }
+            }
+        };
+        let (kind, name) = {
+            let v = self.plan.as_ref().and_then(|p| p.view(view));
+            let v = v.ok_or_else(|| CadError::UnknownName(view.to_string()))?;
+            (v.kind, v.name.clone())
+        };
+        let (u, w) = view_axes(kind).ok_or_else(|| {
+            CadError::PlanDim("lengths are drawn in the front, top and right views".to_string())
+        })?;
+        let mut next = self
+            .plan
+            .clone()
+            .ok_or_else(|| CadError::PlanDim("there is no sheet".to_string()))?;
+        let mut added = 0;
+        for (axis, word) in [(u, "width"), (w, "height")] {
+            let id = self.new_id()?;
+            next.add_dim(
+                Dim {
+                    id,
+                    name: format!("{name} {word}"),
+                    kind: DimKind::Linear,
+                    refs: vec![
+                        Ref::Face {
+                            node,
+                            axis,
+                            side: Side::Min,
+                        },
+                        Ref::Face {
+                            node,
+                            axis,
+                            side: Side::Max,
+                        },
+                    ],
+                    view,
+                    offset_um: None,
+                    step_um: None,
+                    tol: None,
+                    layer: "DIMENSION".to_string(),
+                    extra: Vec::new(),
+                },
+                &self.sheet,
+            )?;
+            added += 1;
+        }
+        self.plan = Some(next);
+        self.dirty = true;
+        self.evaluate(lang)?;
+        Ok(added)
+    }
+
+    /// Adds a section view of the solid that `parent` looks at, of kind `kind`, cut across the axis
+    /// that `kind` looks along at the position typed (millimetres; a unit may follow), with the next
+    /// free letters. The line of the cut is drawn in `parent`. Returns the letters.
+    pub fn add_section(
+        &mut self,
+        parent: Id,
+        kind: ViewKind,
+        position: &str,
+        lang: Lang,
+    ) -> Result<String, CadError> {
+        let at_nm = parse_mm(position)?;
+        let plan = self
+            .plan
+            .as_ref()
+            .ok_or_else(|| CadError::PlanSection("there is no sheet".to_string()))?;
+        let pv = plan
+            .view(parent)
+            .ok_or_else(|| CadError::UnknownName(parent.to_string()))?;
+        if !section_kinds_for(pv.kind).contains(&kind) {
+            return Err(CadError::PlanSection(format!(
+                "the view {} does not show the axis of a cut for a {} view",
+                pv.name,
+                kind.name()
+            )));
+        }
+        let label = next_label(plan);
+        let source = pv.source.clone();
+        let id = self.new_id()?;
+        let mut view = View::plain(id, &format!("section {label}"), kind, source, false);
+        view.section = Some(SectionCut {
+            parent,
+            at_nm,
+            label: label.clone(),
+        });
+        let plan = self
+            .plan
+            .as_mut()
+            .ok_or_else(|| CadError::PlanSection("there is no sheet".to_string()))?;
+        plan.add_view(view, &self.sheet)?;
+        self.dirty = true;
+        self.evaluate(lang)?;
+        Ok(label)
+    }
+
+    /// Adds a note with a leader to the middle of the picture of a view. The text starts to the
+    /// right of the view and above it, inside the frame of the sheet; it is dragged from there.
+    pub fn add_note(&mut self, text: &str, view: Id, lang: Lang) -> Result<Id, CadError> {
+        let eval = self
+            .eval
+            .as_ref()
+            .ok_or_else(|| CadError::PlanNote("there is no sheet".to_string()))?;
+        let r = eval
+            .views
+            .iter()
+            .find(|v| v.id == view)
+            .ok_or_else(|| CadError::PlanNote("the view could not be made".to_string()))?;
+        let (lo, hi) = r.picture;
+        let anchor = NoteAnchor::View {
+            view,
+            u_nm: lo.0 + (hi.0 - lo.0) / 2,
+            v_nm: lo.1 + (hi.1 - lo.1) / 2,
+        };
+        let h = self.sheet.note.text_height_um;
+        let width = text.chars().count() as i64 * h * 6 / 10;
+        let max_x = eval.scene.width_um - self.sheet.margin_um - width;
+        let max_y = eval.scene.height_um - self.sheet.margin_um - h;
+        let at = (
+            (r.origin.0 + r.size.0 + self.sheet.view_gap_um / 2)
+                .min(max_x)
+                .max(self.sheet.margin_um),
+            (r.origin.1 + r.size.1).min(max_y).max(self.sheet.margin_um),
+        );
+        let id = self.new_id()?;
+        let plan = self
+            .plan
+            .as_mut()
+            .ok_or_else(|| CadError::PlanNote("there is no sheet".to_string()))?;
+        plan.add_note(
+            Note {
+                id,
+                text: text.to_string(),
+                anchor,
+                at,
+                centre: false,
+                layer: "NOTE".to_string(),
+                extra: Vec::new(),
+            },
+            &self.sheet,
+        )?;
+        self.dirty = true;
+        self.evaluate(lang)?;
+        Ok(id)
+    }
+
+    /// Makes a view a broken view: the range typed (millimetres, in the coordinates of the picture)
+    /// is left out. `along_u` says whether the range is along the axis across the picture or up it.
+    pub fn add_break(
+        &mut self,
+        view: Id,
+        along_u: bool,
+        from: &str,
+        to: &str,
+        lang: Lang,
+    ) -> Result<(), CadError> {
+        let cut = BreakCut {
+            along_u,
+            from_nm: parse_mm(from)?,
+            to_nm: parse_mm(to)?,
+        };
+        let plan = self
+            .plan
+            .as_mut()
+            .ok_or_else(|| CadError::PlanBreak("there is no sheet".to_string()))?;
+        plan.set_break(view, Some(cut), &self.sheet)?;
+        self.dirty = true;
+        self.evaluate(lang)
+    }
+
+    /// Makes a broken view an ordinary one again.
+    pub fn remove_break(&mut self, view: Id, lang: Lang) -> Result<(), CadError> {
+        let plan = self
+            .plan
+            .as_mut()
+            .ok_or_else(|| CadError::PlanBreak("there is no sheet".to_string()))?;
+        plan.set_break(view, None, &self.sheet)?;
+        self.dirty = true;
+        self.evaluate(lang)
     }
 
     /// Adds a revision to the table of the sheet (the date and the author are free texts).

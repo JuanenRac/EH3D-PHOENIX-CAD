@@ -12,6 +12,9 @@
 //!   isometric views, visible or hidden;
 //! * [`measure`]: dimensions tied to the nodes of the history and the elements of the sketches by
 //!   their ids, worked out again from the model every time, with the orphans found and named;
+//! * [`brk`]: the broken view (a long part drawn without the middle of its length) and its marks;
+//! * [`drag`]: what the pointer can take on the sheet (a line of a cut, a balloon, a note) and where it
+//!   lands;
 //! * [`bom`]: the bill of materials of the history and the stable numbers of its items;
 //! * [`sectioning`]: the section views (the cut, the hatching of the cut faces, the line of the cut)
 //!   and the detail views (the part of a view inside a circle or a rectangle, enlarged);
@@ -26,6 +29,8 @@
 //! by the tests only.
 
 pub mod bom;
+pub mod brk;
+pub mod drag;
 pub mod extended;
 pub mod geom;
 pub mod measure;

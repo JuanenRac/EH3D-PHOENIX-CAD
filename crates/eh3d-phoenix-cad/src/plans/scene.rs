@@ -7,13 +7,18 @@
 use std::collections::BTreeMap;
 
 use super::bom::{part_nodes, BomLine};
+use super::brk::{clip, marks as break_marks, warped_bounds, Warp};
+use super::drag::CutLine;
 use super::extended::{place as place_dims, DimLine, Slot};
 use super::geom::{bounds_of, view_segments};
-use super::measure::{draw, face_place, measure, view_axes, Frame, Issue, Measured, Model};
-use super::model::{
-    revision_label, Detail, DetailShape, DimKind, Place, Plan, SheetScale, Source, View, ViewKind,
+use super::measure::{
+    draw, face_place, measure, resolve, view_axes, Frame, Issue, Measured, Model, Resolved,
 };
-use super::prim::{mm_text, Anchor, Prim, Shape};
+use super::model::{
+    revision_label, Axis, Detail, DetailShape, DimKind, NoteAnchor, Place, Plan, Ref, SheetScale,
+    Source, View, ViewKind,
+};
+use super::prim::{mm_text, nm_text, Anchor, Prim, Shape};
 use super::sectioning::{
     clip_detail, clip_solid, cut_face, cut_marks, detail_box, hatch_lines, CutLayers, Rect,
 };
@@ -32,6 +37,8 @@ const BAD_DIM: &str = "PHOENIX-CAD-056";
 const BAD_BALLOON: &str = "PHOENIX-CAD-057";
 const BAD_TOL: &str = "PHOENIX-CAD-058";
 const BAD_SECTION: &str = "PHOENIX-CAD-059";
+const BAD_BREAK: &str = "PHOENIX-CAD-061";
+const BAD_NOTE: &str = "PHOENIX-CAD-062";
 
 type Fail = (&'static str, String);
 
@@ -67,6 +74,9 @@ pub struct ViewReport {
     pub origin: (i64, i64),
     /// The size of its picture on the sheet, in micrometres.
     pub size: (i64, i64),
+    /// The box of its picture in the coordinates of the picture, in nanometres (after the range of
+    /// a broken view is taken out).
+    pub picture: ((i64, i64), (i64, i64)),
     /// The visible lines.
     pub visible: usize,
     /// The hidden lines.
@@ -100,6 +110,17 @@ pub struct BalloonReport {
     pub number: Option<u32>,
 }
 
+/// What became of a note.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteReport {
+    /// Its id.
+    pub id: Id,
+    /// Its text.
+    pub text: String,
+    /// Where the end of its leader is on the sheet, or `None` when what it points at is gone.
+    pub tip: Option<(i64, i64)>,
+}
+
 /// Everything that evaluating a drawing gives.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Evaluation {
@@ -113,6 +134,10 @@ pub struct Evaluation {
     pub dims: Vec<DimReport>,
     /// The balloons.
     pub balloons: Vec<BalloonReport>,
+    /// The notes.
+    pub notes: Vec<NoteReport>,
+    /// The lines of the cuts of the section views, for picking and dragging them.
+    pub cuts: Vec<CutLine>,
     /// The bill, when the project has a history.
     pub bom: Vec<BomLine>,
     /// The problems, in the order of the records.
@@ -139,6 +164,8 @@ struct Built {
     hidden: usize,
     /// The faces the cut of a section leaves open, in the picture of the view.
     cut: Vec<Rect>,
+    /// The squeeze of a broken view; `lo` and `hi` are the box after it.
+    warp: Option<Warp>,
 }
 
 /// The layer to draw on: the one asked for when the settings have it, else the outline.
@@ -220,6 +247,7 @@ fn sketch_items(sk: &Sketch) -> Option<Built> {
             visible,
             hidden: 0,
             cut: Vec::new(),
+            warp: None,
         })
     }
 }
@@ -296,8 +324,42 @@ fn build_view(
         s.max_iso_tests,
     )
     .map_err(|e| bad(e.to_string()))?;
-    let (lo, hi) =
-        bounds_of(&segs).ok_or_else(|| bad("nothing to draw in this view".to_string()))?;
+    let (segs, warp) = match &v.brk {
+        None => (segs, None),
+        Some(b) => {
+            let w = Warp {
+                along_u: b.along_u,
+                from: b.from_nm,
+                to: b.to_nm,
+                gap: s.brk.gap_nm,
+            };
+            let (blo, bhi) = bounds_of(&segs)
+                .ok_or_else(|| (BAD_BREAK, "nothing to draw in this view".to_string()))?;
+            let (lo_c, hi_c) = if b.along_u {
+                (blo.0, bhi.0)
+            } else {
+                (blo.1, bhi.1)
+            };
+            if b.from_nm <= lo_c || b.to_nm >= hi_c {
+                return Err((
+                    BAD_BREAK,
+                    format!(
+                        "the range {} to {} mm is not inside the picture of the view ({} to {} mm)",
+                        nm_text(b.from_nm, 3),
+                        nm_text(b.to_nm, 3),
+                        nm_text(lo_c, 3),
+                        nm_text(hi_c, 3)
+                    ),
+                ));
+            }
+            (clip(&segs, &w), Some(w))
+        }
+    };
+    let bounds = match &warp {
+        Some(w) => warped_bounds(&segs, w),
+        None => bounds_of(&segs),
+    };
+    let (lo, hi) = bounds.ok_or_else(|| bad("nothing to draw in this view".to_string()))?;
     let hidden = segs.iter().filter(|g| g.hidden).count();
     let items = segs
         .into_iter()
@@ -316,6 +378,7 @@ fn build_view(
         visible,
         hidden,
         cut,
+        warp,
     })
 }
 
@@ -373,6 +436,7 @@ fn build_detail(d: &Detail, prior: &[(usize, &View, Built)]) -> Result<Built, Fa
         visible,
         hidden,
         cut: Vec::new(),
+        warp: None,
     })
 }
 
@@ -479,6 +543,7 @@ fn layout(
             hi: b.hi,
             origin: (0, 0),
             scale: sc,
+            brk: b.warp,
         };
         (sc, f.size(), f)
     };
@@ -756,11 +821,12 @@ pub fn evaluate(
             hi: b.hi,
             origin: p.origin,
             scale: p.scale,
+            brk: b.warp,
         };
         let (x1, y1) = (p.origin.0 + p.size.0, p.origin.1 + p.size.1);
         if p.origin.0 < margin || p.origin.1 < margin || x1 > sw - margin || y1 > sh - margin {
             issues.push(Issue {
-                code: BAD_VIEW,
+                code: if v.brk.is_some() { BAD_BREAK } else { BAD_VIEW },
                 subject: format!("view {}", v.name),
                 detail: format!(
                     "the view is not inside the frame of the sheet (box {} to {} by {} to {} mm)",
@@ -776,6 +842,25 @@ pub fn evaluate(
                 layer: layer_for(s, layer).to_string(),
                 shape: map_shape(shape, &frame),
             });
+        }
+        if let Some(w) = &b.warp {
+            let at = |c: i64| {
+                let p = frame.map(if w.along_u { (c, 0) } else { (0, c) });
+                if w.along_u {
+                    p.0
+                } else {
+                    p.1
+                }
+            };
+            prims.extend(break_marks(
+                layer_for(s, "BREAK"),
+                w,
+                at(w.from),
+                at(w.to),
+                p.origin,
+                (p.origin.0 + p.size.0, p.origin.1 + p.size.1),
+                &s.brk,
+            ));
         }
         if !b.cut.is_empty() {
             let rects: Vec<Rect> = b
@@ -832,13 +917,49 @@ pub fn evaluate(
             scale: p.scale,
             origin: p.origin,
             size: p.size,
+            picture: (b.lo, b.hi),
             visible: b.visible,
             hidden: b.hidden,
         });
     }
     // the lines of the cuts and the marks of the details, in the views they are drawn in
+    let mut cut_lines: Vec<CutLine> = Vec::new();
     for (_, v, _) in &built {
         if let Some(c) = &v.section {
+            if let Some(pf) = frames.get(&c.parent) {
+                if let (Some(a), Some((u, _))) =
+                    (v.kind.depth_axis().map(Axis::index), view_axes(pf.kind))
+                {
+                    let size = pf.size();
+                    let vertical = a == u.index();
+                    let (at_um, span, lo_nm, origin_um) = if vertical {
+                        (
+                            pf.map((c.at_nm, 0)).0,
+                            (pf.origin.1, pf.origin.1 + size.1),
+                            pf.lo.0,
+                            pf.origin.0,
+                        )
+                    } else {
+                        (
+                            pf.map((0, c.at_nm)).1,
+                            (pf.origin.0, pf.origin.0 + size.0),
+                            pf.lo.1,
+                            pf.origin.1,
+                        )
+                    };
+                    cut_lines.push(CutLine {
+                        view: v.id,
+                        vertical,
+                        at_um,
+                        span,
+                        at_nm: c.at_nm,
+                        lo_nm,
+                        origin_um,
+                        scale: pf.scale,
+                        draggable: pf.brk.is_none(),
+                    });
+                }
+            }
             let layers = CutLayers {
                 line: layer_for(s, "SECTION").to_string(),
                 mark: layer_for(s, "OUTLINE").to_string(),
@@ -968,6 +1089,14 @@ pub fn evaluate(
         }
     }
     // the table of the bill and the title block, at the lower right corner
+    let main_part: Option<Id> = plan
+        .views
+        .iter()
+        .find_map(|v| match v.source {
+            Source::Node(n) => Some(n),
+            _ => None,
+        })
+        .or_else(|| (bom.len() == 1).then(|| bom[0].node));
     let right = sw - margin;
     let mut y = margin;
     if s.title_block && rows > 0 {
@@ -986,8 +1115,16 @@ pub fn evaluate(
                 other => plan
                     .fields
                     .get(other)
-                    .or_else(|| s.title_values.get(other))
                     .cloned()
+                    .or_else(|| {
+                        let key = s
+                            .title_from_attr
+                            .iter()
+                            .find(|(f, _)| f == other)
+                            .map(|(_, k)| k.as_str())?;
+                        plan.attr(main_part?, key).map(str::to_string)
+                    })
+                    .or_else(|| s.title_values.get(other).cloned())
                     .unwrap_or_default(),
             };
             let label_h = tpl.row_um * 22 / 100;
@@ -1012,19 +1149,18 @@ pub fn evaluate(
     if bom_h > 0 {
         let w = s.bom_width_um.min(sw - 2 * margin);
         let x0 = right - w;
-        let widths = [
-            w / 10,
-            w / 10,
-            w * 55 / 100,
-            w - w / 10 - w / 10 - w * 55 / 100,
-        ];
-        let cols = [
-            x0,
-            x0 + widths[0],
-            x0 + widths[0] + widths[1],
-            x0 + widths[0] + widths[1] + widths[2],
-            right,
-        ];
+        let k = s.bom_attr_columns.len() as i64;
+        let attr_w = w * 10 / 100;
+        let mut widths = vec![w / 10, w / 10, w * 55 / 100 - attr_w * k];
+        widths.push(w - widths.iter().sum::<i64>() - attr_w * k);
+        widths.extend(std::iter::repeat_n(attr_w, s.bom_attr_columns.len()));
+        let mut cols = vec![x0];
+        for cw in &widths {
+            cols.push(cols[cols.len() - 1] + cw);
+        }
+        if let Some(last) = cols.last_mut() {
+            *last = right;
+        }
         let heads = [Msg::PlItem, Msg::PlQty, Msg::PlDescription, Msg::TbMaterial];
         let rh = s.bom_row_um;
         let th = rh * 55 / 100;
@@ -1034,18 +1170,22 @@ pub fn evaluate(
         {
             let ry = y + r as i64 * rh;
             prims.extend(rect("FRAME", x0, ry, right, ry + rh));
-            for x in &cols[1..4] {
+            for x in &cols[1..cols.len() - 1] {
                 prims.push(Prim::line("FRAME", (*x, ry), (*x, ry + rh)));
             }
-            let texts: [String; 4] = match row {
-                None => heads.map(|m| m.tr(lang).to_string()),
-                Some(l) => [
+            let mut texts: Vec<String> = match row {
+                None => heads.map(|m| m.tr(lang).to_string()).to_vec(),
+                Some(l) => vec![
                     l.number.to_string(),
                     l.quantity.to_string(),
                     l.description.clone(),
                     l.material.clone(),
                 ],
             };
+            match row {
+                None => texts.extend(s.bom_attr_columns.iter().cloned()),
+                Some(l) => texts.extend(l.attrs.iter().cloned()),
+            }
             for (c, t) in texts.iter().enumerate() {
                 prims.push(Prim::text(
                     "TEXT",
@@ -1155,6 +1295,83 @@ pub fn evaluate(
             Anchor::Middle,
         ));
     }
+    // the notes
+    let mut note_reports = Vec::new();
+    for n in &plan.notes {
+        let subject = format!("note {}", n.text);
+        let tip: Result<(i64, i64), Fail> = match &n.anchor {
+            NoteAnchor::View { view, u_nm, v_nm } => frames
+                .get(view)
+                .map(|f| f.map((*u_nm, *v_nm)))
+                .ok_or((BAD_NOTE, "its view could not be made".to_string())),
+            NoteAnchor::Face {
+                view,
+                node,
+                axis,
+                side,
+            } => match frames.get(view) {
+                None => Err((BAD_NOTE, "its view could not be made".to_string())),
+                Some(f) => resolve(
+                    &Ref::Face {
+                        node: *node,
+                        axis: *axis,
+                        side: *side,
+                    },
+                    model,
+                )
+                .and_then(|r| match (r, view_axes(f.kind)) {
+                    (Resolved::Face { axis, pos, lo, hi }, Some((ua, va))) => {
+                        let mid = |a: Axis| (lo[a.index()] + hi[a.index()]) / 2;
+                        Ok(f.map(if axis == ua {
+                            (pos, mid(va))
+                        } else if axis == va {
+                            (mid(ua), pos)
+                        } else {
+                            (mid(ua), mid(va))
+                        }))
+                    }
+                    _ => Err((BAD_NOTE, "the view shows no face".to_string())),
+                }),
+            },
+        };
+        note_reports.push(NoteReport {
+            id: n.id,
+            text: n.text.clone(),
+            tip: tip.as_ref().ok().copied(),
+        });
+        let tip = match tip {
+            Ok(p) => p,
+            Err((code, detail)) => {
+                issues.push(Issue {
+                    code,
+                    subject,
+                    detail,
+                });
+                continue;
+            }
+        };
+        let h = s.note.text_height_um;
+        prims.push(Prim::text(&n.layer, n.at, h, &n.text, Anchor::Start));
+        let from = (n.at.0 - h / 3, n.at.1 + h / 3);
+        let (dx, dy) = ((tip.0 - from.0) as f64, (tip.1 - from.1) as f64);
+        if dx.hypot(dy) > 1.0 {
+            prims.push(Prim::line(&n.layer, from, tip));
+            if !n.centre {
+                prims.extend(super::prim::arrow(
+                    &n.layer,
+                    tip,
+                    (-dx, -dy),
+                    s.dim.arrow_length_um,
+                    s.dim.arrow_width_um,
+                ));
+            }
+        }
+        if n.centre {
+            let m = s.note.centre_mark_um;
+            prims.push(Prim::line(&n.layer, (tip.0 - m, tip.1), (tip.0 + m, tip.1)));
+            prims.push(Prim::line(&n.layer, (tip.0, tip.1 - m), (tip.0, tip.1 + m)));
+        }
+    }
     // only the layers that are shown
     prims.retain(|p| plan.layer_visible(&p.layer, s));
     let mut layers = BTreeMap::new();
@@ -1181,6 +1398,8 @@ pub fn evaluate(
         views: view_reports,
         dims: dim_reports,
         balloons: balloon_reports,
+        notes: note_reports,
+        cuts: cut_lines,
         bom,
         issues,
         unverified_table: table.is_some_and(|t| !t.verified),

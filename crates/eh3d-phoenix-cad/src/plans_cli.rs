@@ -17,7 +17,7 @@ use crate::config::Settings;
 use crate::export::write_bytes;
 use crate::featuredag::{FeatureDag, HistorySettings};
 use crate::lang::{fill, Lang, Msg};
-use crate::plans::bom::to_csv;
+use crate::plans::bom::to_csv_cols;
 use crate::plans::measure::Model;
 use crate::plans::model::{Place, Plan, Source, View, ViewKind};
 use crate::plans::out;
@@ -258,6 +258,7 @@ fn export(args: &[String]) -> Result<(String, bool), String> {
                     section: None,
                     detail: None,
                     hatch: None,
+                    brk: None,
                     extra: Vec::new(),
                 },
                 &e.sheet,
@@ -307,7 +308,7 @@ fn export(args: &[String]) -> Result<(String, bool), String> {
         "svg" => out::to_svg(&eval.scene, &title).into_bytes(),
         "dxf" => out::to_dxf(&eval.scene).into_bytes(),
         "pdf" => out::to_pdf(&eval.scene, &title),
-        _ => to_csv(&eval.bom).into_bytes(),
+        _ => to_csv_cols(&eval.bom, &e.sheet.bom_attr_columns).into_bytes(),
     };
     write_bytes(
         Path::new(target),
@@ -387,6 +388,7 @@ mod tests {
                         section: None,
                         detail: None,
                         hatch: None,
+                        brk: None,
                         extra: Vec::new(),
                     },
                     &s,

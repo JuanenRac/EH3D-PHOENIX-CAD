@@ -894,6 +894,21 @@ messages! {
     PlIssues => ["Problems", "Problemas", "Probleme", "Problèmes", "Problemi", "問題", "问题", "Problemas"],
     PlBalloon => ["Balloon {0}: item {1}", "Globo {0}: elemento {1}", "Positionsnummer {0}: Position {1}", "Bulle {0} : article {1}", "Pallino {0}: voce {1}", "バルーン {0}：項目 {1}", "气球 {0}：第 {1} 项", "Balão {0}: item {1}"],
     PlRevRow => ["Revision {0}: {1}, {2} ({3})", "Revisión {0}: {1}, {2} ({3})", "Revision {0}: {1}, {2} ({3})", "Révision {0} : {1}, {2} ({3})", "Revisione {0}: {1}, {2} ({3})", "改訂 {0}：{1}、{2}（{3}）", "修订 {0}：{1}，{2}（{3}）", "Revisão {0}: {1}, {2} ({3})"],
+    PlNotes => ["Notes", "Notas", "Notizen", "Notes", "Note", "注記", "注释", "Notas"],
+    PlNoteRow => ["Note {0}: {1}", "Nota {0}: {1}", "Notiz {0}: {1}", "Note {0} : {1}", "Nota {0}: {1}", "注記 {0}：{1}", "注释 {0}：{1}", "Nota {0}: {1}"],
+    PlBroken => ["broken view, {0} mm left out", "vista rota, {0} mm omitidos", "unterbrochene Ansicht, {0} mm ausgelassen", "vue interrompue, {0} mm omis", "vista interrotta, {0} mm omessi", "破断ビュー（{0} mm 省略）", "断裂视图，省略 {0} mm", "vista interrompida, {0} mm omitidos"],
+    PlEditSheet => ["Edit the sheet", "Editar la hoja", "Blatt bearbeiten", "Modifier la feuille", "Modifica il foglio", "シートを編集", "编辑图纸页", "Editar a folha"],
+    PlAddRevision => ["Add revision", "Añadir revisión", "Revision hinzufügen", "Ajouter une révision", "Aggiungi revisione", "改訂を追加", "添加修订", "Adicionar revisão"],
+    PlAddDims => ["Dimension the view", "Acotar la vista", "Ansicht bemaßen", "Coter la vue", "Quota la vista", "ビューに寸法を入れる", "为视图标注尺寸", "Cotar a vista"],
+    PlAddSection => ["Add section", "Añadir sección", "Schnitt hinzufügen", "Ajouter une coupe", "Aggiungi sezione", "断面を追加", "添加剖视", "Adicionar corte"],
+    PlAddNote => ["Add note", "Añadir nota", "Notiz hinzufügen", "Ajouter une note", "Aggiungi nota", "注記を追加", "添加注释", "Adicionar nota"],
+    PlAddBreak => ["Break the view", "Romper la vista", "Ansicht unterbrechen", "Interrompre la vue", "Interrompi la vista", "ビューを破断", "断开视图", "Interromper a vista"],
+    PlPosition => ["Position (mm)", "Posición (mm)", "Position (mm)", "Position (mm)", "Posizione (mm)", "位置 (mm)", "位置 (mm)", "Posição (mm)"],
+    PlFrom => ["From (mm)", "Desde (mm)", "Von (mm)", "De (mm)", "Da (mm)", "開始 (mm)", "起点 (mm)", "De (mm)"],
+    PlTo => ["To (mm)", "Hasta (mm)", "Bis (mm)", "À (mm)", "A (mm)", "終了 (mm)", "终点 (mm)", "Até (mm)"],
+    PlText => ["Text", "Texto", "Text", "Texte", "Testo", "テキスト", "文本", "Texto"],
+    PlViewOne => ["View", "Vista", "Ansicht", "Vue", "Vista", "ビュー", "视图", "Vista"],
+    PlAdded => ["Added {0}", "Añadido {0}", "{0} hinzugefügt", "{0} ajouté", "Aggiunto {0}", "{0} を追加しました", "已添加 {0}", "Adicionado {0}"],
 }
 
 impl Msg {

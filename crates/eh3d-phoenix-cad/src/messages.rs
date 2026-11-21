@@ -792,6 +792,45 @@ const TEXTS: &[Row] = &[
             "Revisão inválida",
         ],
     ),
+    (
+        "PHOENIX-CAD-061",
+        [
+            "Broken view not valid",
+            "Vista rota no válida",
+            "Unterbrochene Ansicht ungültig",
+            "Vue interrompue non valide",
+            "Vista interrotta non valida",
+            "破断ビューが正しくありません",
+            "断裂视图无效",
+            "Vista interrompida inválida",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-062",
+        [
+            "Note not valid",
+            "Nota no válida",
+            "Notiz ungültig",
+            "Note non valide",
+            "Nota non valida",
+            "注記が正しくありません",
+            "注释无效",
+            "Nota inválida",
+        ],
+    ),
+    (
+        "PHOENIX-CAD-063",
+        [
+            "Attribute not valid",
+            "Atributo no válido",
+            "Attribut ungültig",
+            "Attribut non valide",
+            "Attributo non valido",
+            "属性が正しくありません",
+            "属性无效",
+            "Atributo inválido",
+        ],
+    ),
 ];
 
 /// The text of a diagnostic in a language (`en`, `es`, `de`, `fr`, `it`, `ja`, `zh` or `pt`), or

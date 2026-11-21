@@ -110,6 +110,7 @@ fn view(n: u16, kind: ViewKind, hidden: bool) -> View {
         section: None,
         detail: None,
         hatch: None,
+        brk: None,
         extra: Vec::new(),
     }
 }
@@ -1490,7 +1491,7 @@ fn panel_flow() {
         "{:?}",
         l.views
     );
-    assert_eq!(l.layers.len(), 10);
+    assert_eq!(l.layers.len(), 12);
     assert!(l.issues.is_empty());
     assert_eq!(
         st.lines(Lang::Es).head.unwrap().text,
@@ -2828,7 +2829,7 @@ fn line_groups() {
 #[test]
 fn settings_more() {
     let s = sheet();
-    assert_eq!(s.layers.len(), 10);
+    assert_eq!(s.layers.len(), 12);
     assert_eq!(s.hatch.default.angle_deg, 45);
     assert_eq!(s.hatch.materials["aluminium"].angle_deg, 135);
     assert_eq!(s.section.end_length_um, 6000);
@@ -2943,3 +2944,5 @@ fn fuzz_second() {
         }
     }
 }
+
+mod cc23;
