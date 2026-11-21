@@ -19,6 +19,7 @@ use crate::export::write_bytes;
 use crate::featuredag::{BuildState, FeatureDag, HistorySettings};
 use crate::glb;
 use crate::lang::{fill, Lang, Msg};
+use crate::mesh::number;
 use crate::prism::Solid;
 use crate::project::Document;
 use crate::solidquery;
@@ -101,13 +102,23 @@ fn csv(text: &str) -> String {
 fn check(args: &[String]) -> Result<(String, bool), String> {
     let a = Args::parse(
         args,
-        &["--config", "--glb", "--stl"],
+        &["--config", "--glb", "--stl", "--export"],
         &["--text", "--overwrite"],
     )?;
     let (dag, lib, ui) = open(&a, a.lang)?;
-    if a.has("--overwrite") && a.value("--glb").is_none() && a.value("--stl").is_none() {
-        return Err("--overwrite is for --glb and --stl".to_owned());
+    if a.has("--overwrite")
+        && a.value("--glb").is_none()
+        && a.value("--stl").is_none()
+        && a.value("--export").is_none()
+    {
+        return Err("--overwrite is for --glb, --stl and --export".to_owned());
     }
+    let export_format = match a.value("--export") {
+        None => None,
+        Some(target) => Some(stlsolid::FileFormat::from_name(target).ok_or_else(|| {
+            "--export: the name ends in .stl, .obj, .3mf, .ply or .off".to_owned()
+        })?),
+    };
     let Some(mut dag) = dag else {
         return if a.has("--text") {
             Ok((format!("{}\n", Msg::FeatNone.tr(a.lang)), true))
@@ -144,6 +155,35 @@ fn check(args: &[String]) -> Result<(String, bool), String> {
         let bytes = stlsolid::solid_to_stl(solid, lib.mesh.max_triangles, &lib_limits(&dag))
             .map_err(|e| error_text(&e, a.lang))?;
         let triangles = (bytes.len() - 84) / 50;
+        write_bytes(
+            Path::new(target),
+            &bytes,
+            a.has("--overwrite"),
+            None,
+            ui.export.max_kib,
+        )
+        .map_err(|e| error_text(&e, a.lang))?;
+        out.push_str(&fill(
+            Msg::MeshWrote.tr(a.lang),
+            &["1", &triangles.to_string(), target],
+        ));
+        out.push('\n');
+    }
+    if let (Some(target), Some(format)) = (a.value("--export"), export_format) {
+        let solid = dag
+            .result()
+            .ok_or_else(|| Msg::FeatNoResult.tr(a.lang).to_owned())?;
+        let name = Path::new(target)
+            .file_stem()
+            .and_then(|n| n.to_str())
+            .unwrap_or("history");
+        let limits = lib_limits(&dag);
+        let bytes = stlsolid::solid_to_file(solid, format, name, lib.mesh.max_triangles, &limits)
+            .map_err(|e| error_text(&e, a.lang))?;
+        let triangles = stlsolid::solid_to_mesh(solid, lib.mesh.max_triangles, &limits)
+            .map_err(|e| error_text(&e, a.lang))?
+            .triangles
+            .len();
         write_bytes(
             Path::new(target),
             &bytes,
@@ -259,7 +299,27 @@ fn built_solid(a: &Args) -> Result<(Solid, crate::prism::Limits), String> {
 }
 
 fn measure(args: &[String]) -> Result<(String, bool), String> {
-    let a = Args::parse(args, &["--config", "--min-wall"], &["--text"])?;
+    let a = Args::parse(args, &["--config", "--min-wall", "--section"], &["--text"])?;
+    let section = match a.value("--section") {
+        None => None,
+        Some(text) => {
+            let (axis, at) = text
+                .split_once('=')
+                .ok_or_else(|| "--section is AXIS=POSITION, like z=5 mm".to_owned())?;
+            let axis = AXES
+                .iter()
+                .position(|n| n.eq_ignore_ascii_case(axis.trim()))
+                .ok_or_else(|| "--section: the axis is x, y or z".to_owned())?;
+            let t = at.trim();
+            let with_unit = if t.chars().any(char::is_alphabetic) {
+                t.to_owned()
+            } else {
+                format!("{t} mm")
+            };
+            let l = crate::units::parse_length(&with_unit).map_err(|e| error_text(&e, a.lang))?;
+            Some((axis, l.get()))
+        }
+    };
     let min_wall = match a.value("--min-wall") {
         None => None,
         Some(text) => {
@@ -295,6 +355,22 @@ fn measure(args: &[String]) -> Result<(String, bool), String> {
         .map_err(fail)?
         .unwrap_or([0; 3]);
     let volume = solid.volume_nm3();
+    let mut shadows = Vec::new();
+    for (axis, name) in AXES.iter().enumerate() {
+        shadows.push((
+            *name,
+            solidquery::shadow_area_nm2(&solid, axis, &limits).map_err(fail)?,
+        ));
+    }
+    let sectioned = match section {
+        Some((axis, at)) => Some((
+            AXES[axis],
+            at,
+            solidquery::section_area_nm2(&solid, axis, at, &limits).map_err(fail)?,
+        )),
+        None => None,
+    };
+    let inertia = solidquery::inertia(&solid);
     let mut thin_rows = Vec::new();
     let mut thinnest = Vec::new();
     for (axis, name) in AXES.iter().enumerate() {
@@ -338,6 +414,35 @@ fn measure(args: &[String]) -> Result<(String, bool), String> {
             ));
             out.push('\n');
         }
+        for (name, area) in &shadows {
+            out.push_str(&fill(
+                Msg::MeasShadow.tr(a.lang),
+                &[name, &fixed(*area, 12)],
+            ));
+            out.push('\n');
+        }
+        if let Some((name, at, area)) = &sectioned {
+            out.push_str(&fill(
+                Msg::MeasSection.tr(a.lang),
+                &[name, &mm(*at), &fixed(*area, 12)],
+            ));
+            out.push('\n');
+        }
+        if let Some(i) = &inertia {
+            let t = &i.tensor;
+            out.push_str(&fill(
+                Msg::MeasInertia.tr(a.lang),
+                &[
+                    &number(t[0][0]),
+                    &number(t[1][1]),
+                    &number(t[2][2]),
+                    &number(t[0][1]),
+                    &number(t[1][2]),
+                    &number(t[2][0]),
+                ],
+            ));
+            out.push('\n');
+        }
         if let Some(limit) = min_wall {
             if thin_rows.is_empty() {
                 out.push_str(&fill(Msg::MeasNoWalls.tr(a.lang), &[&mm(limit)]));
@@ -373,6 +478,26 @@ fn measure(args: &[String]) -> Result<(String, bool), String> {
         }
         for (name, t) in &thinnest {
             out.push_str(&format!("thinnest,{name},{},nm\n", t.run.thickness()));
+        }
+        for (name, area) in &shadows {
+            out.push_str(&format!("shadow,{name},{area},nm2\n"));
+        }
+        if let Some((name, at, area)) = &sectioned {
+            out.push_str(&format!("section_at,{name},{at},nm\n"));
+            out.push_str(&format!("section,{name},{area},nm2\n"));
+        }
+        if let Some(i) = &inertia {
+            let t = &i.tensor;
+            for (key, value) in [
+                ("xx", t[0][0]),
+                ("yy", t[1][1]),
+                ("zz", t[2][2]),
+                ("xy", t[0][1]),
+                ("yz", t[1][2]),
+                ("zx", t[2][0]),
+            ] {
+                out.push_str(&format!("inertia,{key},{},mm5\n", number(value)));
+            }
         }
         for (name, w) in &thin_rows {
             out.push_str(&format!("thin_wall,{name},{},nm\n", w.run.thickness()));
@@ -758,6 +883,102 @@ mod tests {
         )
         .unwrap();
         assert!(run("history-check", &s(&[&path, "--overwrite"])).is_err());
+    }
+
+    #[test]
+    fn the_measures_include_the_shadows_a_section_and_the_inertia() {
+        let path = hollow_project("2 mm");
+        let (csv, ok) = run("history-measure", &s(&[&path, "--section", "z=5"])).unwrap();
+        assert!(ok, "{csv}");
+        // the closed cavity does not show in any shadow: 10 x 10 mm
+        for axis in ["x", "y", "z"] {
+            assert!(
+                csv.contains(&format!("\nshadow,{axis},100000000000000,nm2\n")),
+                "{csv}"
+            );
+        }
+        // through the middle the square of 10 mm less the cavity of 6 mm: 64 mm2
+        assert!(csv.contains("\nsection_at,z,5000000,nm\n"), "{csv}");
+        assert!(csv.contains("\nsection,z,64000000000000,nm2\n"), "{csv}");
+        // a cube of 10 mm is 1e5 / 6 on the diagonal, the cavity of 6 mm takes 6^5 / 6 = 1296
+        assert!(csv.contains("\ninertia,xx,15370.666667,mm5\n"), "{csv}");
+        assert!(csv.contains("\ninertia,zz,15370.666667,mm5\n"), "{csv}");
+        assert!(csv.contains("\ninertia,xy,0.000000,mm5\n"), "{csv}");
+        // no section asked, none given
+        let (plain, _) = run("history-measure", &s(&[&path])).unwrap();
+        assert!(!plain.contains("section"), "{plain}");
+        let (text, _) = run(
+            "history-measure",
+            &s(&[&path, "--section", "x=3 mm", "--text", "--lang", "de"]),
+        )
+        .unwrap();
+        assert!(
+            text.contains("Schatten entlang x: 100.000000 mm2"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Schnitt quer zu x bei 3.000000 mm: 64.000000 mm2"),
+            "{text}"
+        );
+        assert!(text.contains("Trägheit um den Schwerpunkt"), "{text}");
+        let (es, _) = run("history-measure", &s(&[&path, "--text", "--lang", "es"])).unwrap();
+        assert!(es.contains("Sombra a lo largo de z"), "{es}");
+        // a section that is not AXIS=POSITION could not run
+        for bad in ["", "z", "q=1", "z=", "z=abc", "=1"] {
+            assert!(
+                run("history-measure", &s(&[&path, "--section", bad])).is_err(),
+                "{bad:?}"
+            );
+        }
+        assert!(run("history-measure", &s(&[&path, "--section"])).is_err());
+    }
+
+    #[test]
+    fn the_solid_is_exported_to_every_mesh_format_and_read_back_with_the_exact_volume() {
+        let path = hollow_project("2 mm");
+        let dir = std::path::Path::new(&path).parent().unwrap().to_path_buf();
+        for (n, ext) in ["stl", "obj", "3mf", "ply", "off", "ObJ"]
+            .into_iter()
+            .enumerate()
+        {
+            let out = dir.join(format!("solid{n}.{ext}"));
+            let target = out.to_string_lossy().into_owned();
+            let (text, ok) =
+                run("history-check", &s(&[&path, "--text", "--export", &target])).unwrap();
+            assert!(ok, "{text}");
+            assert!(
+                text.starts_with("Wrote 1 solid(s) and 24 triangles to"),
+                "{ext}: {text}"
+            );
+            let bodies =
+                crate::interchange::read_file_bytes(&target, &fs::read(&out).unwrap()).unwrap();
+            assert_eq!(bodies.len(), 1, "{ext}");
+            let volume = bodies[0].1.volume_nm3();
+            assert!((volume - 784.0e18).abs() < 1.0e12, "{ext}: {volume}");
+            // nothing is written over a file that exists unless it is ordered
+            let before = fs::read(&out).unwrap();
+            assert!(
+                run("history-check", &s(&[&path, "--export", &target])).is_err(),
+                "{ext}"
+            );
+            assert_eq!(fs::read(&out).unwrap(), before);
+            run(
+                "history-check",
+                &s(&[&path, "--export", &target, "--overwrite"]),
+            )
+            .unwrap();
+            assert_eq!(
+                fs::read(&out).unwrap(),
+                before,
+                "{ext}: the same bytes again"
+            );
+        }
+        // an extension that is not a mesh format could not run
+        for bad in ["solid.step", "solid", "solid.txt"] {
+            let target = dir.join(bad).to_string_lossy().into_owned();
+            assert!(run("history-check", &s(&[&path, "--export", &target])).is_err());
+            assert!(!dir.join(bad).exists());
+        }
     }
 
     #[test]

@@ -101,7 +101,7 @@ pub fn part_nodes(
         }
         match op {
             Op::Box | Op::Intersection => add(&mut out)?,
-            Op::Move | Op::Difference | Op::Rotate => {
+            Op::Move | Op::Difference | Op::Rotate | Op::Grow | Op::Shrink | Op::Shell => {
                 if let Some(first) = inputs.first() {
                     stack.push((*first, mult));
                 }

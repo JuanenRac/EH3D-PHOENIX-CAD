@@ -17,6 +17,8 @@ The section `[server]` of the settings file (`eh3d-phoenix-cad config` prints it
 | `server_retries` | 0 to 5 | 2 | how many more times a request that failed on the network is tried; a request that creates something is never sent twice |
 | `server_mdns` | `on` or `off` | `off` | look for the server on the local network when the address is empty |
 | `server_max_answer_mib` | 1 to 256 | 8 | the most MiB read from one answer |
+| `server_token_fixed` | `on` or `off` | `off` | the token is one written in the settings that does not run out (the token of a node), so a `401` does not make the client forget it; off ends the login on a `401` |
+| `server_error_body_bytes` | 0 to 4096 | 0 | how many bytes of the body of a refusal are kept in the error, with the secrets masked; 0 keeps none |
 
 A value out of its range is refused with its key (`server.server_retries`). The token travels in the clear over plain HTTP: a warning is printed when the address is not this computer or a private network; use a network you trust or a tunnel.
 

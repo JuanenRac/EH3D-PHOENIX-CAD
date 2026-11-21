@@ -889,7 +889,7 @@ fn the_operations_have_names_inputs_and_keys() {
         assert_eq!(Op::from_name(op.name()), Some(op));
     }
     assert_eq!(Op::from_name("sphere"), None);
-    assert_eq!(Op::ALL.map(Op::inputs), [0, 1, 1, 2, 2, 2, 1, 1]);
+    assert_eq!(Op::ALL.map(Op::inputs), [0, 1, 1, 2, 2, 2, 1, 1, 1, 1, 1]);
     assert_eq!(Op::Box.keys().len(), 6);
     assert!(Op::Union.keys().is_empty());
 }
@@ -1024,5 +1024,89 @@ fn a_seeded_family_of_mirrors_and_turns_always_keeps_the_volume_of_the_input() {
         assert!(m.rebuild(&c).unwrap().is_clean());
         let v = m.result().unwrap().volume_nm3();
         assert!((60 * MM3..=120 * MM3).contains(&v), "case {case}: {v}");
+    }
+}
+
+#[test]
+fn grow_shrink_and_shell_work_the_input_and_follow_their_parameter() {
+    let c = cfg();
+    // the box is 3 x 4 x 5 mm, 60 mm3
+    let mut d = lug(Op::Grow, &[("by", "1 mm")]);
+    let r = d.rebuild(&c).unwrap();
+    assert!(r.is_clean(), "{r:?}");
+    assert_eq!(d.result().unwrap().volume_nm3(), 5 * 6 * 7 * MM3);
+    assert_eq!(
+        d.result().unwrap().bounds().unwrap().0,
+        [1_000_000, -1_000_000, -1_000_000]
+    );
+    let mut s = lug(Op::Shrink, &[("by", "1 mm")]);
+    assert!(s.rebuild(&c).unwrap().is_clean());
+    assert_eq!(s.result().unwrap().volume_nm3(), 6 * MM3);
+    let mut h = lug(Op::Shell, &[("by", "1 mm")]);
+    assert!(h.rebuild(&c).unwrap().is_clean());
+    assert_eq!(h.result().unwrap().volume_nm3(), 54 * MM3);
+    // the distance is an expression and a change of it rebuilds the node
+    h.set_expression(id(31), Some("by"), "2 * 0.5 mm", &c)
+        .unwrap();
+    h.rebuild(&c).unwrap();
+    assert_eq!(h.result().unwrap().volume_nm3(), 54 * MM3);
+    s.set_expression(id(31), Some("by"), "2 mm", &c).unwrap();
+    assert!(s.rebuild(&c).unwrap().is_clean());
+    assert!(s.result().unwrap().is_empty());
+    // a negative distance, or one that is not a length, is a failure of the node
+    for (by, code) in [
+        ("-1 mm", "PHOENIX-CAD-052"),
+        ("3", "PHOENIX-CAD-024"),
+        ("1 / 0 mm", "PHOENIX-CAD-024"),
+    ] {
+        s.set_expression(id(31), Some("by"), by, &c).unwrap();
+        let r = s.rebuild(&c).unwrap();
+        assert_eq!(r.report(id(31)).unwrap().code, Some(code), "{by}");
+    }
+    // the file keeps the new operations in the canonical form and reads them back
+    let bytes = h.to_bytes();
+    let text = String::from_utf8(bytes.clone()).unwrap();
+    assert!(text.contains(" shell next"), "{text}");
+    let mut back = FeatureDag::from_bytes(&bytes, HistorySettings::defaults(), &c).unwrap();
+    assert_eq!(back.to_bytes(), bytes);
+    back.rebuild(&c).unwrap();
+    assert_eq!(back.result(), h.result());
+    // a feature without its distance is refused when it is added
+    let mut e = lug(Op::Grow, &[("by", "1 mm")]);
+    let before = e.to_bytes();
+    assert!(e
+        .add_feature(id(32), "bad", Op::Shell, &[id(31)], &[], &c)
+        .is_err());
+    assert_eq!(e.to_bytes(), before);
+}
+
+#[test]
+fn a_seeded_family_of_shells_always_splits_the_volume_of_the_input() {
+    let c = cfg();
+    let mut seed = 0x5e11_0ff5u64;
+    let mut next = move |n: u64| {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (seed >> 33) % n
+    };
+    for case in 0..40 {
+        let by = format!("{} mm", next(4));
+        let mut shell = lug(Op::Shell, &[("by", &by)]);
+        let mut inner = lug(Op::Shrink, &[("by", &by)]);
+        let mut outer = lug(Op::Grow, &[("by", &by)]);
+        for d in [&mut shell, &mut inner, &mut outer] {
+            let r = d.rebuild(&c).unwrap();
+            assert!(r.is_clean(), "case {case}: {r:?}");
+        }
+        let (vs, vi, vo) = (
+            shell.result().unwrap().volume_nm3(),
+            inner.result().unwrap().volume_nm3(),
+            outer.result().unwrap().volume_nm3(),
+        );
+        // the wall and the inside make up the box, and the grown box is never smaller
+        assert_eq!(vs + vi, 60 * MM3, "case {case}: {by}");
+        assert!(vo >= 60 * MM3, "case {case}");
+        assert!(vi <= 60 * MM3, "case {case}");
     }
 }

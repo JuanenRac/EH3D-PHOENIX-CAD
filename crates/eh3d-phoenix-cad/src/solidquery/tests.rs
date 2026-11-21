@@ -364,3 +364,238 @@ fn random_mirrors_and_turns_keep_the_measures_and_come_back() {
         assert_eq!(rc[axis], c[axis], "case {case}");
     }
 }
+
+/// The area of a union of rectangles `[u0, u1) x [v0, v1)`, counted cell by cell on the grid of
+/// their own coordinates: a way to the answer that shares no code with the library.
+fn union_area(rects: &[[i64; 4]]) -> i128 {
+    let mut us: Vec<i64> = rects.iter().flat_map(|r| [r[0], r[1]]).collect();
+    let mut vs: Vec<i64> = rects.iter().flat_map(|r| [r[2], r[3]]).collect();
+    us.sort_unstable();
+    us.dedup();
+    vs.sort_unstable();
+    vs.dedup();
+    let mut total: i128 = 0;
+    for uw in us.windows(2) {
+        for vw in vs.windows(2) {
+            let covered = rects
+                .iter()
+                .any(|r| r[0] <= uw[0] && uw[1] <= r[1] && r[2] <= vw[0] && vw[1] <= r[3]);
+            if covered {
+                total += i128::from(uw[1] - uw[0]) * i128::from(vw[1] - vw[0]);
+            }
+        }
+    }
+    total
+}
+
+const MM2: i128 = (MM as i128) * (MM as i128);
+
+#[test]
+fn the_section_and_the_shadow_of_a_hollow_cube_are_worked_by_hand() {
+    let s = hollow(0);
+    let lim = Limits::default();
+    // through the cavity: the square of 10 mm less the square of 6 mm
+    assert_eq!(section_area_nm2(&s, 0, 5 * MM, &lim).unwrap(), 64 * MM2);
+    // through a wall, on the lower face (which belongs to the cube), and just under the upper
+    assert_eq!(section_area_nm2(&s, 0, MM, &lim).unwrap(), 100 * MM2);
+    assert_eq!(section_area_nm2(&s, 1, 0, &lim).unwrap(), 100 * MM2);
+    assert_eq!(
+        section_area_nm2(&s, 2, 10 * MM - 1, &lim).unwrap(),
+        100 * MM2
+    );
+    // on the upper face, outside, and for an axis that does not exist
+    assert_eq!(section_area_nm2(&s, 2, 10 * MM, &lim).unwrap(), 0);
+    assert_eq!(section_area_nm2(&s, 0, -MM, &lim).unwrap(), 0);
+    assert_eq!(section_area_nm2(&s, 3, 0, &lim).unwrap(), 0);
+    // a closed cavity does not show in the shadow
+    for axis in 0..3 {
+        assert_eq!(shadow_area_nm2(&s, axis, &lim).unwrap(), 100 * MM2);
+    }
+    assert_eq!(shadow_area_nm2(&s, 3, &lim).unwrap(), 0);
+    // an L of two boxes: 4x2x1 with 1x2x3 on its end, seen from above and from the side
+    let l_shape = solid(&[b([0, 0, 0], [4, 2, 1]), b([0, 0, 1], [1, 2, 3])]);
+    assert_eq!(shadow_area_nm2(&l_shape, 2, &lim).unwrap(), 8 * MM2);
+    assert_eq!(shadow_area_nm2(&l_shape, 1, &lim).unwrap(), 7 * MM2);
+    assert_eq!(
+        section_area_nm2(&l_shape, 0, 2 * MM, &lim).unwrap(),
+        2 * MM2
+    );
+    assert_eq!(
+        section_area_nm2(&l_shape, 2, 2 * MM, &lim).unwrap(),
+        2 * MM2
+    );
+}
+
+#[test]
+fn a_seeded_family_of_sections_and_shadows_agrees_with_counting_rectangles() {
+    let lim = Limits::default();
+    let mut seed = Seed(0x5ec7_10a5);
+    for case in 0..60 {
+        let s = seed.boxes();
+        for axis in 0..3 {
+            let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+            // the shadow is the union of the rectangles of all the prisms
+            let all: Vec<[i64; 4]> = s
+                .prisms()
+                .iter()
+                .map(|p| [p.min()[u], p.max()[u], p.min()[v], p.max()[v]])
+                .collect();
+            assert_eq!(
+                shadow_area_nm2(&s, axis, &lim).unwrap(),
+                union_area(&all),
+                "case {case} axis {axis}"
+            );
+            // a section is the union of the rectangles of the prisms the plane crosses
+            let at = seed.below(24) * 500_000 - MM;
+            let cut: Vec<[i64; 4]> = s
+                .prisms()
+                .iter()
+                .filter(|p| Prism::min(p)[axis] <= at && at < Prism::max(p)[axis])
+                .map(|p| [p.min()[u], p.max()[u], p.min()[v], p.max()[v]])
+                .collect();
+            assert_eq!(
+                section_area_nm2(&s, axis, at, &lim).unwrap(),
+                union_area(&cut),
+                "case {case} axis {axis} at {at}"
+            );
+            // the sections at every plane, each as thick as its slab, add up to the volume
+            let planes = Grid::new(&s, &lim).unwrap().planes(axis).to_vec();
+            let mut volume: i128 = 0;
+            for w in planes.windows(2) {
+                volume += section_area_nm2(&s, axis, w[0], &lim).unwrap() * i128::from(w[1] - w[0]);
+            }
+            assert_eq!(volume, s.volume_nm3(), "case {case} axis {axis}");
+        }
+    }
+}
+
+fn near(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1e-9 * (1.0 + a.abs().max(b.abs()))
+}
+
+#[test]
+fn the_inertia_of_a_cube_and_of_a_box_is_worked_by_hand() {
+    let cube = solid(&[b([3, -4, 7], [10, 10, 10])]);
+    let i = inertia(&cube).unwrap();
+    assert!(near(i.volume_mm3, 1000.0));
+    assert_eq!(i.centre_mm, [8.0, 1.0, 12.0]);
+    // a cube of side a about its centre: a^5 / 6 = 100000 / 6 on the diagonal, nothing off it
+    for r in 0..3 {
+        for c in 0..3 {
+            let want = if r == c { 100_000.0 / 6.0 } else { 0.0 };
+            assert!(near(i.tensor[r][c], want), "{r} {c}: {}", i.tensor[r][c]);
+        }
+    }
+    // a box of 2 x 3 x 4: V (b^2 + c^2) / 12 with V = 24
+    let bx = inertia(&solid(&[b([0, 0, 0], [2, 3, 4])])).unwrap();
+    assert!(near(bx.tensor[0][0], 24.0 * (9.0 + 16.0) / 12.0));
+    assert!(near(bx.tensor[1][1], 24.0 * (4.0 + 16.0) / 12.0));
+    assert!(near(bx.tensor[2][2], 24.0 * (4.0 + 9.0) / 12.0));
+    // two cubes of 2 mm 4 mm apart along x: the products stay zero, and by the parallel axis
+    // theorem Ixx = 2 * (8 * 8 / 12) and Iyy = Izz = 2 * (8 * 8 / 12 + 8 * 4)
+    let two = inertia(&solid(&[b([0, 0, 0], [2, 2, 2]), b([4, 0, 0], [2, 2, 2])])).unwrap();
+    assert!(near(two.tensor[0][0], 2.0 * 64.0 / 12.0));
+    assert!(near(two.tensor[1][1], 2.0 * (64.0 / 12.0 + 8.0 * 4.0)));
+    assert!(near(two.tensor[2][2], two.tensor[1][1]));
+    assert!(near(two.tensor[0][1], 0.0));
+    assert!(inertia(&Solid::empty()).is_none());
+}
+
+/// The tensor worked out cell by cell on the grid of the solid.
+fn inertia_by_cells(s: &Solid) -> [[f64; 3]; 3] {
+    let g = Grid::new(s, &Limits::default()).unwrap();
+    let d = g.dims();
+    let mm = |nm: i64| nm as f64 / 1e6;
+    let mut cells: Vec<([f64; 3], [f64; 3])> = Vec::new();
+    for k in 0..d[2] {
+        for j in 0..d[1] {
+            for i in 0..d[0] {
+                if g.is_filled([i as isize, j as isize, k as isize]) {
+                    let idx = [i, j, k];
+                    let size = [0, 1, 2].map(|a| mm(g.width(a, idx[a])));
+                    let lo = [0, 1, 2].map(|a| mm(g.planes(a)[idx[a]]));
+                    let centre = [0, 1, 2].map(|a| lo[a] + size[a] / 2.0);
+                    cells.push((size, centre));
+                }
+            }
+        }
+    }
+    let volume: f64 = cells.iter().map(|(s, _)| s[0] * s[1] * s[2]).sum();
+    let c = [0, 1, 2].map(|a| {
+        cells
+            .iter()
+            .map(|(s, p)| s[0] * s[1] * s[2] * p[a])
+            .sum::<f64>()
+            / volume
+    });
+    let mut out = [[0.0; 3]; 3];
+    for (size, p) in &cells {
+        let v = size[0] * size[1] * size[2];
+        let r = [0, 1, 2].map(|a| p[a] - c[a]);
+        let r2 = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
+        let own: f64 = size.iter().map(|x| x * x).sum::<f64>() / 12.0;
+        for a in 0..3 {
+            for bb in 0..3 {
+                let own_ab = if a == bb {
+                    own - size[a] * size[a] / 12.0
+                } else {
+                    0.0
+                };
+                let delta = if a == bb { r2 } else { 0.0 };
+                out[a][bb] += v * (delta - r[a] * r[bb] + own_ab);
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn a_seeded_family_of_inertias_agrees_with_the_cells_and_moves_with_the_solid() {
+    let lim = Limits::default();
+    let mut seed = Seed(0x1e47_1a00);
+    for case in 0..40 {
+        let s = seed.boxes();
+        let i = inertia(&s).unwrap();
+        let cells = inertia_by_cells(&s);
+        for (r, row) in cells.iter().enumerate() {
+            for (c, want) in row.iter().enumerate() {
+                assert!(near(i.tensor[r][c], *want), "case {case} {r} {c}");
+                assert!(
+                    near(i.tensor[r][c], i.tensor[c][r]),
+                    "case {case} symmetric"
+                );
+            }
+        }
+        // the tensor about the centre does not change when the solid is moved
+        let by = [
+            l(seed.below(9) - 4),
+            l(seed.below(9) - 4),
+            l(seed.below(9) - 4),
+        ];
+        let moved = inertia(&s.translate(by).unwrap()).unwrap();
+        for r in 0..3 {
+            for c in 0..3 {
+                assert!(
+                    near(moved.tensor[r][c], i.tensor[r][c]),
+                    "case {case} moved"
+                );
+            }
+        }
+        // a quarter turn about z swaps x and y: Ixx and Iyy trade places, Izz stays
+        let turned = inertia(&s.rotated(2, 1, [l(0), l(0), l(0)], &lim).unwrap()).unwrap();
+        assert!(
+            near(turned.tensor[0][0], i.tensor[1][1]),
+            "case {case} turn"
+        );
+        assert!(
+            near(turned.tensor[1][1], i.tensor[0][0]),
+            "case {case} turn"
+        );
+        assert!(
+            near(turned.tensor[2][2], i.tensor[2][2]),
+            "case {case} turn"
+        );
+        // a moment of inertia is never negative
+        assert!(i.tensor[0][0] > 0.0 && i.tensor[1][1] > 0.0 && i.tensor[2][2] > 0.0);
+    }
+}

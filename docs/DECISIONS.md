@@ -32,6 +32,12 @@ State: **accepted** (record 0019).
 
 The questions about a solid of prisms (thickness, thin walls, surface, centre of mass) are answered on the grid that the planes of the prisms cut space into, in whole numbers, with no tolerance and under the limits of the booleans; the history gets `mirror` and `rotate` as exact operations (planes across the axes and quarter turns only); the STL file of a solid is its surface in rectangles with a fixed order; points typed as text are plain logic with no new diagnostic code (`PHOENIX-CAD-008` for text, `PHOENIX-CAD-001` for range). The record is `adr/0019-solid-questions-mirror-turn-and-typed-points.md`.
 
+## Offsets, sections, mesh files and the entry line
+
+State: **accepted** (record 0020).
+
+The history gets `grow`, `shrink` and `shell` as exact operations with a cube of the same length on every axis (a shrunk solid is the solid less the grown space around it, a shell is the solid less its shrunk self); the solid answers for the area of a section and of a shadow in whole numbers and for its tensor of inertia in floating point, which is written down as not exact; the surface of a solid can be written in five mesh formats with welded vertices and the same bytes every time; the entry line of the sketch window places a typed point as a click would, with no snap. There is no new diagnostic code. The record is `adr/0020-offsets-sections-mesh-files-and-the-entry-line.md`.
+
 ## Stable diagnostic codes
 
 State: **proposed**.

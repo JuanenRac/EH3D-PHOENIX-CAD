@@ -354,6 +354,83 @@ impl Solid {
         Solid::from_prisms(&prisms, limits)
     }
 
+    /// The solid grown by `by` in every direction: the points that are at most `by` away from it
+    /// along each axis (the sum of the solid and a cube, so the corners stay square). A negative
+    /// distance is refused (`PHOENIX-CAD-002`) and a coordinate that would leave the range of
+    /// lengths is refused (`PHOENIX-CAD-001`); zero gives the solid.
+    pub fn grown(&self, by: Length, limits: &Limits) -> Result<Solid, CadError> {
+        let d = by.get();
+        if d < 0 {
+            return Err(CadError::NotPositive("distance of a growth"));
+        }
+        if d == 0 {
+            return Ok(self.clone());
+        }
+        let mut prisms = Vec::with_capacity(self.prisms.len());
+        for b in &self.prisms {
+            let mut p = *b;
+            for i in 0..3 {
+                p.min[i] = Length::new(
+                    b.min[i]
+                        .checked_sub(d)
+                        .ok_or(CadError::Overflow("grown prism"))?,
+                )?
+                .get();
+                p.max[i] = Length::new(
+                    b.max[i]
+                        .checked_add(d)
+                        .ok_or(CadError::Overflow("grown prism"))?,
+                )?
+                .get();
+            }
+            prisms.push(p);
+        }
+        Solid::from_prisms(&prisms, limits)
+    }
+
+    /// The solid shrunk by `by`: the points whose whole cube of half side `by` is in the solid,
+    /// the inverse of [`Solid::grown`] for the empty space around it (the space is grown and
+    /// taken away). Walls thinner than twice the distance disappear. The same refusals as
+    /// [`Solid::grown`].
+    pub fn shrunk(&self, by: Length, limits: &Limits) -> Result<Solid, CadError> {
+        let d = by.get();
+        if d < 0 {
+            return Err(CadError::NotPositive("distance of a shrinking"));
+        }
+        let Some((lo, hi)) = self.bounds() else {
+            return Ok(Solid::empty());
+        };
+        if d == 0 {
+            return Ok(self.clone());
+        }
+        // the space around the solid, in a box a little larger than the solid
+        let mut corner = [Length::ZERO; 3];
+        let mut size = [Length::ZERO; 3];
+        for i in 0..3 {
+            let low = lo[i]
+                .checked_sub(d)
+                .ok_or(CadError::Overflow("space around a solid"))?;
+            let high = hi[i]
+                .checked_add(d)
+                .ok_or(CadError::Overflow("space around a solid"))?;
+            corner[i] = Length::new(low)?;
+            size[i] = Length::new(
+                high.checked_sub(low)
+                    .ok_or(CadError::Overflow("space around a solid"))?,
+            )?;
+        }
+        let space = Solid::from_prism(Prism::new(corner, size)?).difference(self, limits)?;
+        self.difference(&space.grown(by, limits)?, limits)
+    }
+
+    /// A hollow shell: the solid less its shrunk self, so a wall of thickness `by` stays along
+    /// every face, the cavity is closed and the outside is the same. When the solid is thinner than
+    /// twice the thickness nothing is taken away. The same refusals as [`Solid::grown`].
+    pub fn shelled(&self, by: Length, limits: &Limits) -> Result<Solid, CadError> {
+        let inner = self.shrunk(by, limits)?;
+        self.difference(&inner, limits)
+    }
+
     /// The union with another solid.
     pub fn union(&self, other: &Solid, limits: &Limits) -> Result<Solid, CadError> {
         Solid::combine(&self.prisms, &other.prisms, Boolean::Union, limits)

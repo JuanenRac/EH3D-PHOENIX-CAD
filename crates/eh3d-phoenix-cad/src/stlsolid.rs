@@ -14,6 +14,10 @@
 //! program, so a coordinate beyond about 16 m loses its last nanometres in the file (the
 //! rectangles themselves are whole nanometres).
 
+use crate::interchange;
+use crate::mesh::{Builder, Mesh};
+use crate::off;
+use crate::ply;
 use crate::prism::{Limits, Solid};
 use crate::solidquery::Grid;
 use crate::CadError;
@@ -184,6 +188,96 @@ pub fn solid_to_stl(
         }
     }
     Ok(out)
+}
+
+/// The surface of a solid of prisms as a mesh of welded vertices (in nanometres), two triangles to
+/// a rectangle, counter-clockwise seen from outside. An empty solid is refused (`PHOENIX-CAD-041`)
+/// and so is a surface with more than `max_triangles` triangles (`PHOENIX-CAD-050`).
+pub fn solid_to_mesh(solid: &Solid, max_triangles: u32, limits: &Limits) -> Result<Mesh, CadError> {
+    if solid.is_empty() {
+        return Err(CadError::Export("the solid is empty: no file".to_string()));
+    }
+    let quads = boundary_quads(solid, limits)?;
+    let triangles = quads.len() as u64 * 2;
+    if triangles > u64::from(max_triangles) {
+        return Err(CadError::ExportLimit(format!(
+            "{triangles} triangles, more than the {max_triangles} allowed"
+        )));
+    }
+    let mut builder = Builder::new(max_triangles as usize);
+    for q in &quads {
+        let c = q.corners().map(|p| [p[0] as f64, p[1] as f64, p[2] as f64]);
+        let ids = builder.ring(&c);
+        builder.triangle(ids[0], ids[1], ids[2])?;
+        builder.triangle(ids[0], ids[2], ids[3])?;
+    }
+    Ok(builder.finish())
+}
+
+/// The files that the surface of a solid can be written to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileFormat {
+    /// Binary STL.
+    Stl,
+    /// Wavefront OBJ.
+    Obj,
+    /// 3MF, a package with one model.
+    ThreeMf,
+    /// Binary PLY.
+    Ply,
+    /// OFF.
+    Off,
+}
+
+impl FileFormat {
+    /// Every format.
+    pub const ALL: [FileFormat; 5] = [
+        FileFormat::Stl,
+        FileFormat::Obj,
+        FileFormat::ThreeMf,
+        FileFormat::Ply,
+        FileFormat::Off,
+    ];
+
+    /// The extension of the file, without the dot.
+    pub fn extension(self) -> &'static str {
+        match self {
+            FileFormat::Stl => "stl",
+            FileFormat::Obj => "obj",
+            FileFormat::ThreeMf => "3mf",
+            FileFormat::Ply => "ply",
+            FileFormat::Off => "off",
+        }
+    }
+
+    /// The format of a file name, by its extension in any case.
+    pub fn from_name(name: &str) -> Option<FileFormat> {
+        let ext = name.rsplit_once('.')?.1.to_ascii_lowercase();
+        FileFormat::ALL.into_iter().find(|f| f.extension() == ext)
+    }
+}
+
+/// The surface of a solid as the bytes of a file of the format, in millimetres, with the same
+/// refusals as [`solid_to_stl`]. The same solid always gives the same bytes.
+pub fn solid_to_file(
+    solid: &Solid,
+    format: FileFormat,
+    name: &str,
+    max_triangles: u32,
+    limits: &Limits,
+) -> Result<Vec<u8>, CadError> {
+    if format == FileFormat::Stl {
+        return solid_to_stl(solid, max_triangles, limits);
+    }
+    let mesh = solid_to_mesh(solid, max_triangles, limits)?;
+    let body = [(name, &mesh)];
+    Ok(match format {
+        FileFormat::Stl => unreachable!("the binary STL is written above"),
+        FileFormat::Obj => interchange::obj(&body).into_bytes(),
+        FileFormat::ThreeMf => interchange::three_mf(&body),
+        FileFormat::Ply => ply::write_binary(&body),
+        FileFormat::Off => off::write(&body).into_bytes(),
+    })
 }
 
 #[cfg(test)]

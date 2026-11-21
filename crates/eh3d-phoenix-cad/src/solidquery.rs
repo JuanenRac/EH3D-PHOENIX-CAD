@@ -325,5 +325,141 @@ pub fn centroid_nm(solid: &Solid) -> Result<Option<[i64; 3]>, CadError> {
     Ok(Some(out))
 }
 
+/// The area of the cross section of a solid by the plane across `axis` at `at` (nanometres), in
+/// square nanometres, exact. The lower face of a prism belongs to it and the upper does not, like
+/// [`Solid::contains`], so a plane through a joint between two prisms is the section of the one
+/// above it; a plane outside the solid, or an axis above 2, gives 0.
+pub fn section_area_nm2(
+    solid: &Solid,
+    axis: usize,
+    at: i64,
+    limits: &Limits,
+) -> Result<i128, CadError> {
+    if axis > 2 {
+        return Ok(0);
+    }
+    let grid = Grid::new(solid, limits)?;
+    let planes = grid.planes(axis);
+    let Some(slab) = (0..grid.dims()[axis]).find(|&c| planes[c] <= at && at < planes[c + 1]) else {
+        return Ok(0);
+    };
+    let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+    let d = grid.dims();
+    let mut total: i128 = 0;
+    for jv in 0..d[v] {
+        for iu in 0..d[u] {
+            let mut at_cell = [0isize; 3];
+            at_cell[axis] = slab as isize;
+            at_cell[u] = iu as isize;
+            at_cell[v] = jv as isize;
+            if grid.is_filled(at_cell) {
+                total += i128::from(grid.width(u, iu)) * i128::from(grid.width(v, jv));
+            }
+        }
+    }
+    Ok(total)
+}
+
+/// The area of the shadow of a solid along an axis, in square nanometres, exact: the part of the
+/// plane across the other two axes that has material somewhere along the line through it. A
+/// cavity that is closed along the axis does not show, an axis above 2 gives 0.
+pub fn shadow_area_nm2(solid: &Solid, axis: usize, limits: &Limits) -> Result<i128, CadError> {
+    if axis > 2 {
+        return Ok(0);
+    }
+    let grid = Grid::new(solid, limits)?;
+    let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+    let d = grid.dims();
+    let mut total: i128 = 0;
+    for jv in 0..d[v] {
+        for iu in 0..d[u] {
+            let covered = (0..d[axis]).any(|ia| {
+                let mut at = [0isize; 3];
+                at[axis] = ia as isize;
+                at[u] = iu as isize;
+                at[v] = jv as isize;
+                grid.is_filled(at)
+            });
+            if covered {
+                total += i128::from(grid.width(u, iu)) * i128::from(grid.width(v, jv));
+            }
+        }
+    }
+    Ok(total)
+}
+
+/// The tensor of inertia of a solid of one material of density one, about its centre of mass,
+/// in the units millimetre to the fifth (multiply by the density in grams per cubic millimetre
+/// for gram square millimetres). `tensor[i][j]` is `sum (r.r delta(i,j) - r(i) r(j)) dV`, so the
+/// products of inertia are the negative of the integral of the two coordinates.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Inertia {
+    /// The centre of mass, in millimetres.
+    pub centre_mm: [f64; 3],
+    /// The volume, in cubic millimetres.
+    pub volume_mm3: f64,
+    /// The tensor, symmetric.
+    pub tensor: [[f64; 3]; 3],
+}
+
+/// The tensor of inertia of a solid about its centre of mass, or `None` for an empty solid. It is
+/// worked out in floating point from the exact corners (each prism about its own centre, then the
+/// parallel axis theorem), so it is deterministic and the relative error is of the order of
+/// 1e-12; unlike the volume or the centre it is not exact.
+pub fn inertia(solid: &Solid) -> Option<Inertia> {
+    const NM: f64 = 1_000_000.0;
+    let mut volume = 0.0f64;
+    let mut moment = [0.0f64; 3];
+    let mut parts: Vec<([f64; 3], [f64; 3])> = Vec::new();
+    for p in solid.prisms() {
+        let size = [
+            (p.max()[0] - p.min()[0]) as f64 / NM,
+            (p.max()[1] - p.min()[1]) as f64 / NM,
+            (p.max()[2] - p.min()[2]) as f64 / NM,
+        ];
+        let centre = [
+            (p.min()[0] as f64 + p.max()[0] as f64) / (2.0 * NM),
+            (p.min()[1] as f64 + p.max()[1] as f64) / (2.0 * NM),
+            (p.min()[2] as f64 + p.max()[2] as f64) / (2.0 * NM),
+        ];
+        let v = size[0] * size[1] * size[2];
+        volume += v;
+        for i in 0..3 {
+            moment[i] += v * centre[i];
+        }
+        parts.push((size, centre));
+    }
+    if parts.is_empty() || volume <= 0.0 {
+        return None;
+    }
+    let c = [moment[0] / volume, moment[1] / volume, moment[2] / volume];
+    // integrals of x_i x_j over the solid, about the centre of mass
+    let mut second = [[0.0f64; 3]; 3];
+    for (size, centre) in parts {
+        let v = size[0] * size[1] * size[2];
+        let d = [centre[0] - c[0], centre[1] - c[1], centre[2] - c[2]];
+        for i in 0..3 {
+            for j in 0..3 {
+                second[i][j] += v * d[i] * d[j];
+                if i == j {
+                    second[i][j] += v * size[i] * size[i] / 12.0;
+                }
+            }
+        }
+    }
+    let trace = second[0][0] + second[1][1] + second[2][2];
+    let mut tensor = [[0.0f64; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            tensor[i][j] = if i == j { trace } else { 0.0 } - second[i][j];
+        }
+    }
+    Some(Inertia {
+        centre_mm: c,
+        volume_mm3: volume,
+        tensor,
+    })
+}
+
 #[cfg(test)]
 mod tests;

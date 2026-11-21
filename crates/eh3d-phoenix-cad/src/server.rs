@@ -35,7 +35,7 @@ pub const REPORTS_FOLDER: &str = "reports/";
 /// The longest name of a project or of a report.
 pub const NAME_MAX: usize = 120;
 /// The keys of the link, in the order of the settings file (all of them in the section `[server]`).
-pub const KEYS: [&str; 7] = [
+pub const KEYS: [&str; 9] = [
     "server_address",
     "server_token",
     "server_machine",
@@ -43,6 +43,8 @@ pub const KEYS: [&str; 7] = [
     "server_retries",
     "server_mdns",
     "server_max_answer_mib",
+    "server_token_fixed",
+    "server_error_body_bytes",
 ];
 
 /// The settings of the link from the keys `server.server_address`, `server.server_token`... of a settings file; every key must be there, and each one
@@ -618,6 +620,8 @@ server_timeout_s = 30
 server_retries = 4
 server_mdns = on
 server_max_answer_mib = 16
+server_token_fixed = on
+server_error_body_bytes = 512
 ",
         )
         .unwrap()
@@ -630,6 +634,11 @@ server_max_answer_mib = 16
             (30, 4, true)
         );
         assert_eq!(s.server_max_answer_mib, 16);
+        assert!(s.server_token_fixed);
+        assert_eq!(s.server_error_body_bytes, 512);
+        // by default a 401 ends the login and no body of a refusal is kept
+        assert!(!d.server_token_fixed);
+        assert_eq!(d.server_error_body_bytes, 0);
         // the token cannot be printed by mistake
         assert!(!format!("{s:?}").contains("abc123"));
     }
@@ -643,6 +652,9 @@ server_max_answer_mib = 16
             ("server_mdns", "maybe"),
             ("server_max_answer_mib", "0"),
             ("server_max_answer_mib", "257"),
+            ("server_token_fixed", "maybe"),
+            ("server_error_body_bytes", "4097"),
+            ("server_error_body_bytes", "-1"),
             ("server_address", "a b"),
             ("server_token", "a b"),
         ] {
@@ -658,6 +670,9 @@ server_max_answer_mib = 16
             ("server_retries", "5"),
             ("server_max_answer_mib", "1"),
             ("server_max_answer_mib", "256"),
+            ("server_token_fixed", "off"),
+            ("server_error_body_bytes", "0"),
+            ("server_error_body_bytes", "4096"),
         ] {
             let text = format!("[server]\n{key} = {value}\n");
             assert!(Settings::with_user_config(&text).is_ok(), "{key} = {value}");

@@ -255,3 +255,141 @@ fn the_form_is_the_same_whatever_the_order_of_the_boxes_and_of_the_operations() 
         );
     }
 }
+
+#[test]
+fn a_cube_grown_shrunk_and_hollowed_is_worked_by_hand() {
+    let lim = Limits::default();
+    let cube = solid(&[b([0, 0, 0], [10, 10, 10])]);
+    // grown by 2 mm on every side: 14 mm across, from -2 to 12
+    let g = cube.grown(l(2), &lim).unwrap();
+    assert_eq!(g, solid(&[b([-2, -2, -2], [14, 14, 14])]));
+    assert_eq!(g.volume_nm3(), 14 * 14 * 14 * MM3);
+    // an L is grown into an L whose corner is still square
+    let ell = solid(&[b([0, 0, 0], [4, 1, 1]), b([0, 0, 1], [1, 1, 3])]);
+    let ge = ell.grown(l(1), &lim).unwrap();
+    assert_eq!(ge.bounds().unwrap().0, [-1_000_000, -1_000_000, -1_000_000]);
+    assert!(ge.contains([-1_000_000, 0, 3_999_999]));
+    assert!(!ge.contains([2_000_000, 0, 3_000_000]));
+    // shrunk by 2 mm: the cube of 6 mm in the middle; by 4 mm 2 mm; by 5 mm nothing is left
+    assert_eq!(
+        cube.shrunk(l(2), &lim).unwrap(),
+        solid(&[b([2, 2, 2], [6, 6, 6])])
+    );
+    assert_eq!(
+        cube.shrunk(l(4), &lim).unwrap(),
+        solid(&[b([4, 4, 4], [2, 2, 2])])
+    );
+    assert!(cube.shrunk(l(5), &lim).unwrap().is_empty());
+    // a cube with a cavity, shrunk, loses the wall and the cavity grows into the rest
+    let hollow = cube
+        .difference(&solid(&[b([3, 3, 3], [4, 4, 4])]), &lim)
+        .unwrap();
+    let sh = hollow.shrunk(l(1), &lim).unwrap();
+    // the outer wall is 3 mm thick and the cavity 4 mm, so 1 mm off each side leaves a shell of
+    // [1, 9) less [2, 8)
+    assert_eq!(
+        sh,
+        solid(&[b([1, 1, 1], [8, 8, 8])])
+            .difference(&solid(&[b([2, 2, 2], [6, 6, 6])]), &lim)
+            .unwrap()
+    );
+    // a shell of 2 mm keeps the outside and takes the cube of 6 mm out of the middle
+    let shell = cube.shelled(l(2), &lim).unwrap();
+    assert_eq!(shell.volume_nm3(), (1000 - 216) * MM3);
+    assert!(!shell.contains([5_000_000, 5_000_000, 5_000_000]));
+    assert!(shell.contains([1_000_000, 5_000_000, 5_000_000]));
+    assert_eq!(shell.bounds(), cube.bounds());
+    // too thin to hollow: the shell is the whole solid
+    let slab = solid(&[b([0, 0, 0], [3, 10, 10])]);
+    assert_eq!(slab.shelled(l(2), &lim).unwrap(), slab);
+    // zero changes nothing, an empty solid stays empty
+    assert_eq!(cube.grown(Length::ZERO, &lim).unwrap(), cube);
+    assert_eq!(cube.shrunk(Length::ZERO, &lim).unwrap(), cube);
+    assert!(Solid::empty().shrunk(l(1), &lim).unwrap().is_empty());
+}
+
+#[test]
+fn growing_and_shrinking_refuse_a_negative_distance_and_a_coordinate_out_of_range() {
+    let lim = Limits::default();
+    let cube = solid(&[b([0, 0, 0], [10, 10, 10])]);
+    for e in [
+        cube.grown(l(-1), &lim).unwrap_err(),
+        cube.shrunk(l(-1), &lim).unwrap_err(),
+        cube.shelled(l(-1), &lim).unwrap_err(),
+    ] {
+        assert_eq!(e.code(), "PHOENIX-CAD-002");
+    }
+    let huge = Length::new(crate::LENGTH_LIMIT_NM - 1).unwrap();
+    assert_eq!(
+        cube.grown(huge, &lim).unwrap_err().code(),
+        "PHOENIX-CAD-001"
+    );
+    assert_eq!(
+        cube.shrunk(huge, &lim).unwrap_err().code(),
+        "PHOENIX-CAD-001"
+    );
+    // too many cells in the work is refused like every other operation
+    let tight = Limits {
+        max_cells: 1,
+        max_prisms: 100_000,
+    };
+    let two = solid(&[b([0, 0, 0], [2, 2, 2]), b([5, 5, 5], [2, 2, 2])]);
+    assert_eq!(
+        two.shrunk(l(1), &tight).unwrap_err().code(),
+        "PHOENIX-CAD-053"
+    );
+}
+
+#[test]
+fn a_seeded_family_obeys_the_laws_of_growing_and_shrinking() {
+    let lim = Limits::default();
+    let mut seed = Seed(0x9120_5e11);
+    for round in 0..60 {
+        let (_, s) = seed.solid();
+        let a = 1 + seed.below(2);
+        let c = 1 + seed.below(2);
+        let (da, dc) = (l(a), l(c));
+        let grown = s.grown(da, &lim).unwrap();
+        let shrunk = s.shrunk(da, &lim).unwrap();
+        // the grown solid holds the solid, which holds the shrunk one
+        assert!(
+            s.difference(&grown, &lim).unwrap().is_empty(),
+            "round {round}"
+        );
+        assert!(
+            shrunk.difference(&s, &lim).unwrap().is_empty(),
+            "round {round}"
+        );
+        // growing twice is growing by the sum, and so is shrinking
+        assert_eq!(
+            grown.grown(dc, &lim).unwrap(),
+            s.grown(l(a + c), &lim).unwrap(),
+            "round {round}"
+        );
+        assert_eq!(
+            shrunk.shrunk(dc, &lim).unwrap(),
+            s.shrunk(l(a + c), &lim).unwrap(),
+            "round {round}"
+        );
+        // closing never loses the solid, opening never gains
+        let closed = grown.shrunk(da, &lim).unwrap();
+        assert!(
+            s.difference(&closed, &lim).unwrap().is_empty(),
+            "round {round}"
+        );
+        let opened = shrunk.grown(da, &lim).unwrap();
+        assert!(
+            opened.difference(&s, &lim).unwrap().is_empty(),
+            "round {round}"
+        );
+        // the shell and the shrunk solid are the solid, with nothing in common
+        let shell = s.shelled(da, &lim).unwrap();
+        assert_eq!(shell.union(&shrunk, &lim).unwrap(), s, "round {round}");
+        assert!(shell.intersection(&shrunk, &lim).unwrap().is_empty());
+        assert_eq!(
+            shell.volume_nm3() + shrunk.volume_nm3(),
+            s.volume_nm3(),
+            "round {round}"
+        );
+    }
+}

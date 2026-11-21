@@ -17,6 +17,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::config::{Config, Settings};
+use crate::coordentry;
 use crate::enclosure::Face;
 use crate::history::History;
 use crate::lang::{fill, Lang, Msg};
@@ -980,6 +981,9 @@ pub struct SketchEditor {
     pub variables: Variables,
     /// The name typed for the sketch, which it takes when it is kept in the project.
     pub name_input: String,
+    /// The text typed for a point, which `type_point` places.
+    pub point_input: String,
+    last_point: [i64; 2],
     history: History<Sketch>,
     pending: Vec<Anchor>,
     chain: Option<Sketch>,
@@ -1028,6 +1032,8 @@ impl SketchEditor {
             ui,
             variables: Variables::new(),
             name_input: "sketch".to_string(),
+            point_input: String::new(),
+            last_point: [0, 0],
             pending: Vec::new(),
             chain: None,
             chain_first: None,
@@ -1067,6 +1073,8 @@ impl SketchEditor {
         self.drag = None;
         self.dirty = false;
         self.dim_input.clear();
+        self.point_input.clear();
+        self.last_point = [0, 0];
     }
 
     // ---------------------------------------------------------------------------------------
@@ -1418,6 +1426,16 @@ impl SketchEditor {
                 return;
             }
         };
+        self.place_anchor(anchor);
+    }
+
+    /// Takes the place of a click: the same drawing step whether the place was clicked or typed.
+    fn place_anchor(&mut self, anchor: Anchor) {
+        if let Some((x, y)) = self.anchor_position(&anchor) {
+            if let (Ok(x), Ok(y)) = (to_len(x), to_len(y)) {
+                self.last_point = [x.get(), y.get()];
+            }
+        }
         match self.tool {
             Tool::Select => {}
             Tool::Point => self.place_point(anchor),
@@ -1427,6 +1445,48 @@ impl SketchEditor {
             Tool::Circle => self.place_circle(anchor),
             Tool::Arc => self.place_arc(anchor),
         }
+    }
+
+    /// The point in `point_input` is placed as a click would place it: `10,5` from the origin,
+    /// `@3,-2` from the last point placed, `20<45` a distance and an angle from the origin and
+    /// `@20<45` the same from the last point (a number without a unit is in millimetres). The
+    /// box is emptied when the point was placed; a text that is not a point, a point out of the
+    /// range of lengths or the Select tool leave the box as it is and say why in the status line.
+    pub fn type_point(&mut self) {
+        if self.tool == Tool::Select {
+            self.status = Status::Problem(Msg::PointEntryNeedsTool, Vec::new());
+            return;
+        }
+        let typed = match coordentry::parse(&self.point_input) {
+            Ok(t) => t,
+            Err(e) => {
+                self.status = Status::Error(e);
+                return;
+            }
+        };
+        let at = match coordentry::place(&typed, self.last_point) {
+            Ok(a) => a,
+            Err(e) => {
+                self.status = Status::Error(e);
+                return;
+            }
+        };
+        let (Ok(x), Ok(y)) = (Length::new(at[0]), Length::new(at[1])) else {
+            return;
+        };
+        self.status = Status::Ready;
+        self.place_anchor(Anchor::New { x, y, on: None });
+        if !self.status.is_problem() {
+            self.point_input.clear();
+        }
+    }
+
+    /// The last point placed, by a click or by typing, in millimetres: what `@` is measured from.
+    pub fn last_point_mm(&self) -> Mm {
+        (
+            self.last_point[0] as f64 / NM_PER_MM,
+            self.last_point[1] as f64 / NM_PER_MM,
+        )
     }
 
     fn drew(&mut self, tool: Tool) {
@@ -5523,5 +5583,129 @@ mod tests {
             }
         }
         assert!(read > 100 && refused > 1000, "{read} {refused}");
+    }
+
+    /// Types a point into the entry line and presses Enter.
+    fn type_in(e: &mut SketchEditor, text: &str) {
+        e.point_input = text.to_owned();
+        e.type_point();
+    }
+
+    /// Every point of the sketch, in nanometres, in the order they were drawn.
+    fn all_points(e: &SketchEditor) -> Vec<[i64; 2]> {
+        e.sketch
+            .elements()
+            .iter()
+            .filter_map(|entry| match entry.element {
+                Element::Point { x, y } => Some([x.get(), y.get()]),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn typed_points_draw_a_polyline_from_the_origin_and_from_the_last_point() {
+        let mut e = editor();
+        e.set_tool(Tool::Polyline);
+        type_in(&mut e, "0,0");
+        assert!(e.point_input.is_empty(), "the box is emptied");
+        type_in(&mut e, "@10,0");
+        type_in(&mut e, "@0,5");
+        // a line from (0, 0) to (10, 0) and one from there to (10, 5)
+        assert_eq!(
+            all_points(&e),
+            vec![[0, 0], [10_000_000, 0], [10_000_000, 5_000_000]]
+        );
+        assert_eq!(e.last_point_mm(), (10.0, 5.0));
+        let lines = e
+            .sketch
+            .elements()
+            .iter()
+            .filter(|entry| matches!(entry.element, Element::Line { .. }))
+            .count();
+        assert_eq!(lines, 2);
+        // a polar point from the origin and one from the last point: 10 at 90 degrees is plumb
+        e.set_tool(Tool::Point);
+        type_in(&mut e, "10<90");
+        assert_eq!(all_points(&e).last(), Some(&[0, 10_000_000]));
+        type_in(&mut e, "@10<0");
+        assert_eq!(all_points(&e).last(), Some(&[10_000_000, 10_000_000]));
+        // units and a semicolon for a comma that is a decimal mark
+        type_in(&mut e, "0,5; 2,5");
+        assert_eq!(all_points(&e).last(), Some(&[500_000, 2_500_000]));
+        // the drawing can be undone, point by point
+        assert!(e.can_undo());
+    }
+
+    #[test]
+    fn a_text_that_is_not_a_point_changes_nothing_and_is_kept_to_be_corrected() {
+        let mut e = editor();
+        // the Select tool draws nothing: the status says to choose a tool
+        type_in(&mut e, "1,1");
+        assert!(e.status.is_problem());
+        assert_eq!(e.point_input, "1,1");
+        assert!(all_points(&e).is_empty());
+        e.set_tool(Tool::Point);
+        for text in ["", "abc", "1", "1,2,3", "@", "1<", "<45", "1e999 mm,0"] {
+            type_in(&mut e, text);
+            assert!(e.status.is_problem(), "{text:?}");
+            assert_eq!(e.point_input, text);
+            assert!(all_points(&e).is_empty(), "{text:?}");
+        }
+        // a point beyond the range of lengths is refused with its code
+        type_in(&mut e, "2000000000 m,0");
+        match &e.status {
+            Status::Error(err) => assert_eq!(err.code(), "PHOENIX-CAD-001"),
+            other => panic!("{other:?}"),
+        }
+        assert!(all_points(&e).is_empty());
+        // correcting the text places it
+        type_in(&mut e, "3,4");
+        assert_eq!(all_points(&e), vec![[3_000_000, 4_000_000]]);
+        assert!(!e.status.is_problem());
+    }
+
+    #[test]
+    fn the_new_sketch_forgets_the_typed_text_and_the_last_point() {
+        let mut e = editor();
+        e.set_tool(Tool::Point);
+        type_in(&mut e, "7,7");
+        e.point_input = "pending".to_owned();
+        e.new_sketch();
+        assert!(e.point_input.is_empty());
+        assert_eq!(e.last_point_mm(), (0.0, 0.0));
+        e.set_tool(Tool::Point);
+        type_in(&mut e, "@1,1");
+        assert_eq!(all_points(&e), vec![[1_000_000, 1_000_000]]);
+    }
+
+    #[test]
+    fn a_seeded_family_of_typed_sequences_places_the_sums_of_its_steps() {
+        let mut seed = 0x7e47_3d01u64;
+        let mut next = move |n: u64| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) % n
+        };
+        for case in 0..30 {
+            let mut e = editor();
+            e.set_tool(Tool::Point);
+            let mut at = [0i64, 0i64];
+            let mut want: Vec<[i64; 2]> = Vec::new();
+            for step in 0..1 + next(8) {
+                let (dx, dy) = (next(41) as i64 - 20, next(41) as i64 - 20);
+                if step == 0 {
+                    type_in(&mut e, &format!("{dx},{dy}"));
+                    at = [dx * 1_000_000, dy * 1_000_000];
+                } else {
+                    type_in(&mut e, &format!("@{dx},{dy}"));
+                    at = [at[0] + dx * 1_000_000, at[1] + dy * 1_000_000];
+                }
+                want.push(at);
+                assert!(!e.status.is_problem(), "case {case} step {step}");
+            }
+            assert_eq!(all_points(&e), want, "case {case}");
+        }
     }
 }

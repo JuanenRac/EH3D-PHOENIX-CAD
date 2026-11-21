@@ -69,7 +69,7 @@ The file has not been opened in a slicer or in a CAD program.
 
 ## The STL file of a history
 
-The solid of the history of a project is written with `history-check PROJECT --stl OUT.stl` (`docs/HISTORY.md`): only the faces on the surface, joined into rectangles, binary, in millimetres, the same bytes for the same solid. It is not the STL file of the box above, which comes from the enclosure; this one comes from the solid of prisms. A rectangle that meets a neighbour along part of its edge leaves a T-junction, and the file has not been opened in a slicer.
+The solid of the history of a project is written with `history-check PROJECT --stl OUT.stl` (`docs/HISTORY.md`): only the faces on the surface, joined into rectangles, binary, in millimetres, the same bytes for the same solid. It is not the STL file of the box above, which comes from the enclosure; this one comes from the solid of prisms. `--export OUT.stl|obj|3mf|ply|off` writes the same surface as an OBJ, a 3MF package, a PLY or an OFF file, with welded vertices and the same bytes for the same solid; each is read back by the library and compared with the exact volume. A rectangle that meets a neighbour along part of its edge leaves a T-junction, and the file has not been opened in a slicer.
 
 ## The OBJ file and the 3MF package
 

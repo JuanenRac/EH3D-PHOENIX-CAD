@@ -151,11 +151,17 @@ pub enum Op {
     /// The first input turned by `quarters` quarter turns about the line parallel to `axis`
     /// through `cx cy cz`.
     Rotate,
+    /// The first input grown by the length `by` in every direction.
+    Grow,
+    /// The first input shrunk by the length `by` in every direction.
+    Shrink,
+    /// The first input hollowed to a wall of the length `by`.
+    Shell,
 }
 
 impl Op {
     /// Every operation.
-    pub const ALL: [Op; 8] = [
+    pub const ALL: [Op; 11] = [
         Op::Box,
         Op::Move,
         Op::Array,
@@ -164,6 +170,9 @@ impl Op {
         Op::Intersection,
         Op::Mirror,
         Op::Rotate,
+        Op::Grow,
+        Op::Shrink,
+        Op::Shell,
     ];
 
     /// The name written in the file.
@@ -177,6 +186,9 @@ impl Op {
             Op::Intersection => "intersection",
             Op::Mirror => "mirror",
             Op::Rotate => "rotate",
+            Op::Grow => "grow",
+            Op::Shrink => "shrink",
+            Op::Shell => "shell",
         }
     }
 
@@ -189,7 +201,7 @@ impl Op {
     pub fn inputs(self) -> usize {
         match self {
             Op::Box => 0,
-            Op::Move | Op::Array | Op::Mirror | Op::Rotate => 1,
+            Op::Move | Op::Array | Op::Mirror | Op::Rotate | Op::Grow | Op::Shrink | Op::Shell => 1,
             Op::Union | Op::Difference | Op::Intersection => 2,
         }
     }
@@ -202,6 +214,7 @@ impl Op {
             Op::Array => &["count", "dx", "dy", "dz"],
             Op::Mirror => &["axis", "at"],
             Op::Rotate => &["axis", "quarters", "cx", "cy", "cz"],
+            Op::Grow | Op::Shrink | Op::Shell => &["by"],
             Op::Union | Op::Difference | Op::Intersection => &[],
         }
     }
@@ -1317,6 +1330,9 @@ fn compute(
                         limits,
                     )
                 }
+                Op::Grow => solid_of(0)?.grown(length("by")?, limits),
+                Op::Shrink => solid_of(0)?.shrunk(length("by")?, limits),
+                Op::Shell => solid_of(0)?.shelled(length("by")?, limits),
                 Op::Union => solid_of(0)?.apply(Boolean::Union, &solid_of(1)?, limits),
                 Op::Difference => solid_of(0)?.apply(Boolean::Difference, &solid_of(1)?, limits),
                 Op::Intersection => {

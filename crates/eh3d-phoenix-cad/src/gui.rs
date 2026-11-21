@@ -2431,6 +2431,19 @@ impl App {
             });
         }
         ui.label(egui::RichText::new(self.sketch.tool.hint().tr(lang)).color(DIM));
+        // the entry line: a point typed as text is placed as a click would place it
+        ui.horizontal(|ui| {
+            ui.label(Msg::PointEntryLabel.tr(lang));
+            let line = ui.add(
+                egui::TextEdit::singleline(&mut self.sketch.point_input)
+                    .hint_text(Msg::PointEntryHint.tr(lang))
+                    .desired_width(f32::INFINITY),
+            );
+            if line.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                self.sketch.type_point();
+                line.request_focus();
+            }
+        });
     }
 
     /// The canvas: the grid, the axes and the geometry, and what the pointer does on them.

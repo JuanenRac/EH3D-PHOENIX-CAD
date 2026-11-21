@@ -232,6 +232,92 @@ fn damaged_files_never_panic_a_reader_nor_pass_its_limits() {
     }
 }
 
+/// A history with grow, shrink and shell nodes, whose distances the damage can make anything.
+fn shell_history() -> Vec<u8> {
+    let c = Settings::defaults();
+    let id =
+        |n: u16| crate::enclosure::Id::from_parts(1_700_000_000_000, n, u64::from(n) + 9).unwrap();
+    let mut d = FeatureDag::new(HistorySettings::defaults());
+    d.add_feature(
+        id(1),
+        "block",
+        Op::Box,
+        &[],
+        &[
+            ("x", "0 mm"),
+            ("y", "0 mm"),
+            ("z", "0 mm"),
+            ("sx", "12 mm"),
+            ("sy", "8 mm"),
+            ("sz", "6 mm"),
+        ],
+        &c,
+    )
+    .unwrap();
+    d.add_feature(id(2), "fat", Op::Grow, &[id(1)], &[("by", "1 mm")], &c)
+        .unwrap();
+    d.add_feature(id(3), "thin", Op::Shrink, &[id(2)], &[("by", "0.5 mm")], &c)
+        .unwrap();
+    d.add_feature(id(4), "hull", Op::Shell, &[id(3)], &[("by", "2 mm")], &c)
+        .unwrap();
+    d.set_tip(Some(id(4)), &c).unwrap();
+    let mut doc = Document::new();
+    doc.set_history(&d).unwrap();
+    doc.to_bytes()
+}
+
+#[test]
+fn damaged_exports_of_a_solid_and_damaged_shell_histories_never_panic() {
+    let c = Settings::defaults();
+    let lim = Limits::default();
+    let project = shell_history();
+    let mut dag = Document::from_bytes(&project, 1 << 20)
+        .unwrap()
+        .history(HistorySettings::defaults(), &c)
+        .unwrap()
+        .unwrap();
+    dag.rebuild(&c).unwrap();
+    let hull = dag.result().unwrap().clone();
+    assert!(!hull.is_empty());
+    let files: Vec<(String, Vec<u8>)> = stlsolid::FileFormat::ALL
+        .into_iter()
+        .map(|f| {
+            (
+                format!("hull.{}", f.extension()),
+                stlsolid::solid_to_file(&hull, f, "hull", 100_000, &lim).unwrap(),
+            )
+        })
+        .collect();
+    let history = Document::from_bytes(&project, 1 << 20)
+        .unwrap()
+        .history(HistorySettings::defaults(), &c)
+        .unwrap()
+        .unwrap()
+        .to_bytes();
+    let mut seed = Seed(0x5e11_f0cc);
+    for _ in 0..200 {
+        for (name, good) in &files {
+            let bad = damage(good, &mut seed);
+            // the reader of the extension answers with a value or with a text, never a panic
+            let _ = interchange::read_file_bytes(name, &bad);
+        }
+        let bad = damage(&project, &mut seed);
+        if let Ok(doc) = Document::from_bytes(&bad, 1 << 20) {
+            if let Ok(Some(mut dag)) = doc.history(HistorySettings::defaults(), &c) {
+                let _ = dag.rebuild(&c);
+            }
+        }
+        let bad = damage(&history, &mut seed);
+        if let Ok(mut dag) = FeatureDag::from_bytes(&bad, HistorySettings::defaults(), &c) {
+            let _ = dag.rebuild(&c);
+            if let Some(s) = dag.result() {
+                // whatever the damage left, what is written from it is a file or a refusal
+                let _ = stlsolid::solid_to_file(s, stlsolid::FileFormat::Obj, "x", 10_000, &lim);
+            }
+        }
+    }
+}
+
 #[test]
 fn the_damage_itself_is_the_same_on_every_system() {
     // the seed gives the same damaged bytes everywhere, so a failure can be reproduced

@@ -156,3 +156,76 @@ fn a_moved_solid_gives_the_same_file_shape_and_the_refusals_have_their_codes() {
         "PHOENIX-CAD-053"
     );
 }
+
+/// The volume of the first body of a file of any format, read back by its extension.
+fn volume_of_file(format: FileFormat, bytes: &[u8]) -> (f64, usize) {
+    let name = format!("part.{}", format.extension());
+    let bodies = crate::interchange::read_file_bytes(&name, bytes).unwrap();
+    assert_eq!(bodies.len(), 1, "{name}");
+    (bodies[0].1.volume_nm3(), bodies[0].1.triangles.len())
+}
+
+#[test]
+fn every_format_reads_back_the_same_surface_and_the_same_bytes_twice() {
+    let lim = Limits::default();
+    // a cube of 10 mm with a cavity of 6 mm: two closed surfaces, 784 mm3
+    let cube = solid(&[b([0, 0, 0], [10, 10, 10])]);
+    let hollow = cube
+        .difference(&solid(&[b([2, 2, 2], [6, 6, 6])]), &lim)
+        .unwrap();
+    for format in FileFormat::ALL {
+        let bytes = solid_to_file(&hollow, format, "part", 1_000, &lim).unwrap();
+        assert_eq!(
+            bytes,
+            solid_to_file(&hollow, format, "part", 1_000, &lim).unwrap(),
+            "{format:?}"
+        );
+        let (volume, triangles) = volume_of_file(format, &bytes);
+        assert_eq!(triangles, 24, "{format:?}");
+        assert!((volume - 784.0e18).abs() < 1.0e12, "{format:?}: {volume}");
+    }
+    // the welded mesh has the eight corners of each cube and nothing else
+    let mesh = solid_to_mesh(&hollow, 1_000, &lim).unwrap();
+    assert_eq!(mesh.vertices.len(), 16);
+    assert_eq!(mesh.triangles.len(), 24);
+}
+
+#[test]
+fn a_seeded_family_of_solids_is_written_to_every_format_with_its_exact_volume() {
+    let lim = Limits::default();
+    let mut seed = Seed(0x0b1e_c7f5);
+    for case in 0..25 {
+        let s = seed.boxes();
+        let want = s.volume_nm3() as f64;
+        let quads = boundary_quads(&s, &lim).unwrap().len();
+        for format in FileFormat::ALL {
+            let bytes = solid_to_file(&s, format, "part", 100_000, &lim).unwrap();
+            let (volume, triangles) = volume_of_file(format, &bytes);
+            assert_eq!(triangles, quads * 2, "case {case} {format:?}");
+            assert!(
+                (volume - want).abs() <= 1.0e-6 * want,
+                "case {case} {format:?}: {volume} {want}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_formats_are_found_by_extension_and_the_refusals_have_their_codes() {
+    let lim = Limits::default();
+    for f in FileFormat::ALL {
+        let name = format!("out.{}", f.extension().to_ascii_uppercase());
+        assert_eq!(FileFormat::from_name(&name), Some(f));
+    }
+    assert_eq!(FileFormat::from_name("out"), None);
+    assert_eq!(FileFormat::from_name("out.step"), None);
+    assert_eq!(FileFormat::from_name("a.b.obj"), Some(FileFormat::Obj));
+    let cube = solid(&[b([0, 0, 0], [1, 1, 1])]);
+    for f in FileFormat::ALL {
+        let e = solid_to_file(&Solid::empty(), f, "x", 100, &lim).unwrap_err();
+        assert_eq!(e.code(), "PHOENIX-CAD-041", "{f:?}");
+        let e = solid_to_file(&cube, f, "x", 11, &lim).unwrap_err();
+        assert_eq!(e.code(), "PHOENIX-CAD-050", "{f:?}");
+        assert!(solid_to_file(&cube, f, "x", 12, &lim).is_ok(), "{f:?}");
+    }
+}
