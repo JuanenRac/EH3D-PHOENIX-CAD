@@ -63,9 +63,23 @@ The table of revisions (`revision NUMBER`, `date TEXT`, `description TEXT`, `aut
 
 The settings can hold more than one title block: `sheet.titleblock.*` is `default` and `sheet.titleblock.templates` names others, each with `sheet.titleblock.template.NAME.width|row|columns|fields`; `sheet.titleblock.template` says which a new sheet has, and a sheet chooses its own with `titleblock NAME`.
 
+## Broken views
+
+A long part can be drawn without the middle of its length. A front, top or right view of a solid (not a section, not a detail, not a sketch and not the isometric view) takes the line `break u|v FROM TO` (nanometres, in the coordinates of the picture: `u` runs across it, `v` up it). The range from `FROM` to `TO` is left out; what is left of the part on both sides is drawn `sheet.break.gap` apart (a length of the part, before the scale), and a zigzag mark (`sheet.break.teeth`, `sheet.break.amplitude`, `sheet.break.overshoot`) closes each side on the layer `BREAK`. The dimensions are worked out from the model, so a dimension across the break still says the **real** length (`200.00` for a bar of 200 mm drawn 140 mm long); only its line is as long as the picture. A face that lies inside the range is drawn on the first mark. The views of the projection are aligned by the world coordinates they share, so a view that is broken is no longer aligned with the others along the axis of the break. A cut line drawn in a broken view follows the squeeze and is not dragged.
+
+`PHOENIX-CAD-061` says when a break is not valid: a range that ends before it starts or is not longer than the gap, a range outside the picture of the view (the sheet is worked out and the problem is reported), a break of a view that cannot have one, a detail of a broken view, or a broken view that does not fit the frame of the sheet even after the break.
+
+## Notes with a leader
+
+A note is a free text of one line (`sheet.note.max_chars`) with a leader to a view or to a face, on the layer `NOTE` (the sheet can lock or hide it like any other). Its anchor is either a point of the picture of a view (`anchor view VIEW U V`, nanometres, which moves with the view) or a face of the box of a node of the history as a view shows it (`anchor face VIEW NODE AXIS SIDE`, which follows the model and is reported with `PHOENIX-CAD-055` when the node is gone). `centre 1` ends the leader with the cross of a centre mark (`sheet.note.centre_mark`) instead of an arrow. There is no symbol of roughness or of welding: a note is text, a leader and a centre mark. `PHOENIX-CAD-062` says when a note is not valid (empty, more than one line, longer than the settings allow, an anchor that is not there, more notes than `sheet.max_notes`).
+
+## Attributes of an object
+
+A part of the history can carry free attributes, pairs of a key and a value (`attr KEY VALUE` in the record `part`, sorted by key). The limits are all in the settings: the number per part (`sheet.attr.max_per_node`), the length of a key and of a value (`attr.key_max`, `attr.value_max`) and the characters (`attr.key_charset` for the keys, `attr.value_charset` = `printable` or `ascii` for the values). They feed the sheet in two optional ways: `sheet.bom.attr_columns` adds a column for each key to the table of the bill and to the comma separated values, and `sheet.titleblock.from_attr` (`field:key` pairs) fills a field of the title block that the drawing leaves empty from that attribute of the part the first view looks at (the only part of the bill when no view names a node). A value that the drawing gives for the field wins. `PHOENIX-CAD-063` says when an attribute is not valid. The attributes are kept in the drawing, by the id of the node, and not in the history file.
+
 ## Layers
 
-The layers are `OUTLINE` (visible edges), `HIDDEN`, `CENTER`, `DIMENSION`, `TEXT`, `BALLOON`, `FRAME`, `SECTION`, `HATCH` and `DETAIL`, with a colour, a width, a type of line (continuous, dashed, dash-dot), and whether they are shown and whether they are locked, all from the settings (`sheet.layer.*`; the width is `thick`, `thin` or a length, from `sheet.line_group`). The drawing can change them for itself (`layer NAME visible|locked|color|width VALUE`). A layer that is hidden is left out of every file. A locked layer cannot be changed: a view cannot be added to or taken from a locked `OUTLINE`, a dimension on a locked layer cannot be added or removed, a locked `BALLOON` or `FRAME` refuses balloons and fields of the title block. The type of line follows ISO 128 in spirit (dashes for hidden edges, dash-dot for centre lines).
+The layers are `OUTLINE` (visible edges), `HIDDEN`, `CENTER`, `DIMENSION`, `TEXT`, `BALLOON`, `FRAME`, `SECTION`, `HATCH`, `DETAIL`, `BREAK` (the marks of a broken view) and `NOTE` (the notes with a leader), with a colour, a width, a type of line (continuous, dashed, dash-dot), and whether they are shown and whether they are locked, all from the settings (`sheet.layer.*`; the width is `thick`, `thin` or a length, from `sheet.line_group`). The drawing can change them for itself (`layer NAME visible|locked|color|width VALUE`). A layer that is hidden is left out of every file. A locked layer cannot be changed: a view cannot be added to or taken from a locked `OUTLINE`, a dimension on a locked layer cannot be added or removed, a locked `BALLOON` or `FRAME` refuses balloons and fields of the title block. The type of line follows ISO 128 in spirit (dashes for hidden edges, dash-dot for centre lines).
 
 **Groups of lines.** The thick line of the sheet is one of the groups of the standard in `sheet.line_groups` (0.25, 0.35, 0.5, 0.7, 1, 1.4 and 2 mm); the thin line is half of it and the extra thick one (`extra`) twice. A layer whose width is `thick`, `thin` or `extra` follows the group, so a sheet that says `linegroup 500` is drawn with the 0.5 mm group whatever the settings say; a width in micrometres stays. The pattern of the broken lines (the dash and the gap, and for the dash-dot the dot and the second gap, in tenths of the width of the line) is `sheet.linetype.dashed` and `sheet.linetype.dashdot`.
 
@@ -78,7 +92,7 @@ The layers are `OUTLINE` (visible edges), `HIDDEN`, `CENTER`, `DIMENSION`, `TEXT
 The domain is optional (a program that does not know it keeps it byte for byte) and its text is in one canonical form with a version; the lines it does not know, those that start with `x-`, are kept where they were (in the head, or after the record they belong to). A text that is not in the canonical form is refused (`PHOENIX-CAD-054`), so what is read is what is written. The grammar is in the documentation of `plans::model`.
 
 ```text
-drawing 1
+drawing 1                          (drawing 2 when the sheet has a break, a note or an attribute)
 format A4
 orientation landscape
 scale auto
@@ -93,12 +107,14 @@ item <node id> 1
 part <node id>
 material aluminium
 description Base plate
+attr partno A-100
 view <id> front front
 source tip
 hidden 1
 section <view id> A 15000000
 hatch steel
 detail <view id> B circle 10000000 0 3000000
+break u 60000000 140000000
 dim <id> linear width
 ref face <node id> x min
 ref face <node id> x max
@@ -114,7 +130,14 @@ balloon <id> b1
 part <node id>
 at 50000 50000
 to 60000 60000
+note <id> Deburr all edges
+anchor face <view id> <node id> x min
+at 150000 120000
+centre 1
+layer NOTE
 ```
+
+The text is written as `drawing 1` and stays readable by a program that knows that version only, until a break, a note or an attribute is used; then it is `drawing 2`. A text that says `drawing 1` and has one of them, or `drawing 2` and has none, is not in the one canonical form and is refused.
 
 ## The commands
 
@@ -124,18 +147,18 @@ to 60000 60000
 
 ## The panel «Planos»
 
-The window has a panel `drawing` (title in the eight languages) in the arrangement of the Model and Review workspaces and in the menu Tools. It reads the sheet of the project that is open: the head line, the views, the dimensions with their values, the balloons, the bill, the layers (shown and locked from check boxes), the problems in red, and a small picture of the sheet. The buttons create the sheet from the history, update it from the model, keep it in the project file (the numbers of the items are fixed then; the other domains are written back as they are) and write it as SVG next to the project. The lines and the actions are `plans::panel`, tested without a screen. An arrangement saved before the panel existed loads whole and the panel is brought back from the menu. The window has never been opened on a screen.
+The window has a panel `drawing` (title in the eight languages) in the arrangement of the Model and Review workspaces and in the menu Tools. It reads the sheet of the project that is open: the head line, the views, the dimensions with their values, the balloons, the bill, the layers (shown and locked from check boxes), the problems in red, and a small picture of the sheet. The buttons create the sheet from the history, update it from the model, keep it in the project file (the numbers of the items are fixed then; the other domains are written back as they are) and write it as SVG next to the project. One set of buttons, with no modes (the panel has a single view): a list of the views of the sheet and, under «Edit the sheet», **Add revision** (date, description and author), **Dimension the view** (the two overall sizes of the part, tied to the faces of its node), **Add section** (the kind and the position in millimetres, with the next free letters), **Add note** (the text, to the middle of the chosen view) and **Break the view** (the range in millimetres, `u` ticked when it runs across the picture) with a button to make it whole again. The pointer takes what is under it, in this order: a balloon (the circle, or the end of its leader when that is nearer), the text of a note, the line of a cut and the line of a dimension, and drags it; the cut lands on a multiple of `sheet.note.drag_snap` of the sheet and the plane of the section is moved in the model, the balloons and the notes land on the same grid, and the lines of the dimensions on `sheet.dim.drag_snap`. A locked layer refuses (`PHOENIX-CAD-054`). The lines and the actions are `plans::panel`, `plans::drag` and `plans::brk`, tested without a screen. An arrangement saved before the panel existed loads whole and the panel is brought back from the menu. The window has never been opened on a screen.
 
 ## The settings
 
-The section `[sheet]` of `phoenix-cad-drawing.default.cfg` (printed by `eh3d-phoenix-cad config`, read from the file given with `--config`) holds every tuned value: the formats (`sheet.format.NAME = 210 mm x 297 mm`, short side by long side), the default format, orientation and scale, the standard scales, the projection, the margin and the gap between views, the style of the dimensions, the balloons, the title block, the table of the bill, the groups of lines and the pattern of the broken lines, the hatching (`sheet.hatch.*`), the marks of sections and details (`sheet.section.*`), the tolerances and the placing and dragging of dimensions (`sheet.dim.tol_style`, `tol_decimals`, `clearance`, `drag_snap`), the table of revisions (`sheet.revisions.*`), the other title blocks, the layers and the limits (`sheet.max_file_bytes`, `max_views`, `max_dims`, `max_auto_dims`, `max_balloons`, `max_parts`, `max_extra_lines`, `max_extra_bytes`, `max_text`, `max_cells`, `max_edges`, `max_iso_tests`).
+The section `[sheet]` of `phoenix-cad-drawing.default.cfg` (printed by `eh3d-phoenix-cad config`, read from the file given with `--config`) holds every tuned value: the formats (`sheet.format.NAME = 210 mm x 297 mm`, short side by long side), the default format, orientation and scale, the standard scales, the projection, the margin and the gap between views, the style of the dimensions, the balloons, the title block, the table of the bill, the groups of lines and the pattern of the broken lines, the hatching (`sheet.hatch.*`), the marks of sections and details (`sheet.section.*`), the tolerances and the placing and dragging of dimensions (`sheet.dim.tol_style`, `tol_decimals`, `clearance`, `drag_snap`), the table of revisions (`sheet.revisions.*`), the broken view (`sheet.break.*`), the notes (`sheet.note.*`), the free attributes (`sheet.attr.*`, `sheet.bom.attr_columns`, `sheet.titleblock.from_attr`), the other title blocks, the layers and the limits (`sheet.max_file_bytes`, `max_views`, `max_dims`, `max_auto_dims`, `max_balloons`, `max_notes`, `max_parts`, `max_extra_lines`, `max_extra_bytes`, `max_text`, `max_cells`, `max_edges`, `max_iso_tests`).
 
 ## Limits of what is done
 
-* The views are of solids of aligned prisms; there is no broken view, no section along a broken plane, no section across an axis that is not one of the three, and a section or a detail of a sketch view is not made. A section is cut across one axis at a time and its hatching is by material, not by pattern.
+* The views are of solids of aligned prisms; a broken view is cut along one axis of the picture at a time, there is no section along a broken plane, no section across an axis that is not one of the three, and a section or a detail of a sketch view is not made. A section is cut across one axis at a time and its hatching is by material, not by pattern.
 * The tolerance is written on one line next to the value (`25.00 H7`), not stacked, and the table of ISO 286 that ships has not been checked against the standard; the sheet and the panel say so.
-* The dimension lines are dragged in the picture of the panel; the cut line, the balloons and the views are not dragged, and no symbol or free note can be placed yet.
+* The dimension lines, the cut lines, the balloons and the notes are dragged in the picture of the panel; the views are not dragged. There is no symbol of roughness or of welding, only the free note, its leader and the centre mark. The attributes belong to the drawing, not to the history: they do not follow a node that is copied into another project.
 * The angle of a dimension and the isometric projection use floating point, rounded to a micrometre on the sheet; the same program on another system could differ in the last micrometre.
 * The extension lines start at the box of the node, not at the edge of the face.
-* The PDF uses the font Helvetica of the viewer; the Japanese and Chinese words of the title block and of the table of revisions have no glyph in it and are written as question marks (the SVG and the DXF carry them). Embedding a font would need a font file or a new dependency, which is not done; the PDF stays for the Latin words, and a person who needs the others uses the SVG.
+* The PDF uses the font Helvetica of the viewer; the Japanese and Chinese words of the title block, of the table of revisions and of the notes have no glyph in it and are written as question marks (the SVG and the DXF carry the characters). No font is embedded: that would need a font file or a new dependency, which is not done; the PDF stays for the Latin words, and a person who needs the others uses the SVG or the DXF.
 * Nothing has been compared with a drawing program; every state in `REQUIREMENTS.md` stays `prototype` and `evidence=simulator`.
