@@ -4,6 +4,18 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **A variant can switch steps off and on:** a small box without its fins, or one with the screwed lid, is a variant like any other. The steps are named by a key that stays when other steps are added or removed, applying, checking and exporting a variant build the recipe with them, and a step that is gone is told and refused (`PHOENIX-CAD-014`). From the window of the variants or with `variants --set NAME --step WHICH --state off|on|keep` and `variants --steps`; only a project whose variants switch steps writes version 2 of the `variants` domain.
+
+- **A variable can follow a reference dimension of a sketch:** the drawing says a length, the variable takes it, and takes it again each time the sketch is kept in the project, in the same change of the history. A followed variable is not set by hand nor by a variant (`PHOENIX-CAD-016`), and a link whose dimension is gone, drives again or sits in a sketch whose formulas use the variable is shown as broken and keeps the value. From the sheet of variables or with the new command `variables`; the links are kept in an optional domain `variable-links`.
+
+- **The variants as a table for a spreadsheet:** `variants --grid` writes one line for each variant and one column for each variable, with exact values, and `variants --import` reads it back (commas or semicolons, lengths or formulas), all of it or nothing, as one change that can be undone; the window of the variants writes and reads the file, never over one that exists unless the box for it is ticked.
+
+- **The figures of every variant side by side:** `variants --figures` and a button of the window give the outer and inner sizes, the volume of material, the steps the model refuses and the fit with the board of each variant, as comma separated values, without changing the project.
+
+- **The list of variants says which one the project is in now:** a variant whose values and steps are those of the project is marked in the window and in `variants --text`.
+
+- **The report of an original says why and what an export loses:** what was not read is listed with its reason and what an export loses has its own line. The words and the state of the branches of a suite project are now the shared ones, so every program of the suite says them alike.
+
 - **Variants of a project:** named sets of values of its variables (a small, a medium and a large box of one recipe), kept in the project file in an optional domain `variants`, so an older program keeps them as they are. The command `variants` lists them, keeps the current values under a name, changes one value, removes one and applies one (a change of the project like any other, which can be undone); the new section `[variants]` of the settings limits how many there are.
 
 - **Every variant checked and exported at once:** `variants --check` builds the box with each variant and says its sizes, the steps the model refuses and, with a board, whether it fits (exit code 1 when one has a problem); `variants --export` writes one file for each variant in any format of the export, named after the project and the variant, all of them or none.
@@ -53,7 +65,7 @@ All notable changes to this project are documented here.
 
 - **Check the sketch from the window:** a new entry of the Tools menu shows what the check finds in the sketch being drawn, in the eight languages; it has not been seen on a screen.
 
-- **A new window «About»:** the picture of the program inside a ring of its colour (blue), the name in large letters, one sentence about the program in the eight languages, the version, the author and the e-mail, links to the page of the author and to the repository and the licence. It is the window of the docking frame of the suite (`eh3d-dock`), so the workflows build against `EH3D-COMMON` at `main` until a release of it carries the window.
+- **A new window «About»:** the picture of the program inside a ring of its colour (blue), the name in large letters, one sentence about the program in the eight languages, the version, the author and the e-mail, links to the page of the author and to the repository and the licence. It is the window of the docking frame of the suite (`eh3d-dock`), and the workflows build against `EH3D-COMMON` v0.3.3, which carries it.
 
 ## [0.1.4] - Shared project container with the board as a reference for the enclosure, flat panels, selectors and parameters, and an exact test counter
 

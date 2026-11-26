@@ -12,6 +12,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use eh3d_project::meta::{ConversionReport, LocalText};
+use eh3d_project::suitetext::S;
+use eh3d_project::suiteview;
 use eh3d_project::SignatureStatus;
 
 use crate::config::MeshSettings;
@@ -229,27 +231,13 @@ pub fn import_original(
     })
 }
 
-/// The lines that tell what the report of an original says.
+/// The lines that tell what the report of an original says: what was read, what was not read (with
+/// why) and what an export loses, in the words every program of the suite uses.
 pub fn report_lines(report: &ConversionReport, lang: Lang) -> Vec<String> {
-    let mut out = vec![fill(
-        Msg::SuiteOriginal.tr(lang),
-        &[&report.source.name, &report.source.size.to_string()],
-    )];
-    let list = |items: &[eh3d_project::meta::Counted]| {
-        items
-            .iter()
-            .map(|c| format!("{} {}", c.item, c.count))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    if !report.read.is_empty() {
-        out.push(fill(Msg::SuiteReportRead.tr(lang), &[&list(&report.read)]));
-    }
-    if !report.not_read.is_empty() {
-        let text = list(&report.not_read);
-        out.push(fill(Msg::SuiteReportNotRead.tr(lang), &[&text]));
-    }
-    out
+    suiteview::report_lines(report)
+        .iter()
+        .map(|said| said.text(lang.code()))
+        .collect()
 }
 
 /// The branches of a file of the suite with what is kept about the last import.
@@ -340,19 +328,27 @@ pub fn write_texts(
 }
 
 /// The state of a branch in words: current, or out of date with the branches that changed, and
-/// then whether it is signed, sealed or encrypted.
+/// then what is known about its signature and whether it is sealed or encrypted. The words are
+/// those every program of the suite uses, but for the verdict on a signature that was checked.
 pub fn state_text(line: &BranchLine, lang: Lang) -> String {
-    let mut words = vec![if line.stale.is_empty() {
-        Msg::SuiteStateCurrent.tr(lang).to_owned()
-    } else {
-        fill(Msg::SuiteStateStale.tr(lang), &[&line.stale.join(", ")])
-    }];
+    let code = lang.code();
+    let plain = suiteview::BranchState {
+        id: line.id.clone(),
+        app: line.app.clone(),
+        format: line.format.clone(),
+        files: line.files,
+        stale: line.stale.clone(),
+        signed: false,
+        sealed: false,
+        encrypted: false,
+    };
+    let mut words = vec![suiteview::state_text(&plain, code)];
     words.extend(signature_text(&line.signature, lang));
     if line.sealed {
-        words.push(Msg::SuiteStateSealed.tr(lang).to_owned());
+        words.push(S::StateSealed.tr(code).to_owned());
     }
     if line.encrypted {
-        words.push(Msg::SuiteStateEncrypted.tr(lang).to_owned());
+        words.push(S::StateEncrypted.tr(code).to_owned());
     }
     words.join("; ")
 }
@@ -651,6 +647,124 @@ mod tests {
         );
         for l in Lang::ALL {
             assert_eq!(state_text(&line, l).matches("; ").count(), 3, "{l:?}");
+        }
+    }
+
+    /// A signer that writes the name of a key and a signature that is not its own.
+    struct Forger<'a>(&'a eh3d_project::Ed25519Signer);
+
+    impl eh3d_project::Signer for Forger<'_> {
+        fn algorithm(&self) -> &str {
+            self.0.algorithm()
+        }
+
+        fn key_id(&self) -> &str {
+            self.0.key_id()
+        }
+
+        fn sign(&self, _message: &[u8]) -> Vec<u8> {
+            vec![0; 64]
+        }
+    }
+
+    #[test]
+    fn a_wrong_signature_of_a_branch_and_of_the_project_is_told() {
+        use eh3d_project::ed25519::generate_key_files;
+        use eh3d_project::{Ed25519Signer, SaveOptions};
+
+        let dir = crate::eh3dfile::tests::Scratch::new("forged");
+        let mine = generate_key_files(&dir.path("mine.key")).unwrap();
+        let signer = Ed25519Signer::read(&mine.secret_path).unwrap();
+        let keys = [mine.public_path.display().to_string()];
+        let cad = |found: &Branches| {
+            let line = found.summary.branches.iter().find(|b| b.id == "cad");
+            line.unwrap().signature.clone()
+        };
+        let made = |name: &str| {
+            let file = dir.path(name);
+            eh3dfile::save_cad_project(&file, b"project", &SaveSettings::default()).unwrap();
+            file
+        };
+        let info = |file: &Path| {
+            let args = vec![
+                file.display().to_string(),
+                "--key".to_owned(),
+                keys[0].clone(),
+                "--text".to_owned(),
+            ];
+            suite_cli::run("eh3d-info", &args).unwrap()
+        };
+
+        // the signature of a branch
+        let file = made("branch.eh3d");
+        eh3dfile::open_project(&file)
+            .unwrap()
+            .sign_branch("cad", &Forger(&signer), &SaveOptions::default())
+            .unwrap();
+        let checked = branches_with(&file, &keys).unwrap();
+        assert_eq!(cad(&checked), SignatureStatus::Invalid);
+        assert!(checked.summary.any_wrong_signature());
+        // without a key it is only seen
+        let seen = branches(&file).unwrap();
+        assert_eq!(cad(&seen), SignatureStatus::Unchecked);
+        assert!(!seen.summary.any_wrong_signature());
+        let (text, ok) = info(&file);
+        assert!(!ok, "{text}");
+        assert!(text.contains(Msg::SuiteSigInvalid.tr(Lang::En)), "{text}");
+
+        // the signature of the project record, right and wrong
+        for (name, forged) in [("good.eh3d", false), ("bad.eh3d", true)] {
+            let file = made(name);
+            let project = eh3dfile::open_project(&file).unwrap();
+            let options = SaveOptions::default();
+            if forged {
+                project.sign_project(&Forger(&signer), &options).unwrap();
+            } else {
+                project.sign_project(&signer, &options).unwrap();
+            }
+            let seen = branches(&file).unwrap();
+            assert_eq!(seen.summary.project_signature, SignatureStatus::Unchecked);
+            let checked = branches_with(&file, &keys).unwrap();
+            let expected = if forged {
+                SignatureStatus::Invalid
+            } else {
+                SignatureStatus::Valid(mine.key_id.clone())
+            };
+            assert_eq!(checked.summary.project_signature, expected);
+            assert_eq!(checked.summary.any_wrong_signature(), forged);
+            assert_eq!(cad(&checked), SignatureStatus::Unsigned);
+            assert_eq!(info(&file).1, !forged);
+        }
+    }
+
+    #[test]
+    fn the_report_of_an_original_says_why_and_what_is_lost() {
+        let report = eh3d_project::appbranch::conversion_report(
+            "eh3d-phoenix-cad",
+            "0.0.0",
+            "stl",
+            "a.stl",
+            b"bytes",
+            eh3d_project::appbranch::Conversion {
+                read: Vec::new(),
+                not_read: vec![eh3d_project::appbranch::counted(
+                    "colours",
+                    3,
+                    Some("not understood by this program"),
+                )],
+                export_losses: vec![eh3d_project::appbranch::counted("names", 1, None)],
+            },
+        );
+        let lines = report_lines(&report, Lang::En);
+        assert_eq!(
+            lines[1..],
+            [
+                "Not read: colours 3 (not understood by this program)".to_owned(),
+                "Lost on export: names 1".to_owned(),
+            ]
+        );
+        for lang in Lang::ALL {
+            assert_eq!(report_lines(&report, lang).len(), 3, "{lang:?}");
         }
     }
 

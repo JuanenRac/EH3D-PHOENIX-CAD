@@ -130,6 +130,9 @@ struct App {
     /// The name and the value being typed for a new variable.
     new_name: String,
     new_value: String,
+    /// The sketch and the reference dimension a variable is about to follow.
+    follow_sketch: String,
+    follow_constraint: String,
     /// True from the moment a drag of a hole or a post is cancelled with Esc until the button
     /// is let go, so that the rest of that drag does not turn or move the view.
     ignore_drag: bool,
@@ -187,6 +190,8 @@ impl App {
             var_edits: HashMap::new(),
             new_name: String::new(),
             new_value: String::new(),
+            follow_sketch: String::new(),
+            follow_constraint: String::new(),
             ignore_drag: false,
             report_open: false,
             link: None,
@@ -669,6 +674,8 @@ impl App {
         ui.add_space(6.0);
         let mut edited: Option<(String, String)> = None;
         let mut removed: Option<String> = None;
+        let mut unfollowed: Option<String> = None;
+        let links = self.win.link_rows();
         for row in self.win.sheet() {
             let used = self.win.used_by_text(&row);
             ui.separator();
@@ -683,13 +690,26 @@ impl App {
             ui.label(
                 egui::RichText::new(format!("{}: {used}", Msg::VariableUsedBy.tr(lang))).color(DIM),
             );
+            let link = links.iter().find(|l| l.variable == row.name);
+            if let Some(link) = link {
+                let words = fill(Msg::FollowRow.tr(lang), &[&link.constraint, &link.sketch]);
+                ui.label(egui::RichText::new(words).color(DIM));
+                if let Some(why) = &link.broken {
+                    ui.colored_label(DANGER, fill(Msg::FollowBroken.tr(lang), &[why]));
+                }
+                let stop = egui::Button::new(Msg::FollowStopButton.tr(lang));
+                if ui.add_enabled(editable, stop).clicked() {
+                    unfollowed = Some(row.name.clone());
+                }
+            }
+            let free = editable && link.is_none();
             let mut text = self
                 .var_edits
                 .remove(&row.name)
                 .unwrap_or_else(|| row.text.clone());
             ui.horizontal(|ui| {
                 let edit = egui::TextEdit::singleline(&mut text).desired_width(150.0);
-                let response = ui.add_enabled(editable, edit);
+                let response = ui.add_enabled(free, edit);
                 if response.lost_focus() && text != row.text {
                     edited = Some((row.name.clone(), text.clone()));
                 }
@@ -710,6 +730,10 @@ impl App {
         }
         if let Some(name) = removed {
             self.win.remove_variable(&name);
+            self.var_edits.remove(&name);
+        }
+        if let Some(name) = unfollowed {
+            self.win.stop_following(&name);
             self.var_edits.remove(&name);
         }
         ui.separator();
@@ -738,6 +762,48 @@ impl App {
                 self.new_name.clear();
                 self.new_value.clear();
             }
+        }
+        // the variable named above can follow a reference dimension of a sketch
+        let sketches = self.win.sketch_names();
+        if sketches.is_empty() {
+            return;
+        }
+        ui.separator();
+        ui.label(egui::RichText::new(Msg::FollowHeading.tr(lang)).color(DIM));
+        let mut follow = false;
+        ui.horizontal(|ui| {
+            egui::ComboBox::from_id_salt("follow-sketch")
+                .selected_text(if self.follow_sketch.is_empty() {
+                    Msg::FollowSketchField.tr(lang)
+                } else {
+                    self.follow_sketch.as_str()
+                })
+                .show_ui(ui, |ui| {
+                    for name in &sketches {
+                        ui.selectable_value(&mut self.follow_sketch, name.clone(), name);
+                    }
+                });
+            let constraint = egui::TextEdit::singleline(&mut self.follow_constraint)
+                .hint_text(Msg::FollowConstraintField.tr(lang))
+                .desired_width(110.0);
+            ui.add_enabled(editable, constraint);
+            let ready = editable
+                && !self.new_name.trim().is_empty()
+                && !self.follow_sketch.is_empty()
+                && !self.follow_constraint.trim().is_empty();
+            let button = egui::Button::new(Msg::FollowButton.tr(lang));
+            follow = ui.add_enabled(ready, button).clicked();
+        });
+        if follow
+            && self.win.follow_dimension(
+                &self.new_name,
+                &self.follow_sketch,
+                &self.follow_constraint,
+            )
+        {
+            self.var_edits.remove(self.new_name.trim());
+            self.new_name.clear();
+            self.follow_constraint.clear();
         }
     }
 

@@ -34,6 +34,10 @@ A project can live in the branch `cad` of a `.eh3d` file (`docs/BOARD_INTERCHANG
 
 The File menu of the window has the submenu of the project file of the suite (open, save, save as with every branch, import keeping the original, the list of branches with their state and the board of `pcb`), decided in `suitewin` and tested without a screen, and `sketch-check` reports what is wrong or almost right in a sketch file (`docs/BOARD_INTERCHANGE.md`, `docs/SKETCH.md`). Neither has been seen on a screen.
 
+## Steps in variants, followed dimensions and the table of variants
+
+A variant also switches steps of the recipe off and on, a variable can follow a reference dimension of a sketch of the project (command `variables` and the sheet of variables), the values of the variants are written and read back as a table, their figures are listed side by side, and the list marks the variant the project is in (`docs/PROJECT_DOMAIN.md`). All of it has only been tried by the tests: the new parts of the windows have not been seen on a screen and no spreadsheet program has opened a table.
+
 ## Variants, reference dimensions, texts and signatures
 
 A project keeps variants, named values of its variables (`docs/PROJECT_DOMAIN.md`), which are applied, checked and exported one file each from the command `variants` and from a window of the Tools menu. A dimension of a sketch can be a reference that reads the drawing and holds nothing (`docs/SKETCH.md`). The title and the description of a `.eh3d` project are edited from the window, and the signatures of its branches are checked with public keys the person trusts (`docs/BOARD_INTERCHANGE.md`); the program does not sign. The logic is tested without a screen and none of the windows has been seen on one.

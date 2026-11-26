@@ -10,9 +10,9 @@ use crate::export::Format;
 use crate::lang::{fill, Msg};
 use crate::suite_cli;
 use crate::tools_cli::Args;
-use crate::window::{error_text, Window};
+use crate::window::{error_text, StepChoice, Window};
 
-const WITH_VALUE: [&str; 9] = [
+const WITH_VALUE: [&str; 12] = [
     "--keep",
     "--only",
     "--set",
@@ -22,9 +22,19 @@ const WITH_VALUE: [&str; 9] = [
     "--apply",
     "--export",
     "--format",
+    "--step",
+    "--state",
+    "--import",
 ];
 
-const SWITCHES: [&str; 3] = ["--check", "--overwrite", "--text"];
+const SWITCHES: [&str; 6] = [
+    "--check",
+    "--overwrite",
+    "--text",
+    "--steps",
+    "--figures",
+    "--grid",
+];
 
 fn csv(text: &str) -> String {
     if text.contains([',', '"', '\n']) {
@@ -41,11 +51,16 @@ pub fn run(args: &[String]) -> Result<(String, bool), String> {
     with_value.push("--config");
     let a = Args::parse(args, &with_value, &SWITCHES)?;
     let project = a.only_word("project file")?.to_owned();
-    let actions = ["--keep", "--set", "--remove", "--apply", "--export"]
-        .iter()
-        .filter(|name| a.value(name).is_some())
-        .count()
-        + usize::from(a.has("--check"));
+    let actions = [
+        "--keep", "--set", "--remove", "--apply", "--export", "--import",
+    ]
+    .iter()
+    .filter(|name| a.value(name).is_some())
+    .count()
+        + ["--check", "--steps", "--figures", "--grid"]
+            .iter()
+            .filter(|name| a.has(name))
+            .count();
     if actions > 1 {
         return Err("variants does one thing at a time".to_owned());
     }
@@ -53,6 +68,8 @@ pub fn run(args: &[String]) -> Result<(String, bool), String> {
         ("--only", "--keep"),
         ("--variable", "--set"),
         ("--value", "--set"),
+        ("--step", "--set"),
+        ("--state", "--set"),
         ("--format", "--export"),
     ] {
         if a.value(option).is_some() && a.value(of).is_none() {
@@ -67,11 +84,43 @@ pub fn run(args: &[String]) -> Result<(String, bool), String> {
         return saved(win, done);
     }
     if let Some(name) = a.value("--set") {
-        let (Some(variable), Some(value)) = (a.value("--variable"), a.value("--value")) else {
-            return Err("--set needs --variable and --value".to_owned());
+        let value = (a.value("--variable"), a.value("--value"));
+        let step = (a.value("--step"), a.value("--state"));
+        let done = match (value, step) {
+            ((Some(variable), Some(value)), (None, None)) => {
+                win.set_variant_value(name, variable, value)
+            }
+            ((None, None), (Some(which), Some(state))) => {
+                let choice = StepChoice::from_word(state)
+                    .ok_or_else(|| format!("{state}: the state is off, on or keep"))?;
+                win.set_variant_step(name, which, choice)
+            }
+            _ => return Err("--set needs --variable and --value, or --step and --state".to_owned()),
         };
-        let done = win.set_variant_value(name, variable, value);
         return saved(win, done);
+    }
+    if let Some(file) = a.value("--import") {
+        let done = win.read_variant_grid(Path::new(file));
+        return saved(win, done);
+    }
+    if a.has("--steps") {
+        let mut out = "number,key,step,state\n".to_owned();
+        for row in win.variant_step_rows() {
+            let state = if row.suppressed { "off" } else { "on" };
+            out.push_str(&format!(
+                "{},{},{},{state}\n",
+                row.number,
+                row.key,
+                csv(&row.label)
+            ));
+        }
+        return Ok((out, true));
+    }
+    if a.has("--figures") {
+        return Ok((win.variant_figures_csv(), true));
+    }
+    if a.has("--grid") {
+        return Ok((win.variant_grid_csv(), true));
     }
     if let Some(name) = a.value("--remove") {
         let done = win.remove_variant(name);
@@ -111,6 +160,14 @@ pub fn run(args: &[String]) -> Result<(String, bool), String> {
                 Msg::VariantFailed.tr(a.lang),
                 &[&row.name, &row.values],
             ));
+            if !row.steps.is_empty() {
+                out.push_str("; ");
+                out.push_str(&row.steps);
+            }
+            if row.current {
+                out.push_str("; ");
+                out.push_str(Msg::VariantCurrent.tr(a.lang));
+            }
             if !row.missing.is_empty() {
                 out.push_str("; ");
                 out.push_str(&fill(
@@ -131,9 +188,77 @@ pub fn run(args: &[String]) -> Result<(String, bool), String> {
                     out.push_str(&format!("{},{variable},{}\n", row.name, value.get()));
                 }
             }
+            for (key, off) in win.mech.variants.steps_of(&row.name) {
+                let state = if *off { "off" } else { "on" };
+                out.push_str(&format!("{},step:{key},{state}\n", row.name));
+            }
         }
     }
     Ok((out, true))
+}
+
+/// `variables PROJECT`: the variables with their values and the drawing they follow; `--follow`
+/// makes one follow a reference dimension of a sketch of the project and `--stop` takes the link
+/// away. The answer is no when a link is broken.
+pub fn run_variables(args: &[String]) -> Result<(String, bool), String> {
+    let a = Args::parse(
+        args,
+        &["--follow", "--sketch", "--constraint", "--stop", "--config"],
+        &["--text"],
+    )?;
+    let project = a.only_word("project file")?.to_owned();
+    if a.value("--follow").is_some() && a.value("--stop").is_some() {
+        return Err("variables does one thing at a time".to_owned());
+    }
+    for option in ["--sketch", "--constraint"] {
+        if a.value(option).is_some() && a.value("--follow").is_none() {
+            return Err(format!("{option} goes with --follow"));
+        }
+    }
+    let settings = suite_cli::settings(a.value("--config"))?;
+    let mut win = suite_cli::window(Path::new(&project), a.lang, &settings)?;
+    if let Some(name) = a.value("--follow") {
+        let (Some(sketch), Some(constraint)) = (a.value("--sketch"), a.value("--constraint"))
+        else {
+            return Err("--follow needs --sketch and --constraint".to_owned());
+        };
+        let done = win.follow_dimension(name, sketch, constraint);
+        return saved(win, done);
+    }
+    if let Some(name) = a.value("--stop") {
+        let done = win.stop_following(name);
+        return saved(win, done);
+    }
+    let links = win.link_rows();
+    let mut out = String::new();
+    if !a.has("--text") {
+        out.push_str("variable,value_nm,sketch,constraint,broken\n");
+    }
+    for row in win.sheet() {
+        let link = links.iter().find(|l| l.variable == row.name);
+        let broken = link.and_then(|l| l.broken.as_deref());
+        if a.has("--text") {
+            out.push_str(&format!("{} = {}", row.name, row.text));
+            if let Some(l) = link {
+                let words = fill(Msg::FollowRow.tr(a.lang), &[&l.constraint, &l.sketch]);
+                out.push_str(&format!("; {words}"));
+            }
+            if let Some(why) = broken {
+                out.push_str(&format!("; {}", fill(Msg::FollowBroken.tr(a.lang), &[why])));
+            }
+            out.push('\n');
+        } else {
+            out.push_str(&format!(
+                "{},{},{},{},{}\n",
+                row.name,
+                row.value.get(),
+                link.map_or("", |l| l.sketch.as_str()),
+                link.map_or("", |l| l.constraint.as_str()),
+                csv(broken.unwrap_or(""))
+            ));
+        }
+    }
+    Ok((out, links.iter().all(|l| l.broken.is_none())))
 }
 
 /// Writes the project back after a change, or says why the change was refused.
@@ -277,6 +402,78 @@ mod tests {
             vec![p.as_str(), "--no-such-option"],
         ] {
             assert!(call(&words).is_err(), "{words:?}");
+        }
+        assert_eq!(std::fs::read(&p).unwrap(), before);
+    }
+
+    #[test]
+    fn steps_figures_and_the_table_work_from_the_command_line() {
+        let (folder, p) = project("table");
+        call(&[&p, "--keep", "small"]).unwrap();
+        assert_eq!(call(&[&p, "--steps"]).unwrap().0, "number,key,step,state\n");
+        assert!(call(&[&p, "--set", "small", "--step", "1", "--state", "off"]).is_err());
+        assert!(call(&[&p, "--set", "small", "--step", "1", "--state", "up"]).is_err());
+        assert!(call(&[&p, "--set", "small", "--step", "1"]).is_err());
+        assert!(call(&[&p, "--figures", "--grid"]).is_err());
+        assert!(call(&[&p, "--state", "off"]).is_err());
+        assert!(call(&[&p, "--text"])
+            .unwrap()
+            .0
+            .contains(Msg::VariantCurrent.tr(Lang::En)));
+        let (figures, ok) = call(&[&p, "--figures"]).unwrap();
+        assert!(ok);
+        assert_eq!(figures.lines().count(), 2, "{figures}");
+        let (grid, _) = call(&[&p, "--grid"]).unwrap();
+        assert_eq!(grid, "variant,width\nsmall,60 mm\n");
+        let table = folder.0.join("table.csv");
+        std::fs::write(&table, "variant,width\nlarge,90 mm\n").unwrap();
+        let t = table.to_string_lossy().into_owned();
+        call(&[&p, "--import", &t]).unwrap();
+        assert_eq!(
+            call(&[&p]).unwrap().0,
+            "variant,variable,value_nm\nlarge,width,90000000\nsmall,width,60000000\n"
+        );
+        let before = std::fs::read(&p).unwrap();
+        std::fs::write(&table, "variant,height\nlarge,1\n").unwrap();
+        assert!(call(&[&p, "--import", &t])
+            .unwrap_err()
+            .contains("PHOENIX-CAD-014"));
+        assert_eq!(std::fs::read(&p).unwrap(), before);
+    }
+
+    #[test]
+    fn the_command_variables_lists_and_refuses_what_it_cannot_follow() {
+        let (_folder, p) = project("variables");
+        let variables = |words: &[&str]| {
+            run_variables(&words.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>())
+        };
+        assert_eq!(
+            variables(&[&p]).unwrap(),
+            (
+                "variable,value_nm,sketch,constraint,broken\nwidth,60000000,,,\n".to_owned(),
+                true
+            )
+        );
+        assert!(variables(&[&p, "--text"])
+            .unwrap()
+            .0
+            .starts_with("width = 60"));
+        let before = std::fs::read(&p).unwrap();
+        for words in [
+            vec![p.as_str(), "--follow", "width"],
+            vec![
+                p.as_str(),
+                "--follow",
+                "width",
+                "--sketch",
+                "none",
+                "--constraint",
+                "c1",
+            ],
+            vec![p.as_str(), "--stop", "width"],
+            vec![p.as_str(), "--sketch", "a"],
+        ] {
+            assert!(variables(&words).is_err(), "{words:?}");
         }
         assert_eq!(std::fs::read(&p).unwrap(), before);
     }

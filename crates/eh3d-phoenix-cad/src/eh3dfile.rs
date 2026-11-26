@@ -18,6 +18,7 @@ use eh3d_project::meta::{
     ConversionReport, Counted, DocIndex, DocKind, Document as DocEntry, LocalText, Metadata,
     DOC_INDEX_FILE, META_FILE, REPORT_FILE,
 };
+use eh3d_project::suiteview;
 use eh3d_project::{
     BranchUpdate, Checks, Dependency, Ed25519Keyring, Finding, NewProject, OpenOptions, Project,
     SaveOptions, Seal, SignatureStatus, Verifier, Writer,
@@ -392,42 +393,38 @@ pub fn summary(path: &Path) -> Result<Summary, CadError> {
 pub fn summary_with(path: &Path, keys: Option<&Ed25519Keyring>) -> Result<Summary, CadError> {
     let mut project = open_project(path)?;
     let signatures = project.signatures(keys.filter(|k| !k.is_empty()).map(|k| k as &dyn Verifier));
-    let stale = project.stale_refs();
-    let branches = project
-        .branches()
-        .map(|b| BranchLine {
-            id: b.id.clone(),
-            app: b
-                .record
-                .as_ref()
-                .map_or_else(String::new, |r| r.app.clone()),
-            format: b
-                .record
-                .as_ref()
-                .map_or_else(String::new, |r| r.format.clone()),
-            files: b
-                .files
-                .keys()
-                .filter(|n| n.as_str() != "branch.json")
-                .count(),
-            bytes: b
-                .files
-                .iter()
-                .filter(|(n, _)| n.as_str() != "branch.json")
-                .map(|(_, f)| f.size)
-                .sum(),
-            sealed: b.is_sealed(),
-            encrypted: b.is_encrypted(),
-            signature: signatures
-                .branches
-                .get(&b.id)
-                .cloned()
-                .unwrap_or(SignatureStatus::Unsigned),
-            stale: stale
-                .iter()
-                .filter(|s| s.branch == b.id)
-                .map(|s| s.dependency.branch.clone())
-                .collect(),
+    // what each branch is and its state, as every program of the suite sees them; this program
+    // adds the sizes and the verdicts on the signatures
+    let view = suiteview::view(path, BRANCH).map_err(CadError::SuiteFile)?;
+    let branches = view
+        .branches
+        .into_iter()
+        .map(|state| {
+            let files: Vec<u64> = project
+                .branch(&state.id)
+                .map(|b| {
+                    b.files
+                        .iter()
+                        .filter(|(n, _)| n.as_str() != "branch.json")
+                        .map(|(_, f)| f.size)
+                        .collect()
+                })
+                .unwrap_or_default();
+            BranchLine {
+                files: files.len(),
+                bytes: files.iter().sum(),
+                signature: signatures
+                    .branches
+                    .get(&state.id)
+                    .cloned()
+                    .unwrap_or(SignatureStatus::Unsigned),
+                id: state.id,
+                app: state.app,
+                format: state.format,
+                sealed: state.sealed,
+                encrypted: state.encrypted,
+                stale: state.stale,
+            }
         })
         .collect();
     let name = project.record().name.clone();

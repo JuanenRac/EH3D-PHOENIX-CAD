@@ -7,6 +7,7 @@
 //! transaction: the new recipe is built first and the change is kept only when the model accepts
 //! it, so a refused value leaves the project exactly as it was.
 
+mod follow;
 mod link;
 mod mates;
 mod part_patterns;
@@ -15,7 +16,8 @@ mod steps;
 mod variants;
 mod versions;
 
-pub use variants::{VariantCheck, VariantFile, VariantRow};
+pub use follow::LinkRow;
+pub use variants::{StepChoice, VariantCheck, VariantFile, VariantRow, VariantStepRow};
 
 use crate::assembly::{Dim, Edge, Mate, MateKind, Report};
 use crate::body::{Built, Step, StepState};
@@ -3269,6 +3271,10 @@ impl Window {
         if new && self.mech.vars.get(name).is_some() {
             return Err(CadError::Duplicate(name.to_string()));
         }
+        // a variable that follows a drawing is changed in the drawing
+        if self.mech.links.contains_key(name) {
+            return Err(CadError::InUse(name.to_string()));
+        }
         let value = self.variable_value(text)?;
         let mut next = self.mech.clone();
         next.vars.set(name, value)?;
@@ -3295,6 +3301,7 @@ impl Window {
     fn variable_removal(&mut self, name: &str) -> Result<(), CadError> {
         let mut next = self.mech.clone();
         next.vars.remove(name)?;
+        next.links.remove(name);
         if !self.dependents_of(name).is_empty() {
             return Err(CadError::InUse(name.to_string()));
         }
@@ -3844,6 +3851,10 @@ impl Window {
             return;
         }
         next.put_sketch(sketch);
+        if let Err(e) = self.follow_sketch(&mut next, &name) {
+            self.finish(Err(e));
+            return;
+        }
         let title = fill(Msg::SketchKept.tr(self.lang), &[&name]);
         let done = Status::Done(Msg::SketchKept, vec![name.clone()]);
         let result = self.change(&title, done, next, None);
@@ -4204,6 +4215,13 @@ impl Window {
             }
             Err(e) => damaged.or(Some(e)),
         };
+        let damaged = match opened.document.variable_links() {
+            Ok(links) => {
+                mech.links = links;
+                damaged
+            }
+            Err(e) => damaged.or(Some(e)),
+        };
         let built = self.rebuild(&mech).map_err(Status::Error)?;
         // the units of the project win over the ones of the settings; units that cannot be read
         // leave the project open in the units of the settings
@@ -4258,6 +4276,7 @@ impl Window {
             .set_mechanical(&self.mech, &self.settings.mechanical)
             .and_then(|()| document.set_sketches(&self.mech.sketches, &self.sketch_settings))
             .and_then(|()| document.set_variants(&self.mech.variants, &self.settings.variants))
+            .and_then(|()| document.set_variable_links(&self.mech.links))
             .and_then(|()| match &source {
                 Some(from) => eh3dfile::copy_project(from, path),
                 None => Ok(()),
