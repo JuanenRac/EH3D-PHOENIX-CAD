@@ -117,6 +117,11 @@ pub struct WindowArgs {
     pub window: Option<&'static str>,
     /// A file of another program to look at as soon as the window opens (`--viewer FILE`).
     pub viewer: Option<PathBuf>,
+    /// The axis (0 for x, 1 for y, 2 for z) along which that file is cut at its middle as it
+    /// opens (`--viewer-cut x|y|z`).
+    pub viewer_cut: Option<usize>,
+    /// The window that signs the project of the suite is opened at once (`--sign-window`).
+    pub sign_window: bool,
     /// The picture mode: the window opens, saves a PNG file and closes by itself.
     pub shot: Option<ShotRequest>,
 }
@@ -144,7 +149,7 @@ struct PictureOptions {
     replace: bool,
 }
 
-/// Reads the arguments of the window (after an optional leading `gui`): `--shot FILE.png`, `--size WxH`, `--theme`, `--wait N`, `--replace`, `--lang CODE`, `--view model|sketch`, `--window model|review|compact`, `--config FILE`, `--open FILE`, `--viewer FILE` and bare
+/// Reads the arguments of the window (after an optional leading `gui`): `--shot FILE.png`, `--size WxH`, `--theme`, `--wait N`, `--replace`, `--lang CODE`, `--view model|sketch`, `--window model|review|compact`, `--config FILE`, `--open FILE`, `--viewer FILE`, `--viewer-cut x|y|z`, `--sign-window` and bare
 /// file names, of which at most `max_files` are accepted. The answer for a mistake is the reason.
 pub fn parse_window_args(args: &[String], max_files: usize) -> Result<WindowArgs, String> {
     let args = if args.first().is_some_and(|a| a == "gui") {
@@ -213,6 +218,16 @@ pub fn parse_window_args(args: &[String], max_files: usize) -> Result<WindowArgs
                     .ok_or("--viewer needs a 3D file or a DXF drawing")?;
                 parsed.viewer = Some(PathBuf::from(path));
             }
+            "--viewer-cut" => {
+                let axis = iter.next().ok_or("--viewer-cut needs x, y or z")?;
+                parsed.viewer_cut = Some(match axis.as_str() {
+                    "x" | "X" => 0,
+                    "y" | "Y" => 1,
+                    "z" | "Z" => 2,
+                    _ => return Err("--viewer-cut is x, y or z".to_owned()),
+                });
+            }
+            "--sign-window" => parsed.sign_window = true,
             "--open" => {
                 let path = iter.next().ok_or("--open needs a file")?;
                 add_file(&mut parsed, path, max_files)?;
@@ -220,6 +235,9 @@ pub fn parse_window_args(args: &[String], max_files: usize) -> Result<WindowArgs
             other if other.starts_with("--") => return Err(format!("unknown option {other}")),
             other => add_file(&mut parsed, other, max_files)?,
         }
+    }
+    if parsed.viewer_cut.is_some() && parsed.viewer.is_none() {
+        return Err("--viewer-cut needs --viewer".to_owned());
     }
     parsed.shot = match output {
         Some(output) => Some(ShotRequest {
@@ -271,6 +289,25 @@ mod tests {
         assert!(parsed.files.is_empty());
         let said = parse_window_args(&args(&["--viewer"]), 1).unwrap_err();
         assert!(said.contains("--viewer needs"), "{said}");
+    }
+
+    #[test]
+    fn a_cut_of_the_view_and_the_window_that_signs_are_asked_for() {
+        let parsed =
+            parse_window_args(&args(&["--viewer", "a.stl", "--viewer-cut", "Y"]), 1).unwrap();
+        assert_eq!((parsed.viewer_cut, parsed.sign_window), (Some(1), false));
+        assert!(
+            parse_window_args(&args(&["--sign-window"]), 1)
+                .unwrap()
+                .sign_window
+        );
+        for bad in [
+            &["--viewer-cut", "x"][..],
+            &["--viewer", "a.stl", "--viewer-cut"],
+            &["--viewer", "a.stl", "--viewer-cut", "w"],
+        ] {
+            assert!(parse_window_args(&args(bad), 1).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

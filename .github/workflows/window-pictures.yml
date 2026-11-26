@@ -2,7 +2,8 @@ name: Window pictures
 
 # Takes the pictures of the window with the picture mode of the program (`eh3d-phoenix-cad ... --shot`) on a virtual screen and keeps them as an artifact of the run, so the
 # pictures of the README can be renewed without building the window on a personal machine. Run it by hand: Actions > Window pictures > Run workflow; then put the pictures of the
-# artifact in images/screens/ and in a pull request. Each language has the box of the examples (the model view) and its sketch.
+# artifact in images/screens/ and in a pull request. Each language has the box of the examples (the model view), its sketch, the solid of the box
+# looked at with a cut, and the window that signs a suite project that is signed with a key made for the run.
 
 on:
   workflow_dispatch:
@@ -50,11 +51,29 @@ jobs:
           out="$GITHUB_WORKSPACE/window-pictures"
           export HOME="$RUNNER_TEMP/home" XDG_CONFIG_HOME="$RUNNER_TEMP/home/config"
           mkdir -p "$XDG_CONFIG_HOME"
+          # a solid and a signed suite project made for the run, in a folder of their own
+          work="$RUNNER_TEMP/pictures"
+          mkdir -p "$work"
+          cp box.phoenixproj "$work/"
+          (
+            cd "$work"
+            "$exe" export box.phoenixproj --format stl --out box.stl
+            "$exe" eh3d-save box.phoenixproj box.eh3d
+            "$exe" eh3d-keygen --out example.key
+            "$exe" eh3d-sign box.eh3d --key example.key
+            printf '[suite]\ntrusted_keys = %s\n' "$PWD/example.key.pub" > pictures.cfg
+          )
           for lang in en es de fr it ja zh pt; do
             mkdir -p "$out/$lang"
             shot() { xvfb-run -a -s "-screen 0 2560x1440x24" timeout 90 "$exe" gui "$1" --view "$2" --lang "$lang" --size 2100x1080 --theme forge --wait 12 --shot "$out/$lang/$3"; }
             shot box.phoenixproj model phoenix-cad-01-box.png
             shot box.phoenixsketch sketch phoenix-cad-02-sketch.png
+            (
+              cd "$work"
+              asked() { xvfb-run -a -s "-screen 0 2560x1440x24" timeout 90 "$exe" gui "$@" --view model --lang "$lang" --size 2100x1080 --theme forge --wait 12; }
+              asked box.phoenixproj --viewer box.stl --viewer-cut z --shot "$out/$lang/phoenix-cad-03-view.png"
+              asked box.eh3d --sign-window --config pictures.cfg --shot "$out/$lang/phoenix-cad-04-signature.png"
+            )
           done
           ls -lR "$out"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

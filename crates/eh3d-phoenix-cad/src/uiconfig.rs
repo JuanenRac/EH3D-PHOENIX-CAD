@@ -385,6 +385,14 @@ pub struct ModelViewSettings {
     pub max_triangles: u32,
     /// An edge is drawn when its two triangles turn by more than this many degrees.
     pub edge_angle: f64,
+    /// Whether the light follows the surface between its sharp edges when a file is opened.
+    pub smooth: bool,
+    /// Whether a cut solid is closed by a face when a file is opened.
+    pub cut_face: bool,
+    /// The points looked at along each side of a pixel while nothing is being dragged.
+    pub samples: u32,
+    /// The threads that draw the picture; 0 takes what the computer has.
+    pub threads: u32,
 }
 
 impl ModelViewSettings {
@@ -393,6 +401,10 @@ impl ModelViewSettings {
             max_mb: count(c, "model_view.max_mb", 1, 1024)?,
             max_triangles: count(c, "model_view.max_triangles", 100, 2_000_000)?,
             edge_angle: real(c, "model_view.edge_angle", 0.0, 180.0)?,
+            smooth: count(c, "model_view.smooth", 0, 1)? == 1,
+            cut_face: count(c, "model_view.cut_face", 0, 1)? == 1,
+            samples: count(c, "model_view.samples", 1, 3)?,
+            threads: count(c, "model_view.threads", 0, 16)?,
         })
     }
 }

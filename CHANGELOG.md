@@ -4,6 +4,18 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **The picture mode shows a cut and the signing window:** `--viewer-cut x|y|z` cuts the file of `--viewer` at its middle and `--sign-window` opens the window that signs the suite project, so their pictures can be taken without a person.
+
+- **A smooth picture of other files:** the light of the view follows the surface between its sharp edges, so a round part looks round, and while the view is still the edges are softened with several points for each pixel (`model_view.smooth`, `model_view.samples`).
+
+- **A face closes the cut:** a closed solid cut to see inside is closed again by a hatched face where the plane goes through the material, with its outline; holes stay open and corners under it cannot be picked (`model_view.cut_face`).
+
+- **The area of the section is told:** next to the position of the cut, the area of the material that the plane goes through, in mm2.
+
+- **The view draws with every core:** the picture is drawn in bands by several threads (`model_view.threads`) and is the same whatever their number; a test left out of the ordinary run measures the times of a large file.
+
+- **A closed file wound inside out is drawn the right way:** its faces were taken for the inside and the far walls were shown.
+
 - **STEP files with round holes, pins and cones are read:** faces on cylinders and cones and edges that are arcs of circles are read besides the flat ones, so the STEP file of a box with round holes and posts that this program writes reads back closed, with its size and volume; a curve becomes straight pieces (`mesh.step_segments_per_turn`, 72 for a whole turn). The viewer, `mesh-info` and the import take such files; spheres, tori, free surfaces, ellipses and a hole through a curved wall are still refused by name.
 
 - **A box with holes is written to STEP as one closed surface:** the file wrote the outside and the inner space as two shells that the walls of the holes left open; now a box with holes is one `MANIFOLD_SOLID_BREP` whose every edge is walked once each way, and the loops round the foot and the bore of a post go the way their faces need.

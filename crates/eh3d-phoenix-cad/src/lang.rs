@@ -1114,6 +1114,9 @@ messages! {
     SignNeedsChoice => ["Choose what to sign.", "Elija qué firmar.", "Wählen Sie, was signiert werden soll.", "Choisissez ce qu'il faut signer.", "Scegliere che cosa firmare.", "署名する対象を選んでください。", "请选择要签名的内容。", "Escolha o que assinar."],
     SignatureRemoved => ["Saved {0}. The signature was removed, because what it covered changed: sign again.", "Guardado {0}. Se ha quitado la firma porque cambió lo que cubría: vuelva a firmar.", "{0} gespeichert. Die Signatur wurde entfernt, weil sich der signierte Inhalt geändert hat: bitte erneut signieren.", "{0} enregistré. La signature a été retirée car son contenu a changé : signez de nouveau.", "{0} salvato. La firma è stata rimossa perché è cambiato ciò che copriva: firmare di nuovo.", "{0} を保存しました。署名対象が変わったため署名を削除しました。もう一度署名してください。", "已保存 {0}。由于所签内容已更改，签名已移除：请重新签名。", "{0} guardado. A assinatura foi removida porque mudou o que abrangia: assine novamente."],
     MvCut => ["Cut to see inside", "Cortar para ver dentro", "Schnitt für den Blick ins Innere", "Couper pour voir l'intérieur", "Taglia per vedere dentro", "断面で内部を表示", "剖切查看内部", "Cortar para ver o interior"],
+    MvSmooth => ["Smooth", "Suavizado", "Glatt", "Lissé", "Levigato", "滑らか", "平滑", "Suavizado"],
+    MvCutFace => ["Closed at the cut", "Cara de cierre", "Schnittfläche", "Face de coupe", "Faccia di taglio", "切断面を閉じる", "封闭切面", "Face de corte"],
+    MvCutArea => ["Section: {0} mm2", "Sección: {0} mm2", "Schnitt: {0} mm2", "Section : {0} mm2", "Sezione: {0} mm2", "断面積: {0} mm2", "截面积：{0} mm2", "Secção: {0} mm2"],
     SuiteOpenedSigned => ["Opened {0}. Signatures: {1}", "Abierto {0}. Firmas: {1}", "{0} geöffnet. Signaturen: {1}", "{0} ouvert. Signatures : {1}", "Aperto {0}. Firme: {1}", "{0} を開きました。署名: {1}", "已打开 {0}。签名：{1}", "Aberto {0}. Assinaturas: {1}"],
 }
 
