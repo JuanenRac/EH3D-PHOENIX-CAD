@@ -3345,6 +3345,7 @@ impl eframe::App for Shell {
         };
         self.dock.set_language(dockui::view_lang(lang));
         self.dock.set_about(Shell::about());
+        self.dock.set_brand(dockui::about_brand());
         self.dock
             .set_menu_state(dockui::disabled_entries(&facts), dockui::checks(lang));
         // the menu bar, then the name of the file, then the panels

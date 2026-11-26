@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **A new window «About»:** the picture of the program inside a ring of its colour (blue), the name in large letters, one sentence about the program in the eight languages, the version, the author and the e-mail, links to the page of the author and to the repository and the licence. It is the window of the docking frame of the suite (`eh3d-dock`), so the workflows build against `EH3D-COMMON` at `main` until a release of it carries the window.
+
 ## [0.1.4] - Shared project container with the board as a reference for the enclosure, flat panels, selectors and parameters, and an exact test counter
 
 - **The branch `cad` of a project of the suite (`.eh3d`, `eh3d-save`):** a project is kept in one `.eh3d` file with a branch for each program, through the shared crate `eh3d-project`; this program writes only `cad`, `docs/cad` and the metadata of `common`, keeps every file of its branch that it did not write again and leaves every other branch as it is, byte for byte, which a test with a fixed seed checks over twelve saves among the branches of three other programs. The same content makes the same file, the clock is never read (`--time` gives the time), and a file the shared format refuses is `PHOENIX-CAD-064` with its `EH3D-PKG` code, a branch that cannot be used `PHOENIX-CAD-065`.
