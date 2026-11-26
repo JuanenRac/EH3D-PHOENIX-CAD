@@ -252,21 +252,21 @@ fn the_limits_of_the_settings_refuse_a_step_file_with_their_name() {
 }
 
 #[test]
-fn a_curved_face_is_refused_by_name_and_a_stp_file_is_read() {
+fn a_face_that_cannot_be_read_is_refused_by_name_and_a_stp_file_is_read() {
     let dir = Scratch::new("refuse");
     let plate = plate_step(&dir);
-    // the first plane of the file becomes a cylinder
+    // the first plane of the file becomes a torus
     let text = fs::read_to_string(&plate).unwrap();
     let curved = dir.file("curved.step");
     fs::write(
         &curved,
-        text.replacen("=PLANE('',", "=CYLINDRICAL_SURFACE('',", 1),
+        text.replacen("=PLANE('',", "=TOROIDAL_SURFACE('',", 1),
     )
     .unwrap();
     let (code, _, err) = run(&["mesh-info", &curved]);
     assert_eq!(code, 1);
     assert!(
-        err.contains("CYLINDRICAL_SURFACE") && err.contains("only planes are read"),
+        err.contains("TOROIDAL_SURFACE") && err.contains("only planes, cylinders and cones"),
         "{err}"
     );
     assert!(err.contains("curved.step"), "{err}");
