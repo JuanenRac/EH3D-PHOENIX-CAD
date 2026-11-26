@@ -17,13 +17,13 @@ use eh3d_project::suiteview;
 use eh3d_project::SignatureStatus;
 
 use crate::config::MeshSettings;
-use crate::eh3dfile::{self, BranchLine, SaveSettings, Summary, EXTENSION};
+use crate::eh3dfile::{self, BranchLine, SaveSettings, Summary, BRANCH, EXTENSION};
 use crate::interchange::{self, ReadLimits};
 use crate::lang::{fill, Lang, Msg};
 use crate::step_import::StepLimits;
 use crate::suite_cli;
 use crate::window::{error_text, Status, Window};
-use crate::{store, CadError};
+use crate::{signing, store, CadError};
 
 /// The extensions of the files of other programs whose original an import keeps.
 pub const IMPORT_EXTENSIONS: [&str; 8] = ["stl", "obj", "3mf", "step", "stp", "ply", "off", "dxf"];
@@ -80,6 +80,7 @@ pub fn open(win: &mut Window, file: &Path) -> Opened {
         }
         Ok(true) => {
             if win.open(file) {
+                tell_signatures(win, file);
                 Opened::Project
             } else {
                 Opened::Refused
@@ -94,6 +95,51 @@ pub fn open(win: &mut Window, file: &Path) -> Opened {
             Opened::NoBox
         }
     }
+}
+
+/// Adds to the status line of a file that was just opened what is known about the signatures of
+/// the branch `cad` and of the project, checked with the keys of `suite.trusted_keys`: a wrong
+/// signature, or one of a key that is not trusted, is told as a problem. A file without them, and
+/// a status line that already tells something else, are left as they are.
+fn tell_signatures(win: &mut Window, file: &Path) {
+    let Status::Done(Msg::Opened, name) = &win.status else {
+        return;
+    };
+    let name = name.first().cloned().unwrap_or_default();
+    // the files are only hashed again when there is a signature to judge
+    if signing::standing(file) == signing::Standing::default() {
+        return;
+    }
+    let (keys, _) = eh3dfile::keyring(&win.ui.suite.trusted_keys);
+    let Ok(found) = eh3dfile::summary_with(file, Some(&keys)) else {
+        return;
+    };
+    let lang = win.lang;
+    let branch = found
+        .branches
+        .iter()
+        .find(|b| b.id == BRANCH)
+        .map(|b| b.signature.clone())
+        .unwrap_or(SignatureStatus::Unsigned);
+    let mut words = Vec::new();
+    if let Some(said) = signature_text(&branch, lang) {
+        words.push(format!("{BRANCH}: {said}"));
+    }
+    if let Some(said) = signature_text(&found.project_signature, lang) {
+        words.push(fill(Msg::SuiteProjectSignature.tr(lang), &[&said]));
+    }
+    if words.is_empty() {
+        return;
+    }
+    let doubtful = [&branch, &found.project_signature]
+        .into_iter()
+        .any(|s| matches!(s, SignatureStatus::Invalid | SignatureStatus::UnknownKey));
+    let values = vec![name, words.join("; ")];
+    win.status = if doubtful {
+        Status::Problem(Msg::SuiteOpenedSigned, values)
+    } else {
+        Status::Done(Msg::SuiteOpenedSigned, values)
+    };
 }
 
 /// Opens whatever project file was chosen, dropped or picked from the recent ones: a file of the

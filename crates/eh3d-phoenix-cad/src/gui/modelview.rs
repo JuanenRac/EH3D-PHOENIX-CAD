@@ -6,7 +6,8 @@
 
 use super::*;
 use crate::modelview::{
-    self, can_show, Content, Job, Origin, Picture, Pose, Solid, ViewOptions, STRAIGHT_VIEWS,
+    self, can_show, Content, Cut, Job, Look, Origin, Picture, Pose, Solid, ViewOptions,
+    STRAIGHT_VIEWS,
 };
 use crate::projection::{Camera, Point3};
 
@@ -21,28 +22,32 @@ pub(super) struct ViewerState {
     measuring: bool,
     picks: Vec<Point3>,
     drawn: Option<Drawn>,
+    cutting: bool,
+    cut_axis: usize,
+    /// Where the cut is, as a share of the way along the box of the solid.
+    cut_share: f64,
 }
 
 /// The picture of a solid as it was last worked out, and what it was worked out for.
 struct Drawn {
-    key: (Pose, usize, usize, bool),
+    key: (Pose, usize, usize, Look),
     picture: Picture,
     texture: egui::TextureHandle,
 }
 
-/// The picture of the pane, worked out again only when the pose, the size or the edges changed.
+/// The picture of the pane, worked out again only when the pose, the size or the look changed.
 fn picture_of<'a>(
     drawn: &'a mut Option<Drawn>,
     ctx: &egui::Context,
     solid: &Solid,
-    key: (Pose, usize, usize, bool),
+    key: (Pose, usize, usize, Look),
 ) -> &'a Drawn {
     if drawn.as_ref().is_some_and(|d| d.key != key) {
         *drawn = None;
     }
     drawn.get_or_insert_with(|| {
-        let (pose, width, height, edges) = key;
-        let picture = modelview::render(solid, &pose, width, height, edges);
+        let (pose, width, height, look) = key;
+        let picture = modelview::render(solid, &pose, width, height, look);
         let image = egui::ColorImage::from_rgba_unmultiplied(
             [picture.width, picture.height],
             &picture.rgba,
@@ -88,6 +93,9 @@ impl App {
             measuring: false,
             picks: Vec::new(),
             drawn: None,
+            cutting: false,
+            cut_axis: 2,
+            cut_share: 0.5,
         });
     }
 
@@ -201,6 +209,25 @@ impl App {
                             _ => ui.label(Msg::MvPickTwo.tr(lang)),
                         };
                     }
+                    if let Content::Solid(solid) = content {
+                        ui.horizontal_wrapped(|ui| {
+                            let words = Msg::MvCut.tr(lang);
+                            if ui.checkbox(&mut view.cutting, words).changed() {
+                                view.picks.clear();
+                            }
+                            if !view.cutting {
+                                return;
+                            }
+                            for (axis, name) in ["X", "Y", "Z"].into_iter().enumerate() {
+                                ui.radio_value(&mut view.cut_axis, axis, name);
+                            }
+                            let slider =
+                                egui::Slider::new(&mut view.cut_share, 0.0..=1.0).show_value(false);
+                            ui.add(slider);
+                            let cut = Cut::of(solid, view.cut_axis, view.cut_share);
+                            ui.label(format!("{:.2} mm", cut.at));
+                        });
+                    }
                     ui.label(egui::RichText::new(Msg::MvHint.tr(lang)).color(DIM));
                     let size = ui.available_size().max(Vec2::new(240.0, 200.0));
                     let (response, painter) =
@@ -236,11 +263,18 @@ impl App {
                         Content::Solid(solid) => {
                             // one pixel of the picture for each pixel of the screen
                             let sharp = f64::from(ui.ctx().pixels_per_point()).clamp(0.5, 4.0);
+                            let cut = view
+                                .cutting
+                                .then(|| Cut::of(solid, view.cut_axis, view.cut_share));
+                            let look = Look {
+                                edges: view.edges,
+                                cut,
+                            };
                             let key = (
                                 scaled(&view.pose, sharp),
                                 (pane.0 * sharp).round() as usize,
                                 (pane.1 * sharp).round() as usize,
-                                view.edges,
+                                look,
                             );
                             let drawn = picture_of(&mut view.drawn, ui.ctx(), solid, key);
                             let whole = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));

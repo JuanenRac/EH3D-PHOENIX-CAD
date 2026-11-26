@@ -520,6 +520,44 @@ const FACE: [f64; 3] = [150.0, 196.0, 224.0];
 /// The colour of a sharp edge.
 const EDGE: [u8; 4] = [10, 20, 28, 255];
 
+/// The colour of what is seen of the inside through a cut.
+const INSIDE: [f64; 3] = [224.0, 160.0, 96.0];
+
+/// A cut of the view: what is beyond a coordinate along one axis is not drawn, so that the inside
+/// is seen. Nothing of the file is changed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Cut {
+    /// The axis: 0 for x, 1 for y, 2 for z.
+    pub axis: usize,
+    /// The coordinate in millimetres; what is larger than it is cut away.
+    pub at: f64,
+}
+
+impl Cut {
+    /// The cut at a share (0 to 1) of the way along the box of the solid.
+    pub fn of(solid: &Solid, axis: usize, share: f64) -> Cut {
+        let axis = axis.min(2);
+        let share = share.clamp(0.0, 1.0);
+        Cut {
+            axis,
+            at: solid.low[axis] + (solid.high[axis] - solid.low[axis]) * share,
+        }
+    }
+
+    fn keeps(self, coordinate: f64) -> bool {
+        coordinate <= self.at + 1e-9
+    }
+}
+
+/// How the picture of a solid is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Look {
+    /// The sharp edges are drawn.
+    pub edges: bool,
+    /// Where the solid is cut, if it is.
+    pub cut: Option<Cut>,
+}
+
 /// The widest and tallest picture that is worked out.
 pub const PICTURE_MAX: usize = 4096;
 
@@ -535,6 +573,8 @@ pub struct Picture {
     pub rgba: Vec<u8>,
     /// The depth of the nearest surface at every pixel, infinite where there is none.
     depth: Vec<f64>,
+    /// The cut it was drawn with.
+    cut: Option<Cut>,
 }
 
 impl Picture {
@@ -569,8 +609,9 @@ impl Picture {
         self.rgba[at * 4..at * 4 + 4].copy_from_slice(&colour);
     }
 
-    /// Fills a triangle given by its corners (across, down, depth) where it is the nearest.
-    fn fill(&mut self, [a, b, c]: [(f64, f64, f64); 3], colour: [u8; 4]) {
+    /// Fills a triangle given by its corners (across, down, depth) where it is the nearest and
+    /// not cut away; `along` is the coordinate of each corner on the axis of the cut.
+    fn fill(&mut self, [a, b, c]: [(f64, f64, f64); 3], along: [f64; 3], colour: [u8; 4]) {
         let area = (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
         if area.abs() < 1e-12 {
             return;
@@ -589,6 +630,10 @@ impl Picture {
                 if wa < -1e-9 || wb < -1e-9 || wc < -1e-9 {
                     continue;
                 }
+                let coordinate = wa * along[0] + wb * along[1] + wc * along[2];
+                if self.cut.is_some_and(|cut| !cut.keeps(coordinate)) {
+                    continue;
+                }
                 let depth = wa * a.2 + wb * b.2 + wc * c.2;
                 let at = y * self.width + x;
                 if depth < self.depth[at] {
@@ -599,8 +644,8 @@ impl Picture {
         }
     }
 
-    /// Draws a side one pixel wide where it is not behind a surface.
-    fn stroke(&mut self, a: (f64, f64, f64), b: (f64, f64, f64), slack: f64) {
+    /// Draws a side one pixel wide where it is not behind a surface nor cut away.
+    fn stroke(&mut self, a: (f64, f64, f64), b: (f64, f64, f64), along: (f64, f64), slack: f64) {
         let longest = (b.0 - a.0).abs().max((b.1 - a.1).abs());
         // a side far longer than the picture (a very close zoom) is walked in bounded steps
         let steps = (longest.ceil() as usize).clamp(1, 4 * PICTURE_MAX);
@@ -609,6 +654,10 @@ impl Picture {
             let x = a.0 + (b.0 - a.0) * t;
             let y = a.1 + (b.1 - a.1) * t;
             if x < 0.0 || y < 0.0 || x >= self.width as f64 || y >= self.height as f64 {
+                continue;
+            }
+            let coordinate = along.0 + (along.1 - along.0) * t;
+            if self.cut.is_some_and(|cut| !cut.keeps(coordinate)) {
                 continue;
             }
             let depth = a.2 + (b.2 - a.2) * t;
@@ -626,10 +675,10 @@ fn slack(solid: &Solid) -> f64 {
 }
 
 /// The picture of a solid, `width` by `height` pixels: every pixel shows the surface that is
-/// nearest to the person, lit by its direction, and with `edges` the sharp edges that are not
-/// hidden. A closed solid leaves out the triangles that look away; an open surface is lit from
-/// both sides.
-pub fn render(solid: &Solid, pose: &Pose, width: usize, height: usize, edges: bool) -> Picture {
+/// nearest to the person, lit by its direction, and with the edges of the look the sharp edges
+/// that are not hidden. A closed solid leaves out the triangles that look away; an open surface
+/// is lit from both sides, and so is a cut solid, whose inside has a colour of its own.
+pub fn render(solid: &Solid, pose: &Pose, width: usize, height: usize, look: Look) -> Picture {
     let width = width.clamp(1, PICTURE_MAX);
     let height = height.clamp(1, PICTURE_MAX);
     let mut out = Picture {
@@ -637,7 +686,9 @@ pub fn render(solid: &Solid, pose: &Pose, width: usize, height: usize, edges: bo
         height,
         rgba: vec![0; width * height * 4],
         depth: vec![f64::INFINITY; width * height],
+        cut: look.cut,
     };
+    let axis = look.cut.map_or(0, |cut| cut.axis.min(2));
     // the light comes from over the left shoulder of the person
     let light = unit([-0.35, 0.55, -0.75]).unwrap_or([0.0, 0.0, -1.0]);
     let pane = (width as f64, height as f64);
@@ -650,25 +701,29 @@ pub fn render(solid: &Solid, pose: &Pose, width: usize, height: usize, edges: bo
     for t in &solid.triangles {
         let (right, up, depth) = rotate(t.normal, [0.0; 3], pose.camera);
         let away = depth > 1e-9;
-        if away && solid.closed {
+        if away && solid.closed && look.cut.is_none() {
             continue;
         }
         let side = if away { -1.0 } else { 1.0 };
         let lit = dot([right * side, up * side, depth * side], light).max(0.0);
         let shade = 0.25 + 0.75 * lit;
-        let [r, g, b] = FACE.map(|v| (v * shade).clamp(0.0, 255.0) as u8);
+        // the side that looks away of a closed solid is only seen through a cut
+        let base = if away && solid.closed { INSIDE } else { FACE };
+        let [r, g, b] = base.map(|v| (v * shade).clamp(0.0, 255.0) as u8);
         let at = t.corners.map(|v| corners[v as usize]);
-        out.fill(at, [r, g, b, 255]);
+        let along = t.corners.map(|v| solid.points[v as usize][axis]);
+        out.fill(at, along, [r, g, b, 255]);
         for k in 0..3 {
-            if edges && t.edges & (1 << k) != 0 {
-                sides.push((at[k], at[(k + 1) % 3]));
+            let next = (k + 1) % 3;
+            if look.edges && t.edges & (1 << k) != 0 {
+                sides.push((at[k], at[next], (along[k], along[next])));
             }
         }
     }
     // the edges after every face, so that a face drawn later does not cut them in half
     let slack = slack(solid);
-    for (a, b) in sides {
-        out.stroke(a, b, slack);
+    for (a, b, along) in sides {
+        out.stroke(a, b, along, slack);
     }
     out
 }
@@ -688,6 +743,12 @@ pub fn pick(
     for t in &solid.triangles {
         for v in t.corners {
             let corner = solid.points[v as usize];
+            if picture
+                .cut
+                .is_some_and(|cut| !cut.keeps(corner[cut.axis.min(2)]))
+            {
+                continue;
+            }
             let (x, y, depth) = on_pane(solid, pose, pane, corner);
             let apart = (x - at.0).hypot(y - at.1);
             if apart > radius || !picture.sees(x, y, depth, slack) {

@@ -4,6 +4,12 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **Cut the view to see inside:** the view of a 3D file can be cut along x, y or z with a slider, showing the inside of an enclosure or a connector in a colour of its own; corners that are cut away are not measured.
+
+- **Opening a signed suite project says what is known:** the status line tells whether the signature of the branch `cad` and of the project is valid, wrong, of a key that is not trusted or only seen, with the keys of `suite.trusted_keys`; a project given on the command line opens the same way as from the menu.
+
+- **The shared repository at v0.3.6:** saving a suite project no longer compresses again what did not change, the tabs of crowded panels go in rows and the About window can be read on the light theme.
+
 - **3D attachments are seen inside the program:** a STL, OBJ, 3MF, STEP, PLY, OFF or DXF attachment of the suite project has a button over the panel *Attachments* that shows it as a shaded solid with its sharp edges, to turn, move and zoom, without taking it out of the project. What is behind is hidden pixel by pixel, also inside a box with long walls. The window has only been looked at in pictures of a virtual screen.
 
 - **What the part measures, and whether it goes in the box:** the view tells the solids and triangles, the size, the volume of a closed surface (or how many edges are open), what the reader warned about and whether it fits inside the box as it is, only when turned, or not at all.

@@ -63,6 +63,16 @@ fn cube_solid() -> Solid {
     solid(load("cube.stl", &cube_stl(), &options(), Lang::En).unwrap())
 }
 
+const PLAIN: Look = Look {
+    edges: false,
+    cut: None,
+};
+
+const LINED: Look = Look {
+    edges: true,
+    cut: None,
+};
+
 const FLAT_DXF: &str = "0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n30\n21\n0\n\
     0\nCIRCLE\n8\n0\n10\n10\n20\n0\n40\n5\n0\nENDSEC\n0\nEOF\n";
 
@@ -136,7 +146,7 @@ fn an_open_surface_has_no_volume_and_says_how_many_edges_are_open() {
         yaw: 0.0,
         pitch: -90.0,
     };
-    let picture = render(&read, &Pose::fitted(below), 400, 400, false);
+    let picture = render(&read, &Pose::fitted(below), 400, 400, PLAIN);
     assert_eq!(picture.pixel(200, 200)[3], 255);
 }
 
@@ -194,7 +204,7 @@ fn a_flat_drawing_is_read_with_its_size_and_fits_the_pane() {
 #[test]
 fn the_picture_shows_the_lit_face_that_is_seen_and_nothing_round_it() {
     let cube = cube_solid();
-    let picture = render(&cube, &Pose::fitted(Camera::TOP), 400, 400, false);
+    let picture = render(&cube, &Pose::fitted(Camera::TOP), 400, 400, PLAIN);
     assert_eq!((picture.width, picture.height), (400, 400));
     // from above the top face fills the middle: 150 of red times a shade of about 0.816
     for (x, y) in [(200, 200), (120, 120), (280, 280)] {
@@ -210,7 +220,7 @@ fn the_picture_shows_the_lit_face_that_is_seen_and_nothing_round_it() {
         yaw: 45.0,
         pitch: 30.0,
     };
-    let picture = render(&cube, &Pose::fitted(corner), 400, 400, false);
+    let picture = render(&cube, &Pose::fitted(corner), 400, 400, PLAIN);
     let shades: std::collections::BTreeSet<u8> = picture
         .rgba
         .chunks(4)
@@ -240,7 +250,7 @@ fn what_is_behind_is_hidden_whatever_the_order_and_the_size_of_the_triangles() {
         let mesh = interchange::mesh_from_triangles(&triangles);
         let bytes = crate::mesh::stl_binary(&[("two", &mesh)]);
         let read = solid(load("two.stl", &bytes, &options(), Lang::En).unwrap());
-        render(&read, &Pose::fitted(Camera::TOP), 200, 200, false)
+        render(&read, &Pose::fitted(Camera::TOP), 200, 200, PLAIN)
     };
     let one = picture_of([near.clone(), far.clone()].concat());
     let other = picture_of([far, near].concat());
@@ -255,8 +265,8 @@ fn what_is_behind_is_hidden_whatever_the_order_and_the_size_of_the_triangles() {
 fn the_sharp_edges_are_drawn_when_asked_and_not_where_they_are_hidden() {
     let cube = cube_solid();
     let pose = Pose::fitted(Camera::TOP);
-    let plain = render(&cube, &pose, 400, 400, false);
-    let lined = render(&cube, &pose, 400, 400, true);
+    let plain = render(&cube, &pose, 400, 400, PLAIN);
+    let lined = render(&cube, &pose, 400, 400, LINED);
     let dark = |p: &Picture| p.rgba.chunks(4).filter(|c| *c == [10, 20, 28, 255]).count();
     assert_eq!(dark(&plain), 0);
     assert!(dark(&lined) > 400, "{}", dark(&lined));
@@ -268,7 +278,7 @@ fn the_sharp_edges_are_drawn_when_asked_and_not_where_they_are_hidden() {
 fn the_corner_under_the_pointer_is_a_corner_that_is_not_hidden() {
     let cube = cube_solid();
     let pose = Pose::fitted(Camera::TOP);
-    let picture = render(&cube, &pose, 400, 400, true);
+    let picture = render(&cube, &pose, 400, 400, LINED);
     let top_corner = [10.0, 10.0, 10.0];
     let at = place_of(&cube, &pose, (400.0, 400.0), top_corner);
     // the corner under it is on the same pixel and farther: the near one is picked
@@ -279,7 +289,7 @@ fn the_corner_under_the_pointer_is_a_corner_that_is_not_hidden() {
         yaw: 45.0,
         pitch: 30.0,
     });
-    let picture = render(&cube, &corner, 400, 400, true);
+    let picture = render(&cube, &corner, 400, 400, LINED);
     let far = [10.0, 10.0, 0.0];
     let at = place_of(&cube, &corner, (400.0, 400.0), far);
     assert_ne!(pick(&cube, &corner, &picture, at, 3.0), Some(far));
@@ -287,6 +297,41 @@ fn the_corner_under_the_pointer_is_a_corner_that_is_not_hidden() {
         distance_text([0.0; 3], [3.0, 4.0, 0.0], Lang::En),
         "Distance 5 mm (x 3, y 4, z 0 mm)"
     );
+}
+
+#[test]
+fn a_cut_shows_the_inside_in_a_colour_of_its_own_and_hides_what_is_beyond() {
+    let cube = cube_solid();
+    assert_eq!(Cut::of(&cube, 2, 0.5), Cut { axis: 2, at: 5.0 });
+    // the share and the axis stay inside what there is
+    assert_eq!(Cut::of(&cube, 9, 7.0), Cut { axis: 2, at: 10.0 });
+    assert_eq!(Cut::of(&cube, 0, -1.0), Cut { axis: 0, at: 0.0 });
+    let pose = Pose::fitted(Camera::TOP);
+    let cut = |share: f64| Look {
+        edges: true,
+        cut: Some(Cut::of(&cube, 2, share)),
+    };
+    // cut under its top, from above the inside of the bottom is seen: warm, not blue
+    let open = render(&cube, &pose, 400, 400, cut(0.5));
+    let [red, _, blue, alpha] = open.pixel(200, 150);
+    assert_eq!(alpha, 255);
+    assert!(red > blue, "{red} {blue}");
+    // a cut at the far side keeps the top, which is blue
+    let whole = render(&cube, &pose, 400, 400, cut(1.0));
+    let [red, _, blue, _] = whole.pixel(200, 150);
+    assert!(blue > red, "{red} {blue}");
+    // a corner that was cut away is not picked: the one under it is
+    let top_corner = [10.0, 10.0, 10.0];
+    let at = place_of(&cube, &pose, (400.0, 400.0), top_corner);
+    assert_eq!(pick(&cube, &pose, &open, at, 6.0), Some([10.0, 10.0, 0.0]));
+    // along x, what is left of the cube ends at the cut
+    let side = Look {
+        edges: false,
+        cut: Some(Cut::of(&cube, 0, 0.5)),
+    };
+    let half = render(&cube, &pose, 400, 400, side);
+    assert_eq!(half.pixel(150, 200)[3], 255);
+    assert_eq!(half.pixel(250, 200)[3], 0);
 }
 
 #[test]
