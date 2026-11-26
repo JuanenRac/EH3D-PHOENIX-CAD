@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.1.4] - Shared project container with the board as a reference for the enclosure, flat panels, selectors and parameters, and an exact test counter
+
 - **The branch `cad` of a project of the suite (`.eh3d`, `eh3d-save`):** a project is kept in one `.eh3d` file with a branch for each program, through the shared crate `eh3d-project`; this program writes only `cad`, `docs/cad` and the metadata of `common`, keeps every file of its branch that it did not write again and leaves every other branch as it is, byte for byte, which a test with a fixed seed checks over twelve saves among the branches of three other programs. The same content makes the same file, the clock is never read (`--time` gives the time), and a file the shared format refuses is `PHOENIX-CAD-064` with its `EH3D-PKG` code, a branch that cannot be used `PHOENIX-CAD-065`.
 
 - **`eh3d-open` takes the project back out of the branch:** the file written is byte for byte the project that was saved, nothing is written over a file that exists unless `--overwrite` is given, and a branch of a newer format or an encrypted one is refused instead of being read halfway.
