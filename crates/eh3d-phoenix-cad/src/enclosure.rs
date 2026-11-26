@@ -1198,7 +1198,7 @@ impl Enclosure {
         all
     }
 
-    fn derived_lid_holes(&self) -> Result<Vec<Hole>, CadError> {
+    pub(crate) fn derived_lid_holes(&self) -> Result<Vec<Hole>, CadError> {
         match &self.lid {
             Some(lid) => lid_holes_of(
                 self.params.wall,

@@ -14,6 +14,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::config::Settings;
+use crate::eh3dfile;
 use crate::export::write_bytes;
 use crate::featuredag::{FeatureDag, HistorySettings};
 use crate::lang::{fill, Lang, Msg};
@@ -84,7 +85,8 @@ struct Opened {
 }
 
 fn open(file: &str, e: &Everything, lang: Lang) -> Result<Opened, String> {
-    let bytes = fs::read(file).map_err(|x| format!("{file}: {x}"))?;
+    let bytes = eh3dfile::load_project_bytes(Path::new(file), MAX_PROJECT_BYTES as u64)
+        .map_err(|x| format!("{file}: {x}"))?;
     let doc = Document::from_bytes(&bytes, MAX_PROJECT_BYTES)
         .map_err(|x| format!("{file}: {}", error_text(&x, lang)))?;
     let fail = |x: CadError| format!("{file}: {}", error_text(&x, lang));

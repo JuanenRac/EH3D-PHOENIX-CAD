@@ -194,6 +194,10 @@
           }
         },
         {
+          "name": "BOARD_INTERCHANGE.md",
+          "desc": {"en": "the board and the box in a .eh3d file", "es": "la placa y la caja en un fichero .eh3d", "de": "Platine und Gehäuse in einer .eh3d-Datei", "fr": "la carte et le boîtier dans un fichier .eh3d", "it": "la scheda e il contenitore in un file .eh3d", "ja": ".eh3d ファイル内の基板と筐体", "zh": ".eh3d 文件中的电路板与外壳", "pt": "a placa e a caixa num ficheiro .eh3d"}
+        },
+        {
           "name": "EXPORT.md",
           "desc": {
             "en": "the exports: STL solid, DXF and SVG drawings",

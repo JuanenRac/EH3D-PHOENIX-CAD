@@ -19,6 +19,7 @@ use crate::body::{Built, Step, StepState};
 use crate::catalog::{self, Axis, Kind as PartKind, Library, Orientation, PartInstance, Shape};
 use crate::config::Settings;
 use crate::drag::{self, Drawn, Plane};
+use crate::eh3dfile;
 use crate::enclosure::{
     Edging, Enclosure, EnclosureParams, Face, Hole, HoleStyle, Id, Operation, Treatment,
 };
@@ -55,7 +56,7 @@ use crate::{CadError, Length};
 use std::path::{Path, PathBuf};
 
 /// The extensions of the project files that the window opens and writes.
-pub const PROJECT_EXTENSIONS: [&str; 1] = ["phoenixproj"];
+pub const PROJECT_EXTENSIONS: [&str; 2] = ["phoenixproj", "eh3d"];
 
 /// What is selected in the tree of the model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4167,7 +4168,8 @@ impl Window {
 
     fn read_project(&mut self, path: &Path) -> Result<(), Status> {
         let limit = self.settings.mechanical.max_bytes.saturating_add(1 << 20);
-        let bytes = store::load_limited(path, limit as u64).map_err(Status::Error)?;
+        // a project file, or the branch `cad` of a project file of the suite (`.eh3d`)
+        let bytes = eh3dfile::load_project_bytes(path, limit as u64).map_err(Status::Error)?;
         self.read_project_bytes(&bytes, Some(path))
     }
 
@@ -4237,7 +4239,18 @@ impl Window {
         let written = document
             .set_mechanical(&self.mech, &self.settings.mechanical)
             .and_then(|()| document.set_sketches(&self.mech.sketches, &self.sketch_settings))
-            .and_then(|()| store::save_atomic(path, &document.to_bytes(), self.settings.backups));
+            .and_then(|()| {
+                if eh3dfile::is_eh3d(path) {
+                    // only the branch `cad` is written; the other branches keep their bytes
+                    let how = eh3dfile::SaveSettings {
+                        keep_backup: self.settings.backups > 0,
+                        ..eh3dfile::SaveSettings::default()
+                    };
+                    eh3dfile::save_cad_project(path, &document.to_bytes(), &how)
+                } else {
+                    store::save_atomic(path, &document.to_bytes(), self.settings.backups)
+                }
+            });
         match written {
             Ok(()) => {
                 self.document = document;

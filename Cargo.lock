@@ -105,7 +105,20 @@ name = "eh3d-phoenix-cad"
 version = "0.1.3"
 dependencies = [
  "eh3d-container",
+ "eh3d-project",
  "eh3d-serverclient",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "eh3d-project"
+version = "0.0.1"
+dependencies = [
+ "eh3d-container",
+ "eh3d-diagnostic",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

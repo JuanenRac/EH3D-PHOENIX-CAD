@@ -15,6 +15,7 @@ use std::path::Path;
 
 use crate::config::Settings;
 use crate::coordentry;
+use crate::eh3dfile;
 use crate::export::write_bytes;
 use crate::featuredag::{BuildState, FeatureDag, HistorySettings};
 use crate::glb;
@@ -72,7 +73,8 @@ fn settings(config: Option<&str>) -> Result<(Settings, HistorySettings, UiSettin
 fn open(args: &Args, lang: Lang) -> Result<(Option<FeatureDag>, Settings, UiSettings), String> {
     let file = args.only_word("project file")?;
     let (lib, hist, ui) = settings(args.value("--config"))?;
-    let bytes = fs::read(file).map_err(|e| format!("{file}: {e}"))?;
+    let bytes = eh3dfile::load_project_bytes(Path::new(file), MAX_PROJECT_BYTES as u64)
+        .map_err(|e| format!("{file}: {e}"))?;
     let doc = Document::from_bytes(&bytes, MAX_PROJECT_BYTES)
         .map_err(|e| format!("{file}: {}", error_text(&e, lang)))?;
     let dag = doc

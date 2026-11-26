@@ -62,6 +62,12 @@ State: **accepted**.
 
 The mechanical domain of the shared project keeps the recipe of the box (parameters, expressions, ordered steps, tip and the interface of the board), not its final shape; the final state is derived from the recipe every time. The text, its version and its limits are in `PROJECT_DOMAIN.md` and the record is `adr/0011-mechanical-domain-recipe.md`.
 
+## The suite file and the board of the other branch
+
+State: **accepted** (record 0021).
+
+The project is kept byte for byte in the branch `cad` of a `.eh3d` file; only `cad`, `docs/cad` and the metadata of `common` are written; the board comes from `pcb` as the artifact `outline2d`, with a reference that carries its content hash; posts follow holes by identity and nothing is guessed.
+
 ## The lid is fixed with screws into posts
 
 State: **accepted**.

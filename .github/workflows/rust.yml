@@ -21,7 +21,7 @@ concurrency:
 
 env:
   # The tag of each sibling repository this one is built against (name=tag, separated by spaces).
-  SIBLING_REFS: "EH3D-COMMON=v0.3.0"
+  SIBLING_REFS: "EH3D-COMMON=v0.3.1"
 
 jobs:
   rust:
@@ -66,5 +66,13 @@ jobs:
         run: cargo clippy --all-targets --features gui -- -D warnings
         working-directory: EH3D-PHOENIX-CAD
       - name: Tests
-        run: cargo test --all-targets
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --all-targets 2>&1 | tee test.log
+          cargo test --doc 2>&1 | tee -a test.log
+        working-directory: EH3D-PHOENIX-CAD
+      - name: The figure of tests of the README files is the one that ran
+        if: runner.os == 'Linux'
+        run: python3 -I -c "import sys; sys.path.insert(0, 'tools'); import check_test_count as c; raise SystemExit(c.main(['test.log']))"
         working-directory: EH3D-PHOENIX-CAD

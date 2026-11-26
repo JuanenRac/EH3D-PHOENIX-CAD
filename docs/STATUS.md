@@ -28,9 +28,13 @@ Besides the reports, the Reports menu has panels that work on the project. The *
 
 The sheet of views can also be written as a PDF file (`export --format pdf`) and every drawing can carry a scale bar (`drawing.scale_bar`), see `docs/EXPORT.md`. The program can keep a project on the EH3D server and send it reports (`docs/SERVER.md`): the section `[server]` of the settings holds the nine keys of the client of the suite, the commands `server-status`, `server-list`, `server-save`, `server-load`, `server-report`, `server-check` and `server-contract` save a project as a new version of its file (with the tag of the version it is made from, so nothing is overwritten without knowing), read it back and write the reports of a project into its folder `reports/`, and with no address nothing is sent anywhere. It has only been tried against a store in memory that follows the rules of the store of the server (and of the simulator of the shared client, which the tests compare it with), in memory and behind a socket of the computer where the tests run; it has never talked to a real server, and the station `cad` of the server is a simulator that checks the structure of the file and has no geometry kernel (`docs/SERVER.md`). The window has its panel (the project on the server, the checks of the station and the settings of the link), which has never been opened on a screen.
 
+## The suite file and the board
+
+A project can live in the branch `cad` of a `.eh3d` file (`docs/BOARD_INTERCHANGE.md`, record `adr/0021-the-suite-file-and-the-board-of-the-other-branch.md`). A box is made round the board that `pcb/outline2d.json` describes, follows it, checks the room of its parts and hands back the STL, the flat faces and the posts; selectors, parameter limits and flat faces work on any project. The board program writes no such file yet, so only boards made by tests have been used. The CI adds up the tests it runs, the examples of the documentation included, and fails when the README files state another figure.
+
 ## Capabilities
 
-The official state of each capability is in REQUIREMENTS.md: 16 requirements: 15 `prototype` (FCAD-001 and FCAD-003 to FCAD-016) and 1 `planned` (FCAD-002). This page never states a state that REQUIREMENTS.md does not.
+The official state of each capability is in REQUIREMENTS.md: 29 requirements: 28 `prototype` (FCAD-001 and FCAD-003 to FCAD-029) and 1 `planned` (FCAD-002). This page never states a state that REQUIREMENTS.md does not.
 
 ## Open questions
 
