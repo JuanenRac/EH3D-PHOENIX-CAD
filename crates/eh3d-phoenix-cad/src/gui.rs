@@ -34,9 +34,11 @@ use crate::CadError;
 use eframe::egui::{
     self, Color32, FontData, FontDefinitions, FontFamily, Pos2, Rect, Stroke, Vec2,
 };
+use eh3d_dock::about::Phoenix;
 use eh3d_dock::core::AboutInfo;
 use eh3d_dock::gui::Dock;
 use eh3d_dock::menu::{Chosen as MenuChosen, DockAction, MenuBar, StdAction};
+use eh3d_dock::palette;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -49,7 +51,8 @@ mod variants;
 /// The extensions of the public key files that check signatures.
 const KEY_EXTENSIONS: [&str; 1] = ["pub"];
 
-// the colours of the theme Forge, the one the other programs of the suite start with: amber on charcoal
+// the colours of the theme Forge, the one the other programs of the suite start with: charcoal, with
+// titles in the colour of the program and amber for what asks for attention and what is selected
 const BACKGROUND: Color32 = Color32::from_rgb(0x0f, 0x0d, 0x0b);
 const PANEL: Color32 = Color32::from_rgb(0x17, 0x13, 0x10);
 const RAISED: Color32 = Color32::from_rgb(0x22, 0x1c, 0x17);
@@ -569,7 +572,7 @@ impl App {
         ui.label(
             egui::RichText::new(Msg::ModelTitle.tr(lang))
                 .strong()
-                .color(ACCENT),
+                .color(title_colour(ui.visuals())),
         );
         ui.separator();
         let editable = !self.win.read_only;
@@ -657,7 +660,7 @@ impl App {
         ui.label(
             egui::RichText::new(Msg::PropertiesTitle.tr(lang))
                 .strong()
-                .color(ACCENT),
+                .color(title_colour(ui.visuals())),
         );
         ui.separator();
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -683,7 +686,7 @@ impl App {
                 ui.label(
                     egui::RichText::new(row.name.as_str())
                         .strong()
-                        .color(ACCENT),
+                        .color(title_colour(ui.visuals())),
                 );
                 ui.label(egui::RichText::new(format!("= {}", row.text)).color(TEXT));
             });
@@ -943,7 +946,7 @@ impl App {
             ui.label(
                 egui::RichText::new(Msg::MeasureTitle.tr(lang))
                     .strong()
-                    .color(ACCENT),
+                    .color(title_colour(ui.visuals())),
             );
             for (tool, msg) in [
                 (MeasureTool::Distance, Msg::MeasureDistanceTool),
@@ -1080,7 +1083,7 @@ impl App {
             egui::Align2::LEFT_TOP,
             title.tr(lang),
             egui::FontId::proportional(14.0),
-            ACCENT,
+            canvas_title_colour(),
         );
         painter.text(
             Pos2::new(rect.min.x + 12.0, rect.max.y - 10.0),
@@ -2412,7 +2415,7 @@ impl App {
             ui.label(
                 egui::RichText::new(Msg::ToolsTitle.tr(lang))
                     .strong()
-                    .color(ACCENT),
+                    .color(title_colour(ui.visuals())),
             );
             for tool in Tool::ALL {
                 let on = self.sketch.tool == tool;
@@ -2470,7 +2473,7 @@ impl App {
         ui.label(
             egui::RichText::new(Msg::ConstraintsTitle.tr(lang))
                 .strong()
-                .color(ACCENT),
+                .color(title_colour(ui.visuals())),
         );
         ui.label(egui::RichText::new(Msg::AddConstraintHint.tr(lang)).color(DIM));
         let available = self.sketch.available();
@@ -2553,7 +2556,7 @@ impl App {
         ui.label(
             egui::RichText::new(Msg::ElementsTitle.tr(lang))
                 .strong()
-                .color(ACCENT),
+                .color(title_colour(ui.visuals())),
         );
         let mut chosen = None;
         egui::ScrollArea::vertical()
@@ -2586,7 +2589,7 @@ impl App {
         ui.label(
             egui::RichText::new(Msg::DimensionsTitle.tr(lang))
                 .strong()
-                .color(ACCENT),
+                .color(title_colour(ui.visuals())),
         );
         ui.label(egui::RichText::new(Msg::DimensionsHint.tr(lang)).color(DIM));
         ui.add(
@@ -2959,7 +2962,7 @@ impl App {
             egui::Align2::LEFT_TOP,
             Msg::WorkspaceSketch.tr(lang),
             egui::FontId::proportional(14.0),
-            ACCENT,
+            canvas_title_colour(),
         );
         if let Some(hint) = self.sketch.proposal() {
             painter.text(
@@ -3097,7 +3100,7 @@ impl App {
                 ui.label(
                     egui::RichText::new("EH3D-PHOENIX-CAD")
                         .strong()
-                        .color(ACCENT),
+                        .color(title_colour(ui.visuals())),
                 );
                 ui.separator();
                 let (path, dirty) = if self.workspace == StartView::Sketch {
@@ -3310,7 +3313,7 @@ impl App {
                 } else {
                     title.tr(lang).to_string()
                 };
-                ui.label(egui::RichText::new(name).color(ACCENT));
+                ui.label(egui::RichText::new(name).color(title_colour(ui.visuals())));
                 for l in list {
                     ui.label(egui::RichText::new(&l.text).color(tone(l.tone)));
                 }
@@ -3319,7 +3322,9 @@ impl App {
                 ui.label(egui::RichText::new(&l.text).color(tone(l.tone)));
             }
             if !lines.layers.is_empty() {
-                ui.label(egui::RichText::new(Msg::PlLayers.tr(lang)).color(ACCENT));
+                ui.label(
+                    egui::RichText::new(Msg::PlLayers.tr(lang)).color(title_colour(ui.visuals())),
+                );
                 for l in &lines.layers {
                     let mut visible = l.visible;
                     ui.horizontal(|ui| {
@@ -3858,16 +3863,30 @@ fn install_fonts(ctx: &egui::Context) {
 
 /// The colours of the theme Forge for the controls of egui.
 fn apply_theme(ctx: &egui::Context, theme: ShotTheme) {
+    ctx.set_visuals(theme_visuals(theme));
+}
+
+/// The colour of the titles and highlighted names of the window: the one of the program (ice
+/// blue), in the tone that reads on every ground of these visuals, light or dark. Amber is left to
+/// warnings.
+fn title_colour(visuals: &egui::Visuals) -> Color32 {
+    let [r, g, b] = eh3d_dock::gui::accents_of(Phoenix::Cad, visuals).link;
+    Color32::from_rgb(r, g, b)
+}
+
+/// [`title_colour`] for the titles painted on the canvas of the drawings, which keeps its dark
+/// ground in every theme.
+fn canvas_title_colour() -> Color32 {
+    let ground = [BACKGROUND.r(), BACKGROUND.g(), BACKGROUND.b()];
+    let [r, g, b] = palette::readable(Phoenix::Cad.tones().main, ground);
+    Color32::from_rgb(r, g, b)
+}
+
+fn theme_visuals(theme: ShotTheme) -> egui::Visuals {
     match theme {
         ShotTheme::Forge => {}
-        ShotTheme::Dark => {
-            ctx.set_visuals(egui::Visuals::dark());
-            return;
-        }
-        ShotTheme::Light => {
-            ctx.set_visuals(egui::Visuals::light());
-            return;
-        }
+        ShotTheme::Dark => return egui::Visuals::dark(),
+        ShotTheme::Light => return egui::Visuals::light(),
     }
     let mut v = egui::Visuals::dark();
     v.panel_fill = PANEL;
@@ -3885,7 +3904,7 @@ fn apply_theme(ctx: &egui::Context, theme: ShotTheme) {
     v.widgets.inactive.corner_radius = 6.0.into();
     v.widgets.hovered.corner_radius = 6.0.into();
     v.widgets.active.corner_radius = 6.0.into();
-    ctx.set_visuals(v);
+    v
 }
 
 /// What the window needs to start.
@@ -3969,7 +3988,7 @@ pub fn run(start: Start) -> Result<(), String> {
             apply_theme(&cc.egui_ctx, ShotTheme::Forge);
             let mut shell = Shell::new(App::new(win, sketch, view), window, &settings, config);
             // the list of recent projects lives in the folder of the user, with or without `--config`
-            shell.dock.keep_user_recent(eh3d_dock::about::Phoenix::Cad);
+            shell.dock.keep_user_recent(Phoenix::Cad);
             Ok(Box::new(shell))
         }),
     )
@@ -4163,6 +4182,25 @@ mod tests {
         }
         assert_ne!(tone_colour(Tone::Green), tone_colour(Tone::Red));
         assert_ne!(tone_colour(Tone::Amber), tone_colour(Tone::Red));
+    }
+
+    #[test]
+    fn titles_take_the_colour_of_the_program_and_read_in_every_theme() {
+        let rgb = |c: Color32| [c.r(), c.g(), c.b()];
+        for theme in [ShotTheme::Forge, ShotTheme::Dark, ShotTheme::Light] {
+            let v = theme_visuals(theme);
+            let title = title_colour(&v);
+            assert_ne!(title, ACCENT);
+            assert!(title.b() > title.r(), "{theme:?}: not a blue");
+            for ground in [v.panel_fill, v.window_fill, v.extreme_bg_color] {
+                let contrast = palette::contrast(rgb(title), rgb(ground));
+                assert!(contrast >= palette::TEXT_CONTRAST, "{theme:?}: {contrast}");
+            }
+        }
+        let canvas = canvas_title_colour();
+        assert!(palette::contrast(rgb(canvas), rgb(BACKGROUND)) >= palette::TEXT_CONTRAST);
+        // what asks for attention stays amber
+        assert_eq!(tone_colour(Tone::Amber), ACCENT);
     }
 
     #[test]

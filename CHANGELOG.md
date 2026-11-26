@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **The titles of the window are in the colour of the program:** the titles of the panels, the names in the sheet of variables, the name of the program and the titles of the drawings take the ice blue of the program, in a tone that reads (contrast 4.5:1 or more) on the dark and the light looks; amber is left to what asks for attention, and the colours of the geometry do not change. It has not been seen on a screen.
+
 - **A variant can switch steps off and on:** a small box without its fins, or one with the screwed lid, is a variant like any other. The steps are named by a key that stays when other steps are added or removed, applying, checking and exporting a variant build the recipe with them, and a step that is gone is told and refused (`PHOENIX-CAD-014`). From the window of the variants or with `variants --set NAME --step WHICH --state off|on|keep` and `variants --steps`; only a project whose variants switch steps writes version 2 of the `variants` domain.
 
 - **A variable can follow a reference dimension of a sketch:** the drawing says a length, the variable takes it, and takes it again each time the sketch is kept in the project, in the same change of the history. A followed variable is not set by hand nor by a variant (`PHOENIX-CAD-016`), and a link whose dimension is gone, drives again or sits in a sketch whose formulas use the variable is shown as broken and keeps the value. From the sheet of variables or with the new command `variables`; the links are kept in an optional domain `variable-links`.
