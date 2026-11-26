@@ -113,6 +113,8 @@ All tuned values are in `phoenix-cad-sketch.default.cfg` (section `[sketch]`), r
 | `profile_join` | 0.001 | mm: two ends of lines and arcs this near (on each axis) are the same corner of an outline |
 | `profile_min_area` | 0.01 | mm2: an outline, or a hole in it, with less area than this is refused |
 | `profile_chord` | 0.005 | mm: the most an arc or a circle sags from the straight lines that stand for it in the checks and in the drawing |
+| `check_near` | 0.1 | mm: `sketch-check` names two points nearer than this that no constraint joins |
+| `check_angle` | 1 | degrees: `sketch-check` names a line nearer than this to horizontal or vertical without being so |
 
 ## The sketches in the project file
 
@@ -231,6 +233,20 @@ The STEP export and the model for fabrication **refuse** a box with an extrusion
 `coordentry.rs` reads a point written as text, the way it is typed into a sketch: `10,5` (from the origin), `@3,-2` (from the last point), `20<45` (a distance and an angle from the origin) and `@20<45` (the same from the last point). A number without a unit is in millimetres; any unit of the program is read as it is anywhere else (`1/4 in`, `500 um`). A semicolon separates the two numbers when a comma is also the decimal mark (`0,5; 2,5`); a text with more than one comma and no semicolon is refused. The angle is in degrees counter-clockwise from the x axis, a negative distance points the other way, a quarter turn is exact and any other angle is rounded half away from zero to the nanometre. Text that is not a point is `PHOENIX-CAD-008`, a point outside the range of lengths `PHOENIX-CAD-001`, and a list that has a bad point places none.
 
 `eh3d-phoenix-cad sketch-points [--start POINT] [--text] [--lang CODE] POINT...` places a list one after another (the first from `--start`, the origin without it) as `point,x_nm,y_nm` or as lines in the eight languages. The window uses the same logic in its entry line (below the tool hint of the sketch panel): the text is placed as a click of the active drawing tool would place it, `@` is measured from the last point placed by a click or by typing, the box is emptied when the point was placed, and a text that is not a point, a point out of range or the Select tool leave the text in the box and say why in the status line (`SketchEditor::type_point`). A typed point does not snap to an existing point or object; it is exactly the place that was typed. The entry line has been tested without a screen and has not been seen in a window.
+
+## Checking a sketch
+
+`eh3d-phoenix-cad sketch-check SKETCH.phoenixsketch [--text] [--lang CODE] [--config FILE]` reads a sketch file and says, without changing it:
+
+| `kind` | What | Code |
+|---|---|---|
+| `conflicting`, `redundant` | constraints that contradict or repeat others | `PHOENIX-CAD-033` |
+| `not-converged` | the solver ran out of steps | `PHOENIX-CAD-034` |
+| `open-end` | an end of a line or an arc of the profile that meets no other end within `profile_join` | `PHOENIX-CAD-036` |
+| `near` | two points within `check_near` that no coincidence or concentricity joins | none |
+| `horizontal`, `vertical` | a line of the profile within `check_angle` of an axis, not on it and not held by a horizontal, vertical or line angle constraint | none |
+
+The output is `kind,subject,other,value,code` (and a line `freedom,,,N,` when the solver found a solution), or with `--text` a sentence for each in the eight languages. Construction geometry is not part of the profile and is not looked at for straight lines or open ends. The exit code is 0 when there is nothing to report, 2 when there is and 1 when the command could not run. An open sketch can be meant, for example the path of a sweep: the check reports what it sees. The command reads sketch files, not the sketches kept in a project, and the window does not show it.
 
 ## Codes
 

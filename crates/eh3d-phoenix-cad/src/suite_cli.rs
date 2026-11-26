@@ -37,7 +37,7 @@ use crate::project::{Document, PARAMETERS_DOMAIN};
 use crate::scad::mm_text;
 use crate::select;
 use crate::sketch::settings::SketchSettings;
-use crate::step_import::StepLimits;
+use crate::suitewin;
 use crate::tools_cli::Args;
 use crate::uiconfig::UiSettings;
 use crate::units::parse_length;
@@ -87,10 +87,10 @@ pub fn run(command: &str, args: &[String]) -> Answer {
     }
 }
 
-struct All {
-    lib: Settings,
-    ui: UiSettings,
-    sketch: SketchSettings,
+pub(crate) struct All {
+    pub(crate) lib: Settings,
+    pub(crate) ui: UiSettings,
+    pub(crate) sketch: SketchSettings,
 }
 
 fn settings(config: Option<&str>) -> Result<All, String> {
@@ -354,45 +354,74 @@ fn new_box(args: &[String]) -> Answer {
     )?;
     let file = suite_file(&a)?;
     let s = settings(a.value("--config"))?;
-    let mut project = eh3dfile::open_project(file).map_err(say(a.lang))?;
-    let has_project = project
-        .branch(BRANCH)
-        .is_some_and(|b| b.files.contains_key(PROJECT_ENTRY));
+    let has_project = eh3dfile::has_project(file).map_err(say(a.lang))?;
     if has_project && !a.has("--overwrite") {
         return Err(error_text(
             &CadError::ExportExists(format!("{BRANCH}/{PROJECT_ENTRY}")),
             a.lang,
         ));
     }
-    let (artifact, canonical) = board_now(&mut project, &s.lib).map_err(say(a.lang))?;
-    let kind = a.value("--kind").unwrap_or("insert");
-    let request = BoxRequest {
-        gap: length(&a, "--gap", "2 mm")?,
-        headroom: length(&a, "--headroom", "3 mm")?,
-        post_height: length(&a, "--post-height", "8 mm")?,
-        screw: a.value("--screw").unwrap_or("M3"),
-        kind: BoreKind::from_name(kind).ok_or("--kind is insert or self-tapping")?,
-        shell: s.ui.new_box,
-    };
-    let mech = boardfit::box_for_board(&s.lib, &artifact, &request).map_err(say(a.lang))?;
-    let made = built(&mech, &s).map_err(say(a.lang))?;
+    let mut request = board_request(&s.ui);
+    if a.value("--gap").is_some() {
+        request.gap = length(&a, "--gap", "0 mm")?;
+    }
+    if a.value("--headroom").is_some() {
+        request.headroom = length(&a, "--headroom", "0 mm")?;
+    }
+    if a.value("--post-height").is_some() {
+        request.post_height = length(&a, "--post-height", "0 mm")?;
+    }
+    if let Some(screw) = a.value("--screw") {
+        request.screw = screw;
+    }
+    if let Some(kind) = a.value("--kind") {
+        request.kind = BoreKind::from_name(kind).ok_or("--kind is insert or self-tapping")?;
+    }
+    let out = make_box(file, &s, &request, a.lang, &save_settings(&a))?;
+    Ok((out, true))
+}
+
+/// The box made round a board as the settings of the window have it (`[suite]`).
+pub(crate) fn board_request(ui: &UiSettings) -> BoxRequest<'_> {
+    BoxRequest {
+        gap: ui.suite.board_gap,
+        headroom: ui.suite.board_headroom,
+        post_height: ui.suite.post_height,
+        screw: &ui.suite.post_screw,
+        kind: ui.suite.post_kind,
+        shell: ui.new_box,
+    }
+}
+
+/// Makes the box round the board of the branch `pcb`, in place of the project of the branch
+/// `cad`, and answers with what was made.
+pub(crate) fn make_box(
+    file: &Path,
+    s: &All,
+    request: &BoxRequest<'_>,
+    lang: Lang,
+    how: &SaveSettings,
+) -> Result<String, String> {
+    let mut project = eh3dfile::open_project(file).map_err(say(lang))?;
+    let (artifact, canonical) = board_now(&mut project, &s.lib).map_err(say(lang))?;
+    let mech = boardfit::box_for_board(&s.lib, &artifact, request).map_err(say(lang))?;
+    let made = built(&mech, s).map_err(say(lang))?;
     let mut document = Document::new();
     document
         .set_mechanical(&mech, &s.lib.mechanical)
-        .map_err(say(a.lang))?;
-    let depends = vec![reference(&project).map_err(say(a.lang))?];
+        .map_err(say(lang))?;
+    let depends = vec![reference(&project).map_err(say(lang))?];
     let changes = BTreeMap::from([
         (PROJECT_ENTRY.to_owned(), Some(document.to_bytes())),
         (SNAPSHOT_ENTRY.to_owned(), Some(canonical)),
     ]);
-    eh3dfile::write_branch(file, BRANCH, changes, Some(depends), &save_settings(&a))
-        .map_err(say(a.lang))?;
+    eh3dfile::write_branch(file, BRANCH, changes, Some(depends), how).map_err(say(lang))?;
     let p = made.enclosure.params();
     let mut out = String::new();
     line(
         &mut out,
         Msg::SuiteBoxMade,
-        a.lang,
+        lang,
         &[
             &mm_text(p.inner_length.get()),
             &mm_text(p.inner_width.get()),
@@ -400,7 +429,7 @@ fn new_box(args: &[String]) -> Answer {
             &made.enclosure.posts().len().to_string(),
         ],
     );
-    Ok((out, true))
+    Ok(out)
 }
 
 fn change_line(out: &mut String, change: &Change, lang: Lang) {
@@ -422,46 +451,51 @@ fn take_board(args: &[String]) -> Answer {
     let a = parse(args, &[], &["--backup"])?;
     let file = suite_file(&a)?;
     let s = settings(a.value("--config"))?;
-    let (mut document, mut mech) = recipe(file, &s).map_err(say(a.lang))?;
-    let mut project = eh3dfile::open_project(file).map_err(say(a.lang))?;
-    let old = snapshot(&mut project, &s.lib).map_err(say(a.lang))?;
-    let (artifact, canonical) = board_now(&mut project, &s.lib).map_err(say(a.lang))?;
+    follow_board(file, &s, a.lang, &save_settings(&a))
+}
+
+/// Moves the box of the branch `cad` with the changes of the board of `pcb`, names every change
+/// and answers whether nothing is left for the person.
+pub(crate) fn follow_board(file: &Path, s: &All, lang: Lang, how: &SaveSettings) -> Answer {
+    let (mut document, mut mech) = recipe(file, s).map_err(say(lang))?;
+    let mut project = eh3dfile::open_project(file).map_err(say(lang))?;
+    let old = snapshot(&mut project, &s.lib).map_err(say(lang))?;
+    let (artifact, canonical) = board_now(&mut project, &s.lib).map_err(say(lang))?;
     let mut out = String::new();
     match &old {
-        None => line(&mut out, Msg::SuiteBoardImported, a.lang, &[]),
+        None => line(&mut out, Msg::SuiteBoardImported, lang, &[]),
         Some(old) => {
             let changes = boardart::changes(old, &artifact);
             if changes.is_empty() {
-                line(&mut out, Msg::SuiteBoardSame, a.lang, &[]);
+                line(&mut out, Msg::SuiteBoardSame, lang, &[]);
             }
             for change in &changes {
-                change_line(&mut out, change, a.lang);
+                change_line(&mut out, change, lang);
             }
         }
     }
-    let update = boardfit::update_board(&s.lib, &mut mech, &artifact).map_err(say(a.lang))?;
+    let update = boardfit::update_board(&s.lib, &mut mech, &artifact).map_err(say(lang))?;
     for name in &update.moved {
-        line(&mut out, Msg::SuitePostMoved, a.lang, &[name]);
+        line(&mut out, Msg::SuitePostMoved, lang, &[name]);
     }
     for name in &update.orphans {
-        line(&mut out, Msg::SuitePostOrphan, a.lang, &[name]);
+        line(&mut out, Msg::SuitePostOrphan, lang, &[name]);
     }
     for name in &update.bare {
-        line(&mut out, Msg::SuiteHoleBare, a.lang, &[name]);
+        line(&mut out, Msg::SuiteHoleBare, lang, &[name]);
     }
     for name in &update.failed {
-        line(&mut out, Msg::SuiteStepFailed, a.lang, &[name]);
+        line(&mut out, Msg::SuiteStepFailed, lang, &[name]);
     }
     document
         .set_mechanical(&mech, &s.lib.mechanical)
-        .map_err(say(a.lang))?;
-    let depends = vec![reference(&project).map_err(say(a.lang))?];
+        .map_err(say(lang))?;
+    let depends = vec![reference(&project).map_err(say(lang))?];
     let changes = BTreeMap::from([
         (PROJECT_ENTRY.to_owned(), Some(document.to_bytes())),
         (SNAPSHOT_ENTRY.to_owned(), Some(canonical)),
     ]);
-    eh3dfile::write_branch(file, BRANCH, changes, Some(depends), &save_settings(&a))
-        .map_err(say(a.lang))?;
+    eh3dfile::write_branch(file, BRANCH, changes, Some(depends), how).map_err(say(lang))?;
     let ok = update.orphans.is_empty() && update.bare.is_empty() && update.failed.is_empty();
     Ok((out, ok))
 }
@@ -646,36 +680,19 @@ fn import(args: &[String]) -> Answer {
         return Err("the file of the suite ends in .eh3d".to_owned());
     }
     let s = settings(a.value("--config"))?;
-    let path = Path::new(foreign);
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or("the file to keep has no name")?;
-    let format = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    let bytes = crate::store::load_limited(path, MAX_BYTES).map_err(say(a.lang))?;
-    let limits = StepLimits::from_settings(&s.lib.mesh);
-    let solids = crate::interchange::read_file_bytes_limited(name, &bytes, &limits)
-        .map_err(|e| format!("{foreign}: {e}"))?;
-    let triangles: usize = solids.iter().map(|(_, mesh)| mesh.triangles.len()).sum();
-    let count = eh3dfile::ImportCount {
-        read: vec![
-            ("solids".to_owned(), solids.len() as u64),
-            ("triangles".to_owned(), triangles as u64),
-        ],
-        not_read: Vec::new(),
-    };
-    eh3dfile::keep_origin(target, &format, name, &bytes, &count, &save_settings(&a))
-        .map_err(say(a.lang))?;
+    let done =
+        suitewin::import_original(target, Path::new(foreign), &s.lib.mesh, &save_settings(&a))
+            .map_err(|e| format!("{foreign}: {}", e.text(a.lang)))?;
     let mut out = String::new();
     line(
         &mut out,
         Msg::SuiteImported,
         a.lang,
-        &[name, &solids.len().to_string(), &triangles.to_string()],
+        &[
+            &done.name,
+            &done.solids.to_string(),
+            &done.triangles.to_string(),
+        ],
     );
     out.push_str(&format!("{BRANCH}/{REPORT_FILE}\n"));
     Ok((out, true))

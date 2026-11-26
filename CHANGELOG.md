@@ -4,6 +4,28 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **The submenu «Suite project (.eh3d)» of the File menu:** open a project of the suite, save it, save it under another name, import into it, list its branches and take the board, in the eight languages. A file that holds only the branches of other programs (just a board) opens as a new box that is saved into it, and opening writes nothing; the entries that need a file or leave to write are off without one. The logic is tested without a screen and the menus have not been seen in a window.
+
+- **Save and Save as of the suite project:** *Save suite project* writes the branch `cad` of the file of the window and asks for a name when the project is not in a `.eh3d` file yet; *Save suite project as* writes over a file that holds the box of another project only when the box for it is ticked (`PHOENIX-CAD-040` otherwise).
+
+- **Saving under a new name no longer drops the other branches:** the plain *Save as* of a project opened from a `.eh3d` file made a new file with the branch `cad` only; it now takes every branch of the file along, byte for byte, and leaves nothing behind when the write is refused.
+
+- **Import in the window, keeping the original:** a STL, OBJ, 3MF, STEP, PLY, OFF or DXF file is kept in `cad/origin/` with its report, and a window shows what was read.
+
+- **The report of an import lists what the reader warned about:** the warnings of the readers (bytes after the last triangle, triangles left out, things ignored) are written as not read, in the window and in `eh3d-import`, where the list was empty before. The report is made by the shared code of the suite.
+
+- **The list of the branches of a project:** a window with each branch, its program, format, files and state (current, out of date and which branch changed, signed but not checked, sealed, encrypted), the findings of the checks and the report of the original.
+
+- **The board of `pcb` from the window:** *Take the board from the branch pcb* makes the box when there is none and follows the board when there is one, and shows each change; it is refused while there are changes that are not saved, and the copy of the replaced file is kept when the settings keep copies.
+
+- **The box made from a board is set in the settings:** the new section `[suite]` (`board_gap`, `board_headroom`, `post_height`, `post_screw`, `post_kind`) gives what `eh3d-new` is not told and what the window uses; the shipped values are the ones the command had.
+
+- **Recent files:** a file goes into the list only when it was opened or saved, a recent file that is gone is taken out of it, and the list of branches shows the suite projects among the recent ones.
+
+- **`sketch-check` says what the solver rejects:** constraints that repeat or contradict others (`PHOENIX-CAD-033`) and a solver that does not converge (`PHOENIX-CAD-034`) of a sketch file, each constraint by its name, as comma separated values or in the eight languages, with exit code 2 when there is something.
+
+- **`sketch-check` finds what a drawing hides:** two points that look like one and are not joined, lines almost horizontal or vertical and ends of the profile that meet no other end (`PHOENIX-CAD-036`); the limits are the new settings `sketch.check_near` and `sketch.check_angle`, the sketch is never changed and the window does not show the check yet.
+
 - **A new window «About»:** the picture of the program inside a ring of its colour (blue), the name in large letters, one sentence about the program in the eight languages, the version, the author and the e-mail, links to the page of the author and to the repository and the licence. It is the window of the docking frame of the suite (`eh3d-dock`), so the workflows build against `EH3D-COMMON` at `main` until a release of it carries the window.
 
 ## [0.1.4] - Shared project container with the board as a reference for the enclosure, flat panels, selectors and parameters, and an exact test counter

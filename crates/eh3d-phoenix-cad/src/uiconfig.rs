@@ -253,6 +253,59 @@ impl PanelSettings {
     }
 }
 
+/// What the box made round the board of the branch `pcb` starts with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SuiteSettings {
+    /// The room between the board and the walls.
+    pub board_gap: Length,
+    /// The room above the tallest part of the board.
+    pub board_headroom: Length,
+    /// The height of the post under each mounting hole.
+    pub post_height: Length,
+    /// The screw of the posts, a name of the table of screws.
+    pub post_screw: String,
+    /// What the bore of a post is made for.
+    pub post_kind: BoreKind,
+}
+
+impl SuiteSettings {
+    fn from_config(c: &Config) -> Result<SuiteSettings, CadError> {
+        let room = |key: &str| {
+            let value = c.length(key)?;
+            if value.get() >= 0 {
+                Ok(value)
+            } else {
+                Err(CadError::Config(format!("{key} must not be negative")))
+            }
+        };
+        let post_height = c.length("suite.post_height")?;
+        if post_height.get() <= 0 {
+            return Err(CadError::Config(
+                "suite.post_height must be above zero".to_owned(),
+            ));
+        }
+        let post_screw = c
+            .get("suite.post_screw")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| missing("suite.post_screw"))?
+            .to_owned();
+        let kind = c
+            .get("suite.post_kind")
+            .ok_or_else(|| missing("suite.post_kind"))?;
+        Ok(SuiteSettings {
+            board_gap: room("suite.board_gap")?,
+            board_headroom: room("suite.board_headroom")?,
+            post_height,
+            post_screw,
+            post_kind: BoreKind::from_name(kind).ok_or_else(|| {
+                CadError::Config(format!(
+                    "suite.post_kind: {kind} is not insert or self-tapping"
+                ))
+            })?,
+        })
+    }
+}
+
 /// The settings of the window with their types.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UiSettings {
@@ -278,6 +331,8 @@ pub struct UiSettings {
     pub margin: f64,
     /// The box a new project starts with.
     pub new_box: EnclosureParams,
+    /// What the box made round the board of a project of the suite starts with.
+    pub suite: SuiteSettings,
     /// The length, the width and the height of the envelope checked without a board.
     pub fit: [Length; 3],
     /// The size given to an edge that goes from sharp to rounded or chamfered.
@@ -617,6 +672,7 @@ impl UiSettings {
             circle_segments: count(c, "view.circle_segments", 8, 256)?,
             margin: real(c, "view.margin", 0.0, 400.0)?,
             new_box,
+            suite: SuiteSettings::from_config(c)?,
             fit: [
                 c.length("fit.length")?,
                 c.length("fit.width")?,

@@ -48,6 +48,12 @@ pub struct SketchSettings {
     /// The most, in millimetres, that an arc or a circle sags from the straight lines that stand
     /// for it in the checks of a profile and in the drawing.
     pub profile_chord: f64,
+    /// Two points nearer than this, in millimetres, that no constraint joins are named by the
+    /// check of a sketch.
+    pub check_near: f64,
+    /// A line nearer than this, in degrees, to horizontal or vertical without being so is named
+    /// by the check of a sketch.
+    pub check_angle: f64,
 }
 
 fn missing(key: &str) -> CadError {
@@ -113,6 +119,8 @@ impl SketchSettings {
             profile_join: real(c, "sketch.profile_join", 1e-6, 1.0)?,
             profile_min_area: real(c, "sketch.profile_min_area", 1e-9, 1e6)?,
             profile_chord: real(c, "sketch.profile_chord", 1e-5, 1.0)?,
+            check_near: real(c, "sketch.check_near", 0.0, 1000.0)?,
+            check_angle: real(c, "sketch.check_angle", 0.0, 44.0)?,
         };
         if s.damping_start >= s.damping_max {
             return Err(CadError::Config(

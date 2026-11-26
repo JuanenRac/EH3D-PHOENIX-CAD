@@ -60,6 +60,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad measure distance|angle POINT... [--lang CODE]                  measures between points written X:Y:Z (a length with its unit or bare millimetres): the distance between two points, from a point to an edge (three points) or between two edges (four), the angle at a vertex between three points or between two edges
   eh3d-phoenix-cad config-diff FILE [--text] [--lang CODE]                       puts every key of a settings file next to its default (changed, same or extra) as comma separated values or text; exit 1 when a key is not one of the defaults
   eh3d-phoenix-cad sketch-info SKETCH.phoenixsketch [--lang CODE] [--config FILE]   what a sketch holds: the points, lines, circles and arcs, the construction geometry, the constraints and the size and drawn length of what is drawn
+  eh3d-phoenix-cad sketch-check SKETCH.phoenixsketch [--text] [--lang CODE] [--config FILE]   checks a sketch before it is raised: constraints that repeat or contradict others and a solver that does not converge, two points that look like one and are not joined, lines almost horizontal or vertical and open ends of the profile (kind,subject,other,value,code, or lines with --text; the limits are sketch.check_near and sketch.check_angle); it exits with 0 when there is nothing to report, with 2 when there is and with 1 when it could not run
   eh3d-phoenix-cad mesh-convert FILE OUT [--ascii] [--schema ap203|ap214] [--overwrite] [--lang CODE] [--config FILE]   reads an STL, OBJ, 3MF (also compressed ones made by other programs), STEP, PLY, OFF or DXF (3DFACE) file and writes its solids as .stl, .obj, .3mf, .ply, .off, .dxf or .step/.stp (a faceted solid for each body); every warning of the reader is printed with its name
   eh3d-phoenix-cad mesh-transform FILE OUT [--scale F|FX:FY:FZ] [--rotate AXIS:DEGREES] [--about X:Y:Z] [--mirror AXIS[:POSITION]] [--move X:Y:Z] [--overwrite] [--lang CODE]   scales, turns, mirrors and moves the solids of a file, in this order, and writes them (a mirror keeps the solid outside in)
   eh3d-phoenix-cad mesh-pattern FILE OUT --linear COUNT --step X:Y:Z | --circular COUNT --axis x|y|z [--center X:Y:Z] [--angle DEGREES] [--overwrite] [--lang CODE]   repeats every solid of a file in a line or round an axis and writes the result
@@ -75,7 +76,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad eh3d-info FILE.eh3d [--text] [--lang CODE]   the branches of a project file of the suite, the ones derived from a branch that has changed since and what its checks find; exit 2 when they find anything
   eh3d-phoenix-cad eh3d-save PROJECT FILE.eh3d [--time T] [--audit T] [--seal NAME] [--backup] [--lang CODE]   puts a project in the branch cad of the file of the suite (made when it is not there); the other branches keep their bytes
   eh3d-phoenix-cad eh3d-open FILE.eh3d --out PROJECT.phoenixproj [--overwrite] [--lang CODE]   writes the project of the branch cad to a file of its own
-  eh3d-phoenix-cad eh3d-new FILE.eh3d [--gap L] [--headroom L] [--post-height L] [--screw M3] [--kind insert|self-tapping] [--overwrite] [--time T] [--lang CODE] [--config FILE]   makes the box round the board of the branch pcb with a post under every mounting hole
+  eh3d-phoenix-cad eh3d-new FILE.eh3d [--gap L] [--headroom L] [--post-height L] [--screw M3] [--kind insert|self-tapping] [--overwrite] [--time T] [--lang CODE] [--config FILE]   makes the box round the board of the branch pcb with a post under every mounting hole (what is not given comes from the section [suite] of the settings)
   eh3d-phoenix-cad eh3d-board FILE.eh3d [--time T] [--lang CODE] [--config FILE]   takes the board of the branch pcb as it is now, moves the posts with their holes and says what changed; exit 2 when something could not be followed
   eh3d-phoenix-cad eh3d-check FILE.eh3d [--clearance L] [--lang CODE] [--config FILE]   whether the board changed since the box took it and every part of it has room; exit 2 when not
   eh3d-phoenix-cad eh3d-openings FILE.eh3d [--clearance L] [--apply] [--time T] [--lang CODE] [--config FILE]   the openings that the connectors of the board need in the walls, written into the box with --apply
@@ -1853,12 +1854,15 @@ fn main() -> ExitCode {
         eh3d_phoenix_cad::history_cli::COMMANDS.contains(&c.as_str())
             || eh3d_phoenix_cad::plans_cli::COMMANDS.contains(&c.as_str())
             || eh3d_phoenix_cad::suite_cli::COMMANDS.contains(&c.as_str())
+            || eh3d_phoenix_cad::sketchcheck::COMMANDS.contains(&c.as_str())
     }) {
         // a check that does not pass exits with 2; a command that could not run exits with 1
         let ran = if eh3d_phoenix_cad::plans_cli::COMMANDS.contains(&command.as_str()) {
             eh3d_phoenix_cad::plans_cli::run(command, &args[1..])
         } else if eh3d_phoenix_cad::suite_cli::COMMANDS.contains(&command.as_str()) {
             eh3d_phoenix_cad::suite_cli::run(command, &args[1..])
+        } else if eh3d_phoenix_cad::sketchcheck::COMMANDS.contains(&command.as_str()) {
+            eh3d_phoenix_cad::sketchcheck::run(command, &args[1..])
         } else {
             eh3d_phoenix_cad::history_cli::run(command, &args[1..])
         };

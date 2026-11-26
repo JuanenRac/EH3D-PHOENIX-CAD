@@ -4236,9 +4236,20 @@ impl Window {
             return false;
         }
         let mut document = self.document.clone();
+        // a project of the suite saved under a new name takes every branch with it
+        let source = self
+            .path
+            .as_deref()
+            .filter(|from| eh3dfile::is_eh3d(from) && eh3dfile::is_eh3d(path))
+            .filter(|from| from.is_file() && !path.exists())
+            .map(Path::to_path_buf);
         let written = document
             .set_mechanical(&self.mech, &self.settings.mechanical)
             .and_then(|()| document.set_sketches(&self.mech.sketches, &self.sketch_settings))
+            .and_then(|()| match &source {
+                Some(from) => eh3dfile::copy_project(from, path),
+                None => Ok(()),
+            })
             .and_then(|()| {
                 if eh3dfile::is_eh3d(path) {
                     // only the branch `cad` is written; the other branches keep their bytes
@@ -4264,9 +4275,23 @@ impl Window {
                 true
             }
             Err(e) => {
+                // a copy that could not be written to is not left behind
+                if source.is_some() {
+                    let _ = std::fs::remove_file(path);
+                }
                 self.status = Status::Error(e);
                 false
             }
+        }
+    }
+
+    /// A new project that will be saved into a file of the suite which holds no project of this
+    /// program yet: the file is named, nothing is written until it is saved.
+    pub fn new_project_in(&mut self, path: &Path) {
+        self.new_project();
+        if matches!(self.status, Status::Done(..)) {
+            self.path = Some(path.to_path_buf());
+            self.dirty = true;
         }
     }
 
