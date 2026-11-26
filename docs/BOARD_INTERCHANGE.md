@@ -54,6 +54,7 @@ eh3d-save PROJECT FILE.eh3d        eh3d-open FILE.eh3d --out PROJECT     eh3d-in
 eh3d-new FILE.eh3d                 eh3d-board FILE.eh3d                  eh3d-check FILE.eh3d
 eh3d-openings FILE.eh3d [--apply]  eh3d-publish FILE.eh3d                eh3d-import FILE.eh3d OTHER
 eh3d-meta FILE.eh3d --title TEXT --lang CODE
+eh3d-keygen --out SECRET_KEY       eh3d-sign FILE.eh3d --key SECRET_KEY [--branch NAMES] [--project]
 ```
 
 The exit code is 0 when everything agrees, 2 when the verification did not pass (something out of date, a part without room, a post that could not follow, an export refused) and 1 when the command could not run. Run `eh3d-phoenix-cad help` for every option.
@@ -110,4 +111,16 @@ The limits are the sections `[attachments]` (`max_mb`) and `[viewer]` (`max_atta
 
 **Title and description** (File, Suite project) reads and writes the two texts of `common/meta/meta.json` in each of the eight languages; only the branch `common` is written. A text needs its English version before another language, and an empty field takes the language away (`eh3d-meta --title ""` too).
 
-**Signatures** are checked with the public key files that the person trusts: `suite.trusted_keys` (full paths separated by `;`, `none` by default), `eh3d-info --key FILE` or the button of the list of branches, which holds for the time the program runs. Each signature is told as valid with the identifier of its key, wrong, of a key that is not trusted, or only seen when no key is given; `eh3d-info` ends with code 2 on a wrong one and its comma separated values have a last column `signature`. Only public keys are read (a secret key is refused), this program does not sign, and a valid signature says who signed the branch, not that the design is right.
+**Signatures** are checked with the public key files that the person trusts: `suite.trusted_keys` (full paths separated by `;`, `none` by default), `eh3d-info --key FILE` or the button of the list of branches, which holds for the time the program runs. Each signature is told as valid with the identifier of its key, wrong, of a key that is not trusted, or only seen when no key is given; `eh3d-info` ends with code 2 on a wrong one and its comma separated values have a last column `signature`. To check, only public keys are read (a secret key is refused), and a valid signature says who signed the branch, not that the design is right.
+
+## Signing from this program
+
+*File, Suite project, Sign the suite project* signs the branch `cad`, the record of the whole project or both, with the Ed25519 code of the suite. The secret key is a file that the person chooses each time: it is read to sign and nothing else, its path is not kept after the window is closed, it is never written into a project and what it holds is never shown. The same window makes a new key (the secret file, which never replaces one and is readable by its owner only, and the public one with `.pub` added), and so does `eh3d-keygen`. Signing is refused while there are changes that are not saved, since the signature is of what is in the file. `eh3d-sign` signs the branch `cad`, or the branches of `--branch`, and with `--project` the whole project (alone when no branch is named); every branch is checked before the first signature, so a refusal (a branch that is not there or is sealed) leaves the file as it was.
+
+A signature covers what was there: saving the box removes the signature of the branch `cad` and of the project, and writing any branch removes the one of the project. The window and the commands of the suite file say so when it happens; the panel of the attachments asks before.
+
+## Looking at the files of other programs
+
+A button over the panel of the attachments shows the chosen attachment when it is a STL, OBJ, 3MF, STEP, PLY, OFF or DXF file; a button of the list of branches shows the original that the last import kept in `cad/origin/`; *File, View a 3D or DXF file* and the option `--viewer FILE` of the window take a file of the disk. Nothing is written or taken out of the project: an attachment is read from inside it and checked against its SHA-256 as it is read. The file is read on its own thread with the readers of the import and their limits (`[mesh]`), and those of `[model_view]`: `max_mb` (64), `max_triangles` (150000; a larger file is measured and not drawn) and `edge_angle` (30 degrees).
+
+A file of triangles is told with its solids, triangles, size, volume when every surface is closed and wound one way (otherwise the open edges), the warnings of the reader and whether its bounding box fits inside the box of the project as it is, turned by quarter turns or not at all. It is drawn as flat shaded triangles with the sharp edges, painted from far to near (two parts that pass through each other are painted wrong where they cross), with straight views, and the distance between two corners clicked on it. A DXF without faces is drawn as its lines, arcs and circles on a flat sheet. Faces of STEP that are curved are refused by the reader, as in the import. The window has not been seen on a screen.

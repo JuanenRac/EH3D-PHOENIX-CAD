@@ -40,15 +40,19 @@ A variant also switches steps of the recipe off and on, a variable can follow a 
 
 ## Variants, reference dimensions, texts and signatures
 
-A project keeps variants, named values of its variables (`docs/PROJECT_DOMAIN.md`), which are applied, checked and exported one file each from the command `variants` and from a window of the Tools menu. A dimension of a sketch can be a reference that reads the drawing and holds nothing (`docs/SKETCH.md`). The title and the description of a `.eh3d` project are edited from the window, and the signatures of its branches are checked with public keys the person trusts (`docs/BOARD_INTERCHANGE.md`); the program does not sign. The logic is tested without a screen and none of the windows has been seen on one.
+A project keeps variants, named values of its variables (`docs/PROJECT_DOMAIN.md`), which are applied, checked and exported one file each from the command `variants` and from a window of the Tools menu. A dimension of a sketch can be a reference that reads the drawing and holds nothing (`docs/SKETCH.md`). The title and the description of a `.eh3d` project are edited from the window, and the signatures of its branches are checked with public keys the person trusts (`docs/BOARD_INTERCHANGE.md`). The logic is tested without a screen and none of the windows has been seen on one.
 
 ## The attachments
 
 The window has the panel «Attachments» of the suite (the shared `eh3d-attachpanel`): the data sheets, manuals and other files of the `.eh3d` project are listed, attached, linked to a part, extracted and removed after a question, and shown beside the list, with the limits of the sections `[attachments]` and `[viewer]` of the settings (`BOARD_INTERCHANGE.md`). The panel itself is tested in EH3D-COMMON; it has not been tried on a screen by a person.
 
+## Looking at files and signing
+
+3D files and flat DXF drawings (attachments, the original of an import, files of the disk) are seen inside the window, with their size, volume and whether they fit in the box, and the suite project is signed from the window and from the commands `eh3d-keygen` and `eh3d-sign`; a save that removes a signature says so (`docs/BOARD_INTERCHANGE.md`). Both were tried on made-up files by the tests only; the windows have not been seen on a screen.
+
 ## Capabilities
 
-The official state of each capability is in REQUIREMENTS.md: 35 requirements: 34 `prototype` (FCAD-001 and FCAD-003 to FCAD-035) and 1 `planned` (FCAD-002). This page never states a state that REQUIREMENTS.md does not.
+The official state of each capability is in REQUIREMENTS.md: 41 requirements: 40 `prototype` (FCAD-001 and FCAD-003 to FCAD-041) and 1 `planned` (FCAD-002). This page never states a state that REQUIREMENTS.md does not.
 
 ## Open questions
 
