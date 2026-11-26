@@ -168,6 +168,54 @@ fn the_window_says_that_a_save_removed_the_signature() {
 }
 
 #[test]
+fn opening_a_file_of_the_suite_tells_what_is_known_of_its_signatures() {
+    let dir = Scratch::new("sign-open");
+    let file = dir.path("box.eh3d");
+    let key = dir.path("mine.key");
+    new_key(&key).unwrap();
+    let window = |trusted: Vec<String>| {
+        let mut ui = crate::uiconfig::UiSettings::defaults();
+        ui.suite.trusted_keys = trusted;
+        Window::new(Lang::En, crate::config::Settings::defaults(), ui).unwrap()
+    };
+    let mut win = window(Vec::new());
+    assert!(crate::suitewin::save_as(&mut win, &file, false));
+    let open = |trusted: Vec<String>| {
+        let mut win = window(trusted);
+        assert_eq!(
+            crate::suitewin::open(&mut win, &file),
+            crate::suitewin::Opened::Project
+        );
+        win.status
+    };
+    // unsigned: the usual words
+    assert!(matches!(open(Vec::new()), Status::Done(Msg::Opened, _)));
+    sign(&file, &key, &Request::own()).unwrap();
+    // signed and no key to check with: only seen
+    let seen = open(Vec::new());
+    assert!(
+        matches!(&seen, Status::Done(Msg::SuiteOpenedSigned, _)),
+        "{seen:?}"
+    );
+    assert!(seen.text(Lang::En).contains("cad: "), "{seen:?}");
+    // checked with its key: valid
+    let public = dir.path("mine.key.pub").display().to_string();
+    let valid = open(vec![public]);
+    assert!(
+        valid.text(Lang::En).contains("signature valid"),
+        "{valid:?}"
+    );
+    // checked with another key: a problem
+    let other = dir.path("other.key");
+    new_key(&other).unwrap();
+    let unknown = open(vec![dir.path("other.key.pub").display().to_string()]);
+    assert!(
+        matches!(&unknown, Status::Problem(Msg::SuiteOpenedSigned, _)),
+        "{unknown:?}"
+    );
+}
+
+#[test]
 fn the_commands_make_a_key_sign_and_say_when_a_signature_goes() {
     let dir = Scratch::new("sign-cli");
     let file = dir.path("p.eh3d");

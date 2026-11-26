@@ -4019,7 +4019,8 @@ fn make_window(start: Start) -> Result<(Window, SketchEditor, StartView), String
     let mut win = Window::new(start.lang, start.settings, start.ui).map_err(|e| e.to_string())?;
     win.sketch_settings = start.solver;
     if let Some(path) = start.project {
-        win.open(&path);
+        // a file of the suite opens as it does from the menu, signatures told
+        suitewin::open_any(&mut win, &path);
     }
     sketch.set_variables(&win.mech.vars);
     if let Some(path) = &start.sketch {
