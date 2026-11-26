@@ -74,6 +74,12 @@ State: **accepted** (record 0022).
 
 A variant holds values of variables, kept in an optional domain of its own; a reference dimension is a state of a dimension and takes version 3 of the sketch file; signatures of a suite project are checked only with public keys the person gives, and this program does not sign.
 
+## Variants that switch steps and variables that follow a drawing
+
+State: **accepted** (record 0023).
+
+A variant names a step by its operation and the id it works on, never by its place; a link from a variable to a reference dimension is read when it is made and when the sketch is kept, and a broken link leaves the value as it is.
+
 ## The lid is fixed with screws into posts
 
 State: **accepted**.
