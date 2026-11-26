@@ -93,9 +93,6 @@ pub struct Triangle {
     /// Which of its sides are sharp edges: bit 0 from the first corner to the second, bit 1 from
     /// the second to the third and bit 2 from the third to the first.
     pub edges: u8,
-    /// The direction of the surface at each corner: that of the faces that meet there across sides
-    /// that are not sharp, for a smooth picture.
-    pub smooth: [[f32; 3]; 3],
 }
 
 /// What a file of triangles holds.
@@ -105,6 +102,10 @@ pub struct Solid {
     pub points: Vec<Point3>,
     /// The triangles that have an area; none when there are more than can be drawn.
     pub triangles: Vec<Triangle>,
+    /// For each of those triangles, the direction of the surface at its corners: that of the faces
+    /// that meet there across sides that are not sharp, for a smooth picture. Kept apart so that a
+    /// flat picture does not read it.
+    pub smooth: Vec<[[f32; 3]; 3]>,
     /// How many solids the file holds.
     pub bodies: usize,
     /// How many triangles the file holds.
@@ -211,7 +212,6 @@ fn add_body(solid: &mut Solid, mesh: &Mesh, sharp_cosine: f64, reversed: bool) {
                 corners,
                 normal,
                 edges: 0,
-                smooth: [[0.0; 3]; 3],
             });
         }
     }
@@ -262,11 +262,12 @@ fn add_body(solid: &mut Solid, mesh: &Mesh, sharp_cosine: f64, reversed: bool) {
         let area = weighted[corner / 3];
         sums[at] = [0, 1, 2].map(|k| sums[at][k] + area[k]);
     }
-    for (index, t) in solid.triangles.iter_mut().enumerate().skip(first) {
-        for k in 0..3 {
+    for (index, t) in solid.triangles.iter().enumerate().skip(first) {
+        let corners = [0, 1, 2].map(|k| {
             let at = root(&mut parent, ((index - first) * 3 + k) as u32) as usize;
-            t.smooth[k] = unit(sums[at]).unwrap_or(t.normal).map(|v| v as f32);
-        }
+            unit(sums[at]).unwrap_or(t.normal).map(|v| v as f32)
+        });
+        solid.smooth.push(corners);
     }
 }
 
@@ -287,6 +288,7 @@ fn solid_of(read: interchange::Read, options: &ViewOptions) -> Result<Solid, Str
     let mut solid = Solid {
         points: Vec::new(),
         triangles: Vec::new(),
+        smooth: Vec::new(),
         bodies: read.bodies.len(),
         count,
         low: [f64::INFINITY; 3],
@@ -968,7 +970,7 @@ pub fn render(solid: &Solid, pose: &Pose, width: usize, height: usize, look: Loo
             )
         })
         .collect();
-    let paint = |t: &Triangle| -> Option<Painted> {
+    let paint = |index: usize, t: &Triangle| -> Option<Painted> {
         let away = turn(t.normal).2 > 1e-9;
         if away && solid.closed && look.cut.is_none() {
             return None;
@@ -981,10 +983,9 @@ pub fn render(solid: &Solid, pose: &Pose, width: usize, height: usize, look: Loo
         Some(Painted {
             at: t.corners.map(|v| corners[v as usize]),
             along: t.corners.map(|v| solid.points[v as usize][axis]),
-            shade: if look.smooth {
-                t.smooth.map(|n| shade(n.map(f64::from)))
-            } else {
-                [shade(t.normal); 3]
+            shade: match solid.smooth.get(index).filter(|_| look.smooth) {
+                Some(corners) => corners.map(|n| shade(n.map(f64::from))),
+                None => [shade(t.normal); 3],
             },
             // the side that looks away of a closed solid is only seen through a cut
             base: if away && solid.closed { INSIDE } else { FACE },
@@ -1017,8 +1018,8 @@ pub fn render(solid: &Solid, pose: &Pose, width: usize, height: usize, look: Loo
             let y = t.corners.map(|v| corners[v as usize].1);
             y.iter().any(|&y| y >= top) && y.iter().any(|&y| y < bottom)
         };
-        for t in solid.triangles.iter().filter(|t| reaches(t)) {
-            if let Some(painted) = paint(t) {
+        for (index, t) in solid.triangles.iter().enumerate() {
+            if let Some(painted) = reaches(t).then(|| paint(index, t)).flatten() {
                 rows.fill(&painted);
             }
         }
@@ -1032,12 +1033,9 @@ pub fn render(solid: &Solid, pose: &Pose, width: usize, height: usize, look: Loo
         }
         // the edges after every face, so that a face drawn later does not cut them in half
         if look.edges {
-            for t in solid
-                .triangles
-                .iter()
-                .filter(|t| t.edges != 0 && reaches(t))
-            {
-                let Some(painted) = paint(t) else {
+            let edged = solid.triangles.iter().enumerate();
+            for (index, t) in edged.filter(|(_, t)| t.edges != 0 && reaches(t)) {
+                let Some(painted) = paint(index, t) else {
                     continue;
                 };
                 for k in 0..3 {
