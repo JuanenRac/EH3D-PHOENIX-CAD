@@ -260,19 +260,21 @@ fn save(args: &[String]) -> Answer {
 }
 
 fn open(args: &[String]) -> Answer {
-    let a = Args::parse(args, &["--out", "--config"], &["--overwrite"])?;
+    let a = Args::parse(args, &["--out"], &["--overwrite"])?;
     let file = suite_file(&a)?;
     let target = a.value("--out").ok_or("eh3d-open needs --out")?;
-    let s = settings(a.value("--config"))?;
+    // the one export that writes a project: the writer of exports refuses such a name
+    if !target.to_ascii_lowercase().ends_with(".phoenixproj") {
+        return Err("--out ends in .phoenixproj".to_owned());
+    }
     let bytes = eh3dfile::read_cad_project(file, MAX_BYTES).map_err(say(a.lang))?;
-    write_bytes(
-        Path::new(target),
-        &bytes,
-        a.has("--overwrite"),
-        Some(file),
-        s.ui.export.max_kib,
-    )
-    .map_err(say(a.lang))?;
+    if !a.has("--overwrite") && Path::new(target).exists() {
+        return Err(error_text(
+            &CadError::ExportExists(target.to_owned()),
+            a.lang,
+        ));
+    }
+    crate::store::save_atomic(Path::new(target), &bytes, 0).map_err(say(a.lang))?;
     let mut out = String::new();
     line(&mut out, Msg::SuiteOpened, a.lang, &[target]);
     Ok((out, true))
@@ -505,13 +507,8 @@ fn check(args: &[String]) -> Answer {
             Trouble::Floor => Msg::FitFloor,
             Trouble::Post => Msg::FitPost,
         };
-        let short = mm_text(p.short);
-        let values: &[&str] = if p.trouble == Trouble::Post {
-            &[&p.part]
-        } else {
-            &[&p.part, &short]
-        };
-        line(&mut out, message, a.lang, values);
+        // the sentence of a post has one place only: a second value has nowhere to go
+        line(&mut out, message, a.lang, &[&p.part, &mm_text(p.short)]);
     }
     Ok((out, changes.is_empty() && problems.is_empty()))
 }
