@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::modelview::{
-    self, can_show, Content, Cut, Job, Look, Origin, Picture, Pose, Solid, ViewOptions,
+    self, can_show, Content, Cut, Job, Look, Origin, Picture, Pose, Section, Solid, ViewOptions,
     STRAIGHT_VIEWS,
 };
 use crate::projection::{Camera, Point3};
@@ -19,6 +19,10 @@ pub(super) struct ViewerState {
     content: Option<Result<Content, String>>,
     pose: Pose,
     edges: bool,
+    smooth: bool,
+    cut_face: bool,
+    /// The section of the cut as it was last worked out, and the cut it is of.
+    section: Option<(Cut, Section)>,
     measuring: bool,
     picks: Vec<Point3>,
     drawn: Option<Drawn>,
@@ -80,6 +84,7 @@ impl App {
 
     /// Opens the window on a file and starts reading it.
     pub(super) fn open_viewer(&mut self, origin: Origin) {
+        let look = self.win.ui.model_view;
         let camera = Camera {
             yaw: self.win.ui.yaw,
             pitch: self.win.ui.pitch,
@@ -90,6 +95,9 @@ impl App {
             content: None,
             pose: Pose::fitted(camera),
             edges: true,
+            smooth: look.smooth,
+            cut_face: look.cut_face,
+            section: None,
             measuring: false,
             picks: Vec::new(),
             drawn: None,
@@ -149,6 +157,7 @@ impl App {
     pub(super) fn viewer_window(&mut self, ctx: &egui::Context) {
         let lang = self.win.lang;
         let params = self.win.params();
+        let settings = self.win.ui.model_view;
         let inner = [params.inner_length, params.inner_width, params.inner_height]
             .map(|l| l.get() as f64 / 1.0e6);
         let radius = self.win.ui.measure.pick_radius;
@@ -197,6 +206,7 @@ impl App {
                                 }
                             }
                             ui.checkbox(&mut view.edges, Msg::MvEdges.tr(lang));
+                            ui.checkbox(&mut view.smooth, Msg::MvSmooth.tr(lang));
                             let measure = Msg::MeasureDistanceTool.tr(lang);
                             if ui.toggle_value(&mut view.measuring, measure).changed() {
                                 view.picks.clear();
@@ -226,6 +236,18 @@ impl App {
                             ui.add(slider);
                             let cut = Cut::of(solid, view.cut_axis, view.cut_share);
                             ui.label(format!("{:.2} mm", cut.at));
+                            if !solid.closed {
+                                return;
+                            }
+                            ui.checkbox(&mut view.cut_face, Msg::MvCutFace.tr(lang));
+                            if view.section.as_ref().map(|s| s.0) != Some(cut) {
+                                view.section = Some((cut, modelview::section(solid, cut)));
+                            }
+                            let area = view.section.as_ref().and_then(|s| s.1.area_mm2);
+                            if let Some(area) = area {
+                                let area = format!("{area:.2}");
+                                ui.label(fill(Msg::MvCutArea.tr(lang), &[&area]));
+                            }
                         });
                     }
                     ui.label(egui::RichText::new(Msg::MvHint.tr(lang)).color(DIM));
@@ -266,9 +288,19 @@ impl App {
                             let cut = view
                                 .cutting
                                 .then(|| Cut::of(solid, view.cut_axis, view.cut_share));
+                            // while the view is dragged one point for each pixel is enough
+                            let samples = if response.dragged() {
+                                1
+                            } else {
+                                settings.samples as usize
+                            };
                             let look = Look {
                                 edges: view.edges,
                                 cut,
+                                smooth: view.smooth,
+                                cap: view.cut_face,
+                                samples,
+                                threads: settings.threads as usize,
                             };
                             let key = (
                                 scaled(&view.pose, sharp),

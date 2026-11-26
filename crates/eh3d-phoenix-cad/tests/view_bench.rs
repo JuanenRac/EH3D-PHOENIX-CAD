@@ -69,21 +69,30 @@ fn the_times_of_the_view_of_a_large_file() {
             yaw: 35.0,
             pitch: 28.0,
         });
-        let look = Look {
-            edges: true,
-            ..Look::default()
-        };
-        let started = Instant::now();
-        for _ in 0..5 {
-            let picture = modelview::render(&solid, &pose, 1600, 1000, look);
-            assert_eq!(picture.width, 1600);
-        }
-        let drawn = started.elapsed() / 5;
         println!(
-            "VIEW_BENCH triangles={} load_ms={} picture_ms={}",
+            "VIEW_BENCH triangles={} load_ms={}",
             solid.count,
-            loaded.as_millis(),
-            drawn.as_millis()
+            loaded.as_millis()
         );
+        for (smooth, samples, threads) in [(false, 1, 1), (false, 1, 0), (true, 1, 0), (true, 2, 0)]
+        {
+            let look = Look {
+                edges: true,
+                smooth,
+                samples,
+                threads,
+                ..Look::BARE
+            };
+            let started = Instant::now();
+            for _ in 0..5 {
+                let picture = modelview::render(&solid, &pose, 1600, 1000, look);
+                assert_eq!(picture.width, 1600);
+            }
+            println!(
+                "VIEW_BENCH triangles={} smooth={smooth} samples={samples} threads={threads} picture_ms={}",
+                solid.count,
+                (started.elapsed() / 5).as_millis()
+            );
+        }
     }
 }

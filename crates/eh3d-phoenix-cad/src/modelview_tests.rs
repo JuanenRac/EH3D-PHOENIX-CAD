@@ -63,14 +63,11 @@ fn cube_solid() -> Solid {
     solid(load("cube.stl", &cube_stl(), &options(), Lang::En).unwrap())
 }
 
-const PLAIN: Look = Look {
-    edges: false,
-    cut: None,
-};
+const PLAIN: Look = Look::BARE;
 
 const LINED: Look = Look {
     edges: true,
-    cut: None,
+    ..Look::BARE
 };
 
 const FLAT_DXF: &str = "0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n30\n21\n0\n\
@@ -310,6 +307,7 @@ fn a_cut_shows_the_inside_in_a_colour_of_its_own_and_hides_what_is_beyond() {
     let cut = |share: f64| Look {
         edges: true,
         cut: Some(Cut::of(&cube, 2, share)),
+        ..Look::BARE
     };
     // cut under its top, from above the inside of the bottom is seen: warm, not blue
     let open = render(&cube, &pose, 400, 400, cut(0.5));
@@ -326,12 +324,218 @@ fn a_cut_shows_the_inside_in_a_colour_of_its_own_and_hides_what_is_beyond() {
     assert_eq!(pick(&cube, &pose, &open, at, 6.0), Some([10.0, 10.0, 0.0]));
     // along x, what is left of the cube ends at the cut
     let side = Look {
-        edges: false,
         cut: Some(Cut::of(&cube, 0, 0.5)),
+        ..Look::BARE
     };
     let half = render(&cube, &pose, 400, 400, side);
     assert_eq!(half.pixel(150, 200)[3], 255);
     assert_eq!(half.pixel(250, 200)[3], 0);
+}
+
+/// The cube of 10 mm with a cubic hole of 4 mm in its middle.
+fn hollow() -> Solid {
+    let outer = cube();
+    let mut mesh = outer.clone();
+    let base = mesh.vertices.len() as u32;
+    mesh.vertices.extend(
+        outer
+            .vertices
+            .iter()
+            .map(|v| v.map(|x| x * 0.4 + 3.0 * NM_PER_MM)),
+    );
+    // the void looks into itself
+    mesh.triangles.extend(
+        outer
+            .triangles
+            .iter()
+            .map(|t| [t[0] + base, t[2] + base, t[1] + base]),
+    );
+    let bytes = crate::mesh::stl_binary(&[("hollow", &mesh)]);
+    solid(load("hollow.stl", &bytes, &options(), Lang::En).unwrap())
+}
+
+#[test]
+fn the_section_of_a_cut_is_its_outline_and_the_area_of_the_material() {
+    let cube = cube_solid();
+    let middle = section(&cube, Cut { axis: 2, at: 5.0 });
+    assert!((middle.area_mm2.unwrap() - 100.0).abs() < 1e-9);
+    // each of the four walls is two triangles
+    assert_eq!(middle.lines.len(), 8);
+    assert!(middle.lines.iter().flatten().all(|p| p[2] == 5.0));
+    for axis in 0..2 {
+        let cut = section(&cube, Cut { axis, at: 2.5 });
+        assert!((cut.area_mm2.unwrap() - 100.0).abs() < 1e-9, "{axis}");
+    }
+    // the hole in the middle is taken out
+    let through = section(&hollow(), Cut { axis: 2, at: 5.0 });
+    assert!((through.area_mm2.unwrap() - 84.0).abs() < 1e-9);
+    // at the far side nothing is met
+    let beyond = section(&cube, Cut { axis: 2, at: 10.0 });
+    assert!(beyond.lines.is_empty() && beyond.area_mm2 == Some(0.0));
+    // an open surface has an outline and no area
+    let mut open = cube_solid();
+    open.closed = false;
+    assert_eq!(section(&open, Cut { axis: 2, at: 5.0 }).area_mm2, None);
+}
+
+#[test]
+fn a_cut_solid_is_closed_by_a_face_where_the_material_is_cut() {
+    let hollow = hollow();
+    let pose = Pose::fitted(Camera::TOP);
+    let look = Look {
+        cap: true,
+        cut: Some(Cut::of(&hollow, 2, 0.5)),
+        ..Look::BARE
+    };
+    let bare = Look { cap: false, ..look };
+    let closed = render(&hollow, &pose, 400, 400, look);
+    let open = render(&hollow, &pose, 400, 400, bare);
+    let at = |x: f64, y: f64| {
+        let p = place_of(&hollow, &pose, (400.0, 400.0), [x, y, 5.0]);
+        (p.0 as usize, p.1 as usize)
+    };
+    // in the wall the face of the cut is seen: one of its two colours
+    let (x, y) = at(1.5, 5.0);
+    let wall = closed.pixel(x, y);
+    assert!(
+        wall == [214, 142, 78, 255] || wall == [150, 94, 48, 255],
+        "{wall:?}"
+    );
+    assert_ne!(open.pixel(x, y), wall);
+    // through the hole the floor of the void is seen, which is a face of the solid
+    let (x, y) = at(5.0, 5.0);
+    let [red, _, blue, _] = closed.pixel(x, y);
+    assert!(blue > red, "{red} {blue}");
+    // a corner under the face of the cut is hidden by it
+    let low = [10.0, 10.0, 0.0];
+    let under = place_of(&hollow, &pose, (400.0, 400.0), low);
+    assert_eq!(pick(&hollow, &pose, &open, under, 3.0), Some(low));
+    // from under the solid the cut side is not seen and nothing is added
+    let below = Pose::fitted(Camera {
+        yaw: 0.0,
+        pitch: -90.0,
+    });
+    let one = render(&hollow, &below, 200, 200, look);
+    let other = render(&hollow, &below, 200, 200, bare);
+    assert_eq!(one.rgba, other.rgba);
+}
+
+#[test]
+fn the_picture_is_the_same_whatever_draws_it() {
+    let hollow = hollow();
+    let pose = Pose::fitted(Camera {
+        yaw: 35.0,
+        pitch: 28.0,
+    });
+    let look = Look {
+        edges: true,
+        smooth: true,
+        cap: true,
+        cut: Some(Cut::of(&hollow, 1, 0.4)),
+        samples: 2,
+        threads: 1,
+    };
+    let one = render(&hollow, &pose, 300, 260, look);
+    for threads in [0, 2, 3, 7, 100] {
+        let other = render(&hollow, &pose, 300, 260, Look { threads, ..look });
+        assert_eq!(one, other, "{threads} threads");
+    }
+}
+
+#[test]
+fn more_points_for_each_pixel_soften_the_rim() {
+    let cube = cube_solid();
+    let pose = Pose::fitted(Camera {
+        yaw: 20.0,
+        pitch: 90.0,
+    });
+    let alphas = |samples: usize| -> std::collections::BTreeSet<u8> {
+        let look = Look {
+            samples,
+            ..Look::BARE
+        };
+        render(&cube, &pose, 200, 200, look)
+            .rgba
+            .chunks(4)
+            .map(|p| p[3])
+            .collect()
+    };
+    assert_eq!(alphas(1).len(), 2);
+    assert!(alphas(3).len() > 4, "{:?}", alphas(3));
+}
+
+#[test]
+fn a_smooth_picture_follows_a_curve_and_keeps_the_sharp_edges() {
+    // the six faces of a cube meet at sharp edges: smooth is the same as flat
+    let cube = cube_solid();
+    let pose = Pose::fitted(Camera {
+        yaw: 45.0,
+        pitch: 30.0,
+    });
+    let smooth = Look {
+        smooth: true,
+        ..Look::BARE
+    };
+    let flat = render(&cube, &pose, 200, 200, PLAIN);
+    let soft = render(&cube, &pose, 200, 200, smooth);
+    let apart = flat
+        .rgba
+        .iter()
+        .zip(&soft.rgba)
+        .map(|(a, b)| a.abs_diff(*b))
+        .max();
+    assert!(apart <= Some(1), "{apart:?}");
+    // a prism of 24 sides stands for a cylinder: its wall is lit as one surface
+    let sides = 24u32;
+    let mut vertices = Vec::new();
+    for z in [0.0, 10.0 * NM_PER_MM] {
+        for k in 0..sides {
+            let a = std::f64::consts::TAU * f64::from(k) / f64::from(sides);
+            vertices.push([5.0 * NM_PER_MM * a.cos(), 5.0 * NM_PER_MM * a.sin(), z]);
+        }
+    }
+    let mut triangles = Vec::new();
+    for k in 0..sides {
+        let next = (k + 1) % sides;
+        triangles.push([k, next, sides + next]);
+        triangles.push([k, sides + next, sides + k]);
+    }
+    let mesh = Mesh {
+        vertices,
+        triangles,
+    };
+    let bytes = crate::mesh::stl_binary(&[("wall", &mesh)]);
+    let wall = solid(load("wall.stl", &bytes, &options(), Lang::En).unwrap());
+    let front = Pose::fitted(Camera {
+        yaw: 0.0,
+        pitch: 0.0,
+    });
+    let shades = |look: Look| -> usize {
+        render(&wall, &front, 300, 300, look)
+            .rgba
+            .chunks(4)
+            .filter(|p| p[3] == 255)
+            .map(|p| p[0])
+            .collect::<std::collections::BTreeSet<u8>>()
+            .len()
+    };
+    assert!(shades(PLAIN) <= 14, "{}", shades(PLAIN));
+    assert!(shades(smooth) > 40, "{}", shades(smooth));
+}
+
+#[test]
+fn a_closed_file_wound_inside_out_is_drawn_the_right_way() {
+    let mut inside_out = cube();
+    for t in &mut inside_out.triangles {
+        t.swap(1, 2);
+    }
+    let bytes = crate::mesh::stl_binary(&[("cube", &inside_out)]);
+    let read = solid(load("cube.stl", &bytes, &options(), Lang::En).unwrap());
+    let pose = Pose::fitted(Camera::TOP);
+    let one = render(&read, &pose, 200, 200, PLAIN);
+    let other = render(&cube_solid(), &pose, 200, 200, PLAIN);
+    assert_eq!(one.rgba, other.rgba);
+    assert!((read.volume_mm3.unwrap() - 1000.0).abs() < 1e-6);
 }
 
 #[test]

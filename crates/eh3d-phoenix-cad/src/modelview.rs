@@ -93,6 +93,9 @@ pub struct Triangle {
     /// Which of its sides are sharp edges: bit 0 from the first corner to the second, bit 1 from
     /// the second to the third and bit 2 from the third to the first.
     pub edges: u8,
+    /// The direction of the surface at each corner: that of the faces that meet there across sides
+    /// that are not sharp, for a smooth picture.
+    pub smooth: [[f32; 3]; 3],
 }
 
 /// What a file of triangles holds.
@@ -182,48 +185,98 @@ fn unit(a: Point3) -> Option<Point3> {
 }
 
 /// Adds the triangles of one solid to what is drawn, with its sharp edges marked: a side used by
-/// one triangle or by more than two, or by two whose normals differ by more than the angle.
-fn add_body(solid: &mut Solid, mesh: &Mesh, sharp_cosine: f64) {
+/// one triangle or by more than two, or by two whose normals differ by more than the angle. With
+/// `reversed` every triangle is turned the other way (a closed file wound inside out). Each corner
+/// also gets the direction of the faces that meet there across sides that are not sharp.
+fn add_body(solid: &mut Solid, mesh: &Mesh, sharp_cosine: f64, reversed: bool) {
     let base = solid.points.len() as u32;
     solid
         .points
         .extend(mesh.vertices.iter().map(|v| v.map(|x| x / NM_PER_MM)));
     let first = solid.triangles.len();
+    solid.triangles.reserve(mesh.triangles.len());
+    // twice the area of every triangle along its normal, which weighs it in the smooth normals
+    let mut weighted: Vec<Point3> = Vec::with_capacity(mesh.triangles.len());
     for t in &mesh.triangles {
-        let corners = t.map(|v| v + base);
+        let mut corners = t.map(|v| v + base);
+        if reversed {
+            corners.swap(1, 2);
+        }
         let [a, b, c] = corners.map(|v| solid.points[v as usize]);
+        let area = cross(sub(b, a), sub(c, a));
         // a triangle without area has no direction and is not drawn
-        if let Some(normal) = unit(cross(sub(b, a), sub(c, a))) {
+        if let Some(normal) = unit(area) {
+            weighted.push(area);
             solid.triangles.push(Triangle {
                 corners,
                 normal,
                 edges: 0,
+                smooth: [[0.0; 3]; 3],
             });
         }
     }
-    let mut sides: BTreeMap<(u32, u32), Vec<(usize, u8)>> = BTreeMap::new();
+    // every side as its two ends, the lower number first, with its triangle and its bit
+    let mut sides: Vec<(u64, u32, u8)> = Vec::with_capacity(weighted.len() * 3);
     for (index, t) in solid.triangles.iter().enumerate().skip(first) {
         for k in 0..3 {
             let (a, b) = (t.corners[k], t.corners[(k + 1) % 3]);
-            sides
-                .entry((a.min(b), a.max(b)))
-                .or_default()
-                .push((index, 1 << k));
+            let key = u64::from(a.min(b)) << 32 | u64::from(a.max(b));
+            sides.push((key, index as u32, 1 << k));
         }
     }
-    for users in sides.values() {
-        let sharp = match users.as_slice() {
-            [(one, _), (two, _)] => {
-                dot(solid.triangles[*one].normal, solid.triangles[*two].normal) < sharp_cosine
+    sides.sort_unstable();
+    // the corners that share a direction, as a forest over the corners of the triangles
+    let mut parent: Vec<u32> = (0..(weighted.len() * 3) as u32).collect();
+    let mut start = 0;
+    while start < sides.len() {
+        let key = sides[start].0;
+        let many = sides[start..].iter().take_while(|s| s.0 == key).count();
+        let users = &sides[start..start + many];
+        start += many;
+        let smooth = match users {
+            [(_, one, _), (_, two, _)] => {
+                let (one, two) = (*one as usize, *two as usize);
+                let turn = dot(solid.triangles[one].normal, solid.triangles[two].normal);
+                (turn >= sharp_cosine).then_some((one, two))
             }
-            _ => true,
+            _ => None,
         };
-        if sharp {
-            for (index, bit) in users {
-                solid.triangles[*index].edges |= bit;
+        let Some((one, two)) = smooth else {
+            for &(_, index, bit) in users {
+                solid.triangles[index as usize].edges |= bit;
+            }
+            continue;
+        };
+        for end in [(key >> 32) as u32, key as u32] {
+            let at = |t: usize| solid.triangles[t].corners.iter().position(|&v| v == end);
+            if let (Some(k), Some(m)) = (at(one), at(two)) {
+                let a = root(&mut parent, ((one - first) * 3 + k) as u32);
+                let b = root(&mut parent, ((two - first) * 3 + m) as u32);
+                parent[a.max(b) as usize] = a.min(b);
             }
         }
     }
+    let mut sums: Vec<Point3> = vec![[0.0; 3]; parent.len()];
+    for corner in 0..parent.len() {
+        let at = root(&mut parent, corner as u32) as usize;
+        let area = weighted[corner / 3];
+        sums[at] = [0, 1, 2].map(|k| sums[at][k] + area[k]);
+    }
+    for (index, t) in solid.triangles.iter_mut().enumerate().skip(first) {
+        for k in 0..3 {
+            let at = root(&mut parent, ((index - first) * 3 + k) as u32) as usize;
+            t.smooth[k] = unit(sums[at]).unwrap_or(t.normal).map(|v| v as f32);
+        }
+    }
+}
+
+/// The first corner of the group of a corner, with the path to it shortened.
+fn root(parent: &mut [u32], mut at: u32) -> u32 {
+    while parent[at as usize] != at {
+        parent[at as usize] = parent[parent[at as usize] as usize];
+        at = parent[at as usize];
+    }
+    at
 }
 
 fn solid_of(read: interchange::Read, options: &ViewOptions) -> Result<Solid, String> {
@@ -258,12 +311,14 @@ fn solid_of(read: interchange::Read, options: &ViewOptions) -> Result<Solid, Str
         }
         let report = meshcheck::analyse(mesh);
         solid.open_edges += report.open_edges;
-        solid.closed &= report.open_edges == 0
+        let closed = report.open_edges == 0
             && report.non_manifold_edges == 0
             && report.inconsistent_edges == 0;
-        volume += mesh.volume_nm3().abs() / (NM_PER_MM * NM_PER_MM * NM_PER_MM);
+        solid.closed &= closed;
+        let signed = mesh.volume_nm3();
+        volume += signed.abs() / (NM_PER_MM * NM_PER_MM * NM_PER_MM);
         if solid.over_limit.is_none() {
-            add_body(&mut solid, mesh, sharp_cosine);
+            add_body(&mut solid, mesh, sharp_cosine, closed && signed < 0.0);
         }
     }
     solid.volume_mm3 = solid.closed.then_some(volume);
@@ -522,6 +577,11 @@ const EDGE: [u8; 4] = [10, 20, 28, 255];
 
 /// The colour of what is seen of the inside through a cut.
 const INSIDE: [f64; 3] = [224.0, 160.0, 96.0];
+/// The colour of the face that closes a cut, and of the lines drawn across it.
+const CAP: [u8; 4] = [214, 142, 78, 255];
+const HATCH: [u8; 4] = [150, 94, 48, 255];
+/// How far apart the lines across the face of a cut are, in pixels of the picture.
+const HATCH_EVERY: usize = 9;
 
 /// A cut of the view: what is beyond a coordinate along one axis is not drawn, so that the inside
 /// is seen. Nothing of the file is changed.
@@ -549,17 +609,108 @@ impl Cut {
     }
 }
 
+/// Where the plane of a cut crosses the surface.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Section {
+    /// The pieces of the outline of the section, each from one end to the other.
+    pub lines: Vec<[Point3; 2]>,
+    /// The area of the material that the plane goes through, in square millimetres, when the
+    /// surface is closed.
+    pub area_mm2: Option<f64>,
+}
+
+/// The section of a solid by the plane of a cut. A corner on the plane counts as under it, so a
+/// cut at the far side of the solid meets nothing.
+pub fn section(solid: &Solid, cut: Cut) -> Section {
+    let axis = cut.axis.min(2);
+    let (a, b) = ((axis + 1) % 3, (axis + 2) % 3);
+    let mut across = [0.0; 3];
+    across[axis] = 1.0;
+    let mut lines = Vec::new();
+    let mut twice = 0.0;
+    for t in &solid.triangles {
+        let corners = t.corners.map(|v| solid.points[v as usize]);
+        let above = corners.map(|p| p[axis] > cut.at);
+        let mut ends = [[0.0; 3]; 2];
+        let mut found = 0;
+        for k in 0..3 {
+            let next = (k + 1) % 3;
+            if above[k] == above[next] || found == 2 {
+                continue;
+            }
+            // from the corner under the plane to the one over it, so that the two triangles of a
+            // side give the same point
+            let (low, high) = if above[k] {
+                (corners[next], corners[k])
+            } else {
+                (corners[k], corners[next])
+            };
+            let share = (cut.at - low[axis]) / (high[axis] - low[axis]);
+            let mut point = [0, 1, 2].map(|i| low[i] + (high[i] - low[i]) * share);
+            point[axis] = cut.at;
+            ends[found] = point;
+            found += 1;
+        }
+        if found < 2 {
+            continue;
+        }
+        // round the material counter-clockwise seen from the far end of the axis
+        if dot(sub(ends[1], ends[0]), cross(across, t.normal)) < 0.0 {
+            ends.swap(0, 1);
+        }
+        twice += ends[0][a] * ends[1][b] - ends[1][a] * ends[0][b];
+        lines.push(ends);
+    }
+    Section {
+        lines,
+        area_mm2: solid.closed.then_some((twice / 2.0).max(0.0)),
+    }
+}
+
 /// How the picture of a solid is drawn.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Look {
     /// The sharp edges are drawn.
     pub edges: bool,
     /// Where the solid is cut, if it is.
     pub cut: Option<Cut>,
+    /// The light follows the surface between its sharp edges, not each triangle.
+    pub smooth: bool,
+    /// A closed solid that is cut is closed by a face where it is cut.
+    pub cap: bool,
+    /// The points looked at along each side of a pixel, 1 to [`SAMPLES_MAX`]; more soften the
+    /// edges.
+    pub samples: usize,
+    /// The threads that draw; 0 takes what the computer has.
+    pub threads: usize,
+}
+
+impl Look {
+    /// Flat triangles, one point for each pixel and nothing else.
+    pub const BARE: Look = Look {
+        edges: false,
+        cut: None,
+        smooth: false,
+        cap: false,
+        samples: 1,
+        threads: 0,
+    };
+}
+
+impl Default for Look {
+    fn default() -> Look {
+        Look::BARE
+    }
 }
 
 /// The widest and tallest picture that is worked out.
 pub const PICTURE_MAX: usize = 4096;
+
+/// The most points looked at along each side of a pixel.
+pub const SAMPLES_MAX: usize = 3;
+
+/// The most threads that draw one picture.
+pub const THREADS_MAX: usize = 16;
 
 /// The picture of a solid: its pixels and how far each one is from the person.
 #[derive(Debug, Clone, PartialEq)]
@@ -604,22 +755,58 @@ impl Picture {
         }
         false
     }
+}
 
+/// The rows of a picture that one thread draws.
+struct Rows<'a> {
+    width: usize,
+    /// The rows of the whole picture.
+    height: usize,
+    /// The first of these rows and the one after the last.
+    top: usize,
+    bottom: usize,
+    rgba: &'a mut [u8],
+    depth: &'a mut [f64],
+    /// Whether the nearest surface of a pixel looks away.
+    away: &'a mut [bool],
+    cut: Option<Cut>,
+}
+
+/// A triangle ready to be painted: its corners (across, down, depth), their coordinate on the
+/// axis of the cut and their light.
+struct Painted {
+    at: [(f64, f64, f64); 3],
+    along: [f64; 3],
+    shade: [f64; 3],
+    base: [f64; 3],
+    away: bool,
+}
+
+impl Rows<'_> {
     fn put(&mut self, at: usize, colour: [u8; 4]) {
         self.rgba[at * 4..at * 4 + 4].copy_from_slice(&colour);
     }
 
-    /// Fills a triangle given by its corners (across, down, depth) where it is the nearest and
-    /// not cut away; `along` is the coordinate of each corner on the axis of the cut.
-    fn fill(&mut self, [a, b, c]: [(f64, f64, f64); 3], along: [f64; 3], colour: [u8; 4]) {
+    /// Fills a triangle where it is the nearest and not cut away.
+    fn fill(&mut self, t: &Painted) {
+        let [a, b, c] = t.at;
         let area = (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
         if area.abs() < 1e-12 {
             return;
         }
+        let low_y = a.1.min(b.1).min(c.1).floor().max(self.top as f64) as usize;
+        let high_y = (a.1.max(b.1).max(c.1).ceil().max(0.0) as usize).min(self.bottom);
+        if low_y >= high_y {
+            return;
+        }
         let low_x = a.0.min(b.0).min(c.0).floor().max(0.0) as usize;
-        let low_y = a.1.min(b.1).min(c.1).floor().max(0.0) as usize;
         let high_x = (a.0.max(b.0).max(c.0).ceil().max(0.0) as usize).min(self.width);
-        let high_y = (a.1.max(b.1).max(c.1).ceil().max(0.0) as usize).min(self.height);
+        let even = t.shade[0] == t.shade[1] && t.shade[1] == t.shade[2];
+        let lit = |shade: f64| {
+            let [r, g, b] = t.base.map(|v| (v * shade).clamp(0.0, 255.0) as u8);
+            [r, g, b, 255]
+        };
+        let flat = lit(t.shade[0]);
         for y in low_y..high_y {
             for x in low_x..high_x {
                 // the middle of the pixel, in the shares of the three corners
@@ -630,25 +817,62 @@ impl Picture {
                 if wa < -1e-9 || wb < -1e-9 || wc < -1e-9 {
                     continue;
                 }
-                let coordinate = wa * along[0] + wb * along[1] + wc * along[2];
+                let coordinate = wa * t.along[0] + wb * t.along[1] + wc * t.along[2];
                 if self.cut.is_some_and(|cut| !cut.keeps(coordinate)) {
                     continue;
                 }
                 let depth = wa * a.2 + wb * b.2 + wc * c.2;
-                let at = y * self.width + x;
+                let at = (y - self.top) * self.width + x;
                 if depth < self.depth[at] {
                     self.depth[at] = depth;
+                    self.away[at] = t.away;
+                    let colour = if even {
+                        flat
+                    } else {
+                        lit(wa * t.shade[0] + wb * t.shade[1] + wc * t.shade[2])
+                    };
                     self.put(at, colour);
                 }
             }
         }
     }
 
-    /// Draws a side one pixel wide where it is not behind a surface nor cut away.
-    fn stroke(&mut self, a: (f64, f64, f64), b: (f64, f64, f64), along: (f64, f64), slack: f64) {
+    /// Closes the cut: where the nearest surface left looks away, the line of sight was inside
+    /// the material when it passed the plane, so the plane is what is seen there. `plane` gives
+    /// the depth of the plane at the middle of a pixel.
+    fn close(&mut self, every: usize, line: usize, plane: impl Fn(f64, f64) -> f64) {
+        for y in self.top..self.bottom {
+            for x in 0..self.width {
+                let at = (y - self.top) * self.width + x;
+                if !self.away[at] {
+                    continue;
+                }
+                let depth = plane(x as f64 + 0.5, y as f64 + 0.5);
+                if depth < self.depth[at] {
+                    self.depth[at] = depth;
+                    self.away[at] = false;
+                    self.put(at, if (x + y) % every < line { HATCH } else { CAP });
+                }
+            }
+        }
+    }
+
+    /// Draws a side `thick` pixels wide where it is not behind a surface nor cut away.
+    fn stroke(
+        &mut self,
+        a: (f64, f64, f64),
+        b: (f64, f64, f64),
+        along: (f64, f64),
+        slack: f64,
+        thick: usize,
+    ) {
+        let (low, high) = (a.1.min(b.1), a.1.max(b.1));
+        if high < self.top as f64 - thick as f64 || low >= self.bottom as f64 {
+            return;
+        }
         let longest = (b.0 - a.0).abs().max((b.1 - a.1).abs());
         // a side far longer than the picture (a very close zoom) is walked in bounded steps
-        let steps = (longest.ceil() as usize).clamp(1, 4 * PICTURE_MAX);
+        let steps = (longest.ceil() as usize).clamp(1, 4 * SAMPLES_MAX * PICTURE_MAX);
         for k in 0..=steps {
             let t = k as f64 / steps as f64;
             let x = a.0 + (b.0 - a.0) * t;
@@ -661,9 +885,13 @@ impl Picture {
                 continue;
             }
             let depth = a.2 + (b.2 - a.2) * t;
-            let at = y as usize * self.width + x as usize;
-            if depth <= self.depth[at] + slack {
-                self.put(at, EDGE);
+            for v in (y as usize).max(self.top)..(y as usize + thick).min(self.bottom) {
+                for u in x as usize..(x as usize + thick).min(self.width) {
+                    let at = (v - self.top) * self.width + u;
+                    if depth <= self.depth[at] + slack {
+                        self.put(at, EDGE);
+                    }
+                }
             }
         }
     }
@@ -674,58 +902,217 @@ fn slack(solid: &Solid) -> f64 {
     solid.radius() * 0.01
 }
 
+/// The threads that draw a picture of so many rows.
+fn threads_for(asked: usize, rows: usize) -> usize {
+    let most = if asked == 0 {
+        std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+    } else {
+        asked
+    };
+    // a thread for fewer than 64 rows costs more than it gives
+    most.min(rows.div_ceil(64)).clamp(1, THREADS_MAX)
+}
+
+/// Where the face that closes a cut lies on a picture.
+#[derive(Clone, Copy)]
+struct Plane {
+    /// The coordinate of the cut from the middle of the solid.
+    offset: f64,
+    /// How that coordinate grows to the right, up and away.
+    grows: (f64, f64, f64),
+    /// The pixels of one millimetre.
+    scale: f64,
+}
+
 /// The picture of a solid, `width` by `height` pixels: every pixel shows the surface that is
 /// nearest to the person, lit by its direction, and with the edges of the look the sharp edges
 /// that are not hidden. A closed solid leaves out the triangles that look away; an open surface
-/// is lit from both sides, and so is a cut solid, whose inside has a colour of its own.
+/// is lit from both sides, and so is a cut solid, whose inside has a colour of its own or, with
+/// the cap of the look, is closed by a face where the plane cuts the material. The picture does
+/// not depend on how many threads draw it.
 pub fn render(solid: &Solid, pose: &Pose, width: usize, height: usize, look: Look) -> Picture {
     let width = width.clamp(1, PICTURE_MAX);
     let height = height.clamp(1, PICTURE_MAX);
-    let mut out = Picture {
-        width,
-        height,
-        rgba: vec![0; width * height * 4],
-        depth: vec![f64::INFINITY; width * height],
-        cut: look.cut,
+    let samples = look.samples.clamp(1, SAMPLES_MAX);
+    // the picture is worked out larger and brought down at the end
+    let (wide, tall) = (width * samples, height * samples);
+    let fine = Pose {
+        pan: (pose.pan.0 * samples as f64, pose.pan.1 * samples as f64),
+        ..*pose
     };
+    let pane = (wide as f64, tall as f64);
     let axis = look.cut.map_or(0, |cut| cut.axis.min(2));
     // the light comes from over the left shoulder of the person
     let light = unit([-0.35, 0.55, -0.75]).unwrap_or([0.0, 0.0, -1.0]);
-    let pane = (width as f64, height as f64);
     let corners: Vec<(f64, f64, f64)> = solid
         .points
         .iter()
-        .map(|p| on_pane(solid, pose, pane, *p))
+        .map(|p| on_pane(solid, &fine, pane, *p))
         .collect();
-    let mut sides = Vec::new();
-    for t in &solid.triangles {
-        let (right, up, depth) = rotate(t.normal, [0.0; 3], pose.camera);
-        let away = depth > 1e-9;
+    let paint = |t: &Triangle| -> Option<Painted> {
+        let turned = rotate(t.normal, [0.0; 3], fine.camera);
+        let away = turned.2 > 1e-9;
         if away && solid.closed && look.cut.is_none() {
-            continue;
+            return None;
         }
         let side = if away { -1.0 } else { 1.0 };
-        let lit = dot([right * side, up * side, depth * side], light).max(0.0);
-        let shade = 0.25 + 0.75 * lit;
-        // the side that looks away of a closed solid is only seen through a cut
-        let base = if away && solid.closed { INSIDE } else { FACE };
-        let [r, g, b] = base.map(|v| (v * shade).clamp(0.0, 255.0) as u8);
-        let at = t.corners.map(|v| corners[v as usize]);
-        let along = t.corners.map(|v| solid.points[v as usize][axis]);
-        out.fill(at, along, [r, g, b, 255]);
-        for k in 0..3 {
-            let next = (k + 1) % 3;
-            if look.edges && t.edges & (1 << k) != 0 {
-                sides.push((at[k], at[next], (along[k], along[next])));
+        let shade = |n: Point3| {
+            let (right, up, depth) = rotate(n, [0.0; 3], fine.camera);
+            0.25 + 0.75 * dot([right * side, up * side, depth * side], light).max(0.0)
+        };
+        Some(Painted {
+            at: t.corners.map(|v| corners[v as usize]),
+            along: t.corners.map(|v| solid.points[v as usize][axis]),
+            shade: if look.smooth {
+                t.smooth.map(|n| shade(n.map(f64::from)))
+            } else {
+                [shade(t.normal); 3]
+            },
+            // the side that looks away of a closed solid is only seen through a cut
+            base: if away && solid.closed { INSIDE } else { FACE },
+            away: away && solid.closed,
+        })
+    };
+    // the face that closes the cut and the outline round it
+    let cap = look.cut.filter(|_| look.cap && solid.closed);
+    let plane = cap.and_then(|cut| {
+        let mut direction = [0.0; 3];
+        direction[axis] = 1.0;
+        let grows = rotate(direction, [0.0; 3], fine.camera);
+        // only a person on the side that was cut away sees the face
+        (grows.2 < -1e-9).then(|| Plane {
+            offset: cut.at - solid.centre()[axis],
+            grows,
+            scale: 0.45 * pane.0.min(pane.1) / solid.radius() * fine.zoom,
+        })
+    });
+    let outline: Vec<[(f64, f64, f64); 2]> = cap.map_or_else(Vec::new, |cut| {
+        section(solid, cut)
+            .lines
+            .iter()
+            .map(|ends| ends.map(|p| on_pane(solid, &fine, pane, p)))
+            .collect()
+    });
+    let slack = slack(solid);
+    let draw = |mut rows: Rows<'_>| {
+        for t in &solid.triangles {
+            if let Some(painted) = paint(t) {
+                rows.fill(&painted);
             }
         }
+        if let Some(plane) = plane {
+            rows.close(HATCH_EVERY * samples, samples, |x, y| {
+                let across = (x - pane.0 / 2.0 - fine.pan.0) / plane.scale;
+                let over = (pane.1 / 2.0 + fine.pan.1 - y) / plane.scale;
+                let (right, up, away) = plane.grows;
+                (plane.offset - across * right - over * up) / away
+            });
+        }
+        // the edges after every face, so that a face drawn later does not cut them in half
+        if look.edges {
+            for t in solid.triangles.iter().filter(|t| t.edges != 0) {
+                let Some(painted) = paint(t) else {
+                    continue;
+                };
+                for k in 0..3 {
+                    let next = (k + 1) % 3;
+                    if t.edges & (1 << k) != 0 {
+                        let along = (painted.along[k], painted.along[next]);
+                        rows.stroke(painted.at[k], painted.at[next], along, slack, samples);
+                    }
+                }
+            }
+        }
+        if let Some(cut) = cap {
+            for [a, b] in &outline {
+                rows.stroke(*a, *b, (cut.at, cut.at), slack, samples);
+            }
+        }
+    };
+    let mut rgba = vec![0; wide * tall * 4];
+    let mut depth = vec![f64::INFINITY; wide * tall];
+    let mut away = vec![false; wide * tall];
+    let threads = threads_for(look.threads, tall);
+    let each = tall.div_ceil(threads);
+    let parts = rgba
+        .chunks_mut(each * wide * 4)
+        .zip(depth.chunks_mut(each * wide))
+        .zip(away.chunks_mut(each * wide))
+        .enumerate()
+        .map(|(n, ((rgba, depth), away))| Rows {
+            width: wide,
+            height: tall,
+            top: n * each,
+            bottom: (n * each + each).min(tall),
+            rgba,
+            depth,
+            away,
+            cut: look.cut,
+        });
+    if threads == 1 {
+        parts.for_each(draw);
+    } else {
+        std::thread::scope(|scope| {
+            for rows in parts {
+                let draw = &draw;
+                scope.spawn(move || draw(rows));
+            }
+        });
     }
-    // the edges after every face, so that a face drawn later does not cut them in half
-    let slack = slack(solid);
-    for (a, b, along) in sides {
-        out.stroke(a, b, along, slack);
+    if samples > 1 {
+        (rgba, depth) = bring_down(&rgba, &depth, width, height, samples);
     }
-    out
+    Picture {
+        width,
+        height,
+        rgba,
+        depth,
+        cut: look.cut,
+    }
+}
+
+/// A picture of `samples` points along each side of a pixel brought down to one pixel each: the
+/// colour is the mean of the points that show something, the alpha how many do, and the depth that
+/// of the nearest one.
+fn bring_down(
+    rgba: &[u8],
+    depth: &[f64],
+    width: usize,
+    height: usize,
+    samples: usize,
+) -> (Vec<u8>, Vec<f64>) {
+    let wide = width * samples;
+    let all = (samples * samples) as u32;
+    let mut colours = vec![0; width * height * 4];
+    let mut near = vec![f64::INFINITY; width * height];
+    for y in 0..height {
+        for x in 0..width {
+            let mut sum = [0u32; 3];
+            let mut shown = 0u32;
+            for v in y * samples..(y + 1) * samples {
+                for u in x * samples..(x + 1) * samples {
+                    let at = v * wide + u;
+                    if rgba[at * 4 + 3] == 0 {
+                        continue;
+                    }
+                    shown += 1;
+                    for (k, total) in sum.iter_mut().enumerate() {
+                        *total += u32::from(rgba[at * 4 + k]);
+                    }
+                    near[y * width + x] = near[y * width + x].min(depth[at]);
+                }
+            }
+            if shown == 0 {
+                continue;
+            }
+            let out = &mut colours[(y * width + x) * 4..(y * width + x) * 4 + 4];
+            for (o, total) in out.iter_mut().zip(sum) {
+                *o = ((total + shown / 2) / shown) as u8;
+            }
+            out[3] = ((shown * 255 + all / 2) / all) as u8;
+        }
+    }
+    (colours, near)
 }
 
 /// The corner of the solid within `radius` pixels of a place of the picture that is not hidden:
