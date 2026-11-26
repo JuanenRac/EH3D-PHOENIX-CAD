@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **The attachments of the project in the window:** the panel «Attachments» of the suite (View, or *File > Suite project*) lists, attaches, links to a part, extracts and removes the data sheets, manuals and other files of the `.eh3d` project, with the viewer beside the list; dangerous and unknown files ask first, and a file dropped on the panel is attached. Its limits are the sections `[attachments]` and `[viewer]` of the settings, and the packages carry the PDF library (PDFium) with its licences. Not seen on a screen.
+
 ## [0.1.5] - Variants, reference dimensions and the shared project of the suite
 
 - **Tab titles are written whole:** the shared window frame, taken at the tag v0.3.4, no longer replaces a short title that fits with the sign of its panel.

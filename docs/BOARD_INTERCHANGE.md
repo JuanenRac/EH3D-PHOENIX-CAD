@@ -100,6 +100,12 @@ The plain *Save as* of the File menu keeps every branch too. A file that was ope
 
 `panels PROJECT OUT.dxf|OUT.svg` draws each face as seen from outside at its outer size, with its holes; extrusions and pockets are not drawn, and there are no joints or kerf allowance.
 
+## The attachments of the project
+
+The panel «Attachments» of the window (View, or *File > Suite project*) is the shared panel `eh3d-attachpanel` of EH3D-COMMON (its guide is `docs/ATTACHMENTS_PANEL.md` there). It works on the `.eh3d` file the window has open; with a project of this program alone (`.phoenixproj`) it says there is no project of the suite. It writes only the branch `attachments/`: `cad/` and the other branches keep their bytes, and the window reads the list of branches again after a write. A write that removes a signature is asked about first. Dangerous files and kinds the suite does not know are extracted or opened only after a confirmation, programs and scripts are never opened, nothing is downloaded and a settings file that holds `server_token` is not attached. A file dropped on the panel is attached there; the window keeps the projects and sketches it opens.
+
+The limits are the sections `[attachments]` (`max_mb`) and `[viewer]` (`max_attachment_mb`, `max_pdf_mb`, `max_image_mb`, `max_text_mb`, `max_office_mb`) of the settings file given with `--config`, each a whole number of megabytes from 1 to 4096. PDF pages need the PDF library beside the program, which the packages carry with its licences; a build from source gets it with `python ../EH3D-COMMON/tools/fetch_pdfium.py --out target/release`.
+
 ## The title, the description and the signatures
 
 **Title and description** (File, Suite project) reads and writes the two texts of `common/meta/meta.json` in each of the eight languages; only the branch `common` is written. A text needs its English version before another language, and an empty field takes the language away (`eh3d-meta --title ""` too).

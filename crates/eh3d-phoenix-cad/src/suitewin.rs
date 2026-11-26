@@ -40,6 +40,17 @@ fn name_of(path: &Path) -> String {
         .unwrap_or_default()
 }
 
+/// Whether a file is one the window opens when it is dropped on it (a project, a file of the suite
+/// or a sketch): the panel of the attachments leaves those to the window.
+pub fn opens_file(path: &Path) -> bool {
+    crate::shot::is_sketch_file(path)
+        || path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+            crate::window::PROJECT_EXTENSIONS
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(e))
+        })
+}
+
 /// The file of the suite that the window is working on: the one of its project.
 pub fn current_file(win: &Window) -> Option<PathBuf> {
     win.path
@@ -984,5 +995,25 @@ mod tests {
         let why = take_board(&mut win).unwrap_err();
         assert!(why.contains("PHOENIX-CAD-065"), "{why}");
         assert_eq!(std::fs::read(&file).unwrap(), before);
+    }
+}
+
+#[cfg(test)]
+mod drop_tests {
+    use super::*;
+
+    #[test]
+    fn the_files_the_window_opens_are_told_apart_from_the_ones_of_the_attachments() {
+        for own in [
+            "box.phoenixproj",
+            "box.EH3D",
+            "plate.phoenixsketch",
+            "dir/PLATE.PHOENIXSKETCH",
+        ] {
+            assert!(opens_file(Path::new(own)), "{own}");
+        }
+        for other in ["sheet.pdf", "photo.png", "notes.txt", "noextension"] {
+            assert!(!opens_file(Path::new(other)), "{other}");
+        }
     }
 }
