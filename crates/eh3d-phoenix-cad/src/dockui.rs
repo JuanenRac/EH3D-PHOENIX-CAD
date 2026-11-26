@@ -22,7 +22,7 @@ use crate::window::format_msg;
 use eh3d_dock::about::{AboutBrand, Phoenix};
 use eh3d_dock::core::PanelDef;
 use eh3d_dock::geom::Side;
-use eh3d_dock::menu::{Entry, Gen, Item, Label, Menu, MenuBar, StdAction};
+use eh3d_dock::menu::{DockAction, Entry, Gen, Item, Label, Menu, MenuBar, StdAction};
 use eh3d_dock::model::{Layout, Node};
 use eh3d_dock::sectors::Sector;
 use eh3d_dock::stdmenus::{edit_menu, file_menu, help_menu, view_menu, window_menu, HelpOptions};
@@ -63,9 +63,11 @@ pub mod id {
     pub const DIMENSIONS: &str = "dimensions";
     /// The 2D drawing sheets: views, dimensions, balloons, layers and the bill.
     pub const DRAWING: &str = "drawing";
+    /// The attachments of the project of the suite: data sheets, manuals and other files, with their viewer.
+    pub const ATTACHMENTS: &str = eh3d_attachpanel::PANEL_ID;
 
     /// Every panel, in the order of the View menu.
-    pub const ALL: [&str; 12] = [
+    pub const ALL: [&str; 13] = [
         VIEW3D,
         MODEL_TREE,
         PROPERTIES,
@@ -78,6 +80,7 @@ pub mod id {
         CONSTRAINTS,
         DIMENSIONS,
         DRAWING,
+        ATTACHMENTS,
     ];
 }
 
@@ -123,8 +126,9 @@ pub fn view_lang(lang: Lang) -> eh3d_view::texts::Lang {
         .unwrap_or(eh3d_view::texts::Lang::En)
 }
 
-/// The panels: the ones the suite proposes for mechanical design, and the six that this program
-/// adds (the sheet of variables, the four parts of the sketch and the drawing sheets).
+/// The panels: the ones the suite proposes for mechanical design, the six that this program adds
+/// (the sheet of variables, the four parts of the sketch and the drawing sheets) and the shared
+/// panel of the attachments.
 pub fn defs() -> Vec<PanelDef> {
     let mut v = Sector::Cad.panels();
     v.push(
@@ -157,6 +161,7 @@ pub fn defs() -> Vec<PanelDef> {
             .icon("Pl")
             .min(280.0, 200.0),
     );
+    v.push(eh3d_attachpanel::panel_def());
     v
 }
 
@@ -186,6 +191,7 @@ pub fn workspaces() -> Vec<Workspace> {
                         id::CONSTRAINTS,
                         id::DIMENSIONS,
                         id::DRAWING,
+                        id::ATTACHMENTS,
                     ]),
                 ),
             ),
@@ -197,7 +203,7 @@ pub fn workspaces() -> Vec<Workspace> {
                 t(&[id::VIEW3D, id::DRAWING]),
                 Node::column(
                     0.5,
-                    t(&[id::PROPERTIES, id::VARIABLES]),
+                    t(&[id::PROPERTIES, id::VARIABLES, id::ATTACHMENTS]),
                     t(&[id::REPORT, id::CONSOLE]),
                 ),
             ),
@@ -364,6 +370,12 @@ pub fn menu_bar() -> MenuBar<Cmd> {
     for (id, words, cmd) in SUITE_ENTRIES {
         suite = suite.entry(own(id, words, cmd));
     }
+    // the shared panel of the attachments of that project
+    suite = suite.entry(Entry::dock(
+        "file.suite.attachments",
+        Label::Own(eh3d_attachpanel::panel_title()),
+        DockAction::ShowPanel(id::ATTACHMENTS.to_string()),
+    ));
     let after_recent = file
         .items
         .iter()

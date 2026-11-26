@@ -14,6 +14,9 @@ eh3d-phoenix-cad-solver = { version = ">=0.1.5", path = "../eh3d-phoenix-cad-sol
 eh3d-container = { version = ">=0.0.1", path = "../../../EH3D-COMMON/crates/container" }
 # the project file of the suite (`.eh3d`): one branch for each program, shared by all of them
 eh3d-project = { version = ">=0.0.1", path = "../../../EH3D-COMMON/crates/project" }
+# the panel of the attachments of a project of the suite that every program shows: list, attach, link to a part, extract with a
+# question and the viewer beside (the model has no window; the drawing is the feature `gui`)
+eh3d-attachpanel = { version = ">=0.0.1", path = "../../../EH3D-COMMON/crates/attachpanel" }
 # the records of the shared format and the artifacts the programs exchange are JSON
 serde = "1"
 serde_json = "1"
@@ -38,7 +41,7 @@ path = "src/main.rs"
 [features]
 default = []
 # the window (egui, with the icon of the program): `cargo run --release --features gui`
-gui = ["dep:eframe", "dep:png", "eh3d-view/gui", "eh3d-dock/gui"]
+gui = ["dep:eframe", "dep:png", "eh3d-view/gui", "eh3d-dock/gui", "eh3d-attachpanel/gui"]
 
 # the window
 [dependencies.eframe]

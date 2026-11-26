@@ -34,6 +34,7 @@ use crate::CadError;
 use eframe::egui::{
     self, Color32, FontData, FontDefinitions, FontFamily, Pos2, Rect, Stroke, Vec2,
 };
+use eh3d_attachpanel::{AttachPanel, Program};
 use eh3d_dock::about::Phoenix;
 use eh3d_dock::core::AboutInfo;
 use eh3d_dock::gui::Dock;
@@ -153,6 +154,8 @@ struct App {
     recent_added: Vec<String>,
     /// The files of the suite among the recent ones, as the frame keeps them.
     recent_suite: Vec<String>,
+    /// The panel of the attachments of the project of the suite.
+    attachments: AttachPanel,
     /// The window of the branches of the suite file, while it is open: what was read of it.
     branches: Option<Result<Branches, String>>,
     /// The window that tells what an import or the board did.
@@ -202,6 +205,10 @@ impl App {
             pending_active: Vec::new(),
             recent_added: Vec::new(),
             recent_suite: Vec::new(),
+            attachments: AttachPanel::new(Program::new(
+                crate::eh3dfile::BRANCH,
+                env!("CARGO_PKG_VERSION"),
+            )),
             branches: None,
             suite_note: None,
             variants: None,
@@ -3020,13 +3027,10 @@ impl App {
     fn begin_frame(&mut self, ctx: &egui::Context) {
         self.drew_view3d = false;
         self.drew_sketch = false;
-        let dropped: Vec<PathBuf> = ctx.input(|i| {
-            i.raw
-                .dropped_files
-                .iter()
-                .map(|f| f.path().to_path_buf())
-                .collect()
-        });
+        // the limits of the attachments follow the settings; a file dropped on their panel is
+        // attached there
+        self.attachments.set_limits(self.win.ui.attachments.clone());
+        let dropped = self.attachments.take_drop(ctx, suitewin::opens_file);
         if let Some(p) = dropped.first() {
             let opened = if crate::shot::is_sketch_file(p) {
                 self.fit_next = self.sketch.open_file(p);
@@ -3120,6 +3124,18 @@ impl App {
                 }
             });
         });
+    }
+
+    /// The attachments of the project of the suite that the window works on; after a write the
+    /// list of the branches is read again.
+    fn panel_attachments(&mut self, ui: &mut egui::Ui) {
+        let file = suitewin::current_file(&self.win);
+        if self
+            .attachments
+            .show(ui, file.as_deref(), self.win.lang.code())
+        {
+            self.refresh_branches();
+        }
     }
 
     /// The panel of the status and the measures: the one of the model or the one of the sketch.
@@ -3690,7 +3706,7 @@ impl Shell {
         app.config_path = config;
         let app = Rc::new(RefCell::new(app));
         let mut dock = Dock::new(dockui::defs(), dockui::workspaces());
-        let draw: [(&str, PanelDraw); 12] = [
+        let draw: [(&str, PanelDraw); 13] = [
             (dockui::id::VIEW3D, App::panel_view3d),
             (dockui::id::MODEL_TREE, App::panel_model_tree),
             (dockui::id::PROPERTIES, App::panel_properties),
@@ -3703,6 +3719,7 @@ impl Shell {
             (dockui::id::CONSTRAINTS, App::panel_constraints),
             (dockui::id::DIMENSIONS, App::panel_dimensions),
             (dockui::id::DRAWING, App::panel_drawing),
+            (dockui::id::ATTACHMENTS, App::panel_attachments),
         ];
         for (name, f) in draw {
             let a = app.clone();
@@ -4143,6 +4160,39 @@ pub fn run_shot(start: Start, request: ShotRequest) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_panel_of_the_attachments_follows_the_suite_file_and_the_settings_of_the_window() {
+        let mut ui_settings = UiSettings::defaults();
+        assert!(ui_settings.attachments.apply("attachments.max_mb", "16"));
+        let win = Window::new(Lang::En, crate::config::Settings::defaults(), ui_settings).unwrap();
+        let sketch = SketchEditor::new(
+            Lang::En,
+            crate::config::Settings::defaults(),
+            SketchSettings::defaults(),
+            SketchUiSettings::defaults(),
+        );
+        let mut app = App::new(win, sketch, StartView::Model);
+        let folder =
+            std::env::temp_dir().join(format!("phoenix-cad-attach-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("box.eh3d");
+        let _ = std::fs::remove_file(&file);
+        assert!(suitewin::save_as(&mut app.win, &file, false));
+        let ctx = egui::Context::default();
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let ctx = ui.ctx().clone();
+            app.begin_frame(&ctx);
+            app.panel_attachments(ui);
+        });
+        out.drop_without_applying_deltas();
+        assert_eq!(app.attachments.model.project(), Some(file.as_path()));
+        assert_eq!(
+            app.attachments.limits().attachments.max_attachment_bytes,
+            16 << 20
+        );
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
 
     #[test]
     fn a_name_typed_to_save_gets_the_extension_of_the_projects_or_of_the_sketches() {

@@ -72,6 +72,10 @@ jobs:
           cargo test --all-targets 2>&1 | tee test.log
           cargo test --doc 2>&1 | tee -a test.log
         working-directory: EH3D-PHOENIX-CAD
+      # the tests of the window draw it with no screen
+      - name: Tests of the window
+        run: "cargo test -p eh3d-phoenix-cad --lib --features gui gui::"
+        working-directory: EH3D-PHOENIX-CAD
       - name: The figure of tests of the README files is the one that ran
         if: runner.os == 'Linux'
         run: python3 -I -c "import sys; sys.path.insert(0, 'tools'); import check_test_count as c; raise SystemExit(c.main(['test.log']))"

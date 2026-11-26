@@ -370,6 +370,26 @@ pub struct UiSettings {
     pub export: ExportSettings,
     /// How the panels of the Reports menu start.
     pub panels: PanelSettings,
+    /// The limits of the panel «Attachments» (`[attachments] max_mb`, `[viewer] max_*_mb`).
+    pub attachments: eh3d_attachpanel::PanelLimits,
+}
+
+/// The limits of the panel of the attachments: the keys of the sections `[attachments]` and
+/// `[viewer]`, which the panel itself reads and checks.
+fn attachment_limits(c: &Config) -> Result<eh3d_attachpanel::PanelLimits, CadError> {
+    let mut limits = eh3d_attachpanel::PanelLimits::default();
+    for key in c.keys() {
+        if !eh3d_attachpanel::PanelLimits::is_key(key) {
+            continue;
+        }
+        let value = c.get(key).unwrap_or_default();
+        if !limits.apply(key, value) {
+            return Err(CadError::Config(format!(
+                "{key} is not a limit of the attachments or its value is not a whole number from 1 to 4096"
+            )));
+        }
+    }
+    Ok(limits)
 }
 
 fn missing(key: &str) -> CadError {
@@ -707,6 +727,7 @@ impl UiSettings {
             measure: MeasureSettings::from_config(c)?,
             export: ExportSettings::from_config(c)?,
             panels: PanelSettings::from_config(c)?,
+            attachments: attachment_limits(c)?,
         })
     }
 }
@@ -1135,6 +1156,30 @@ marker = big
             let error = UiSettings::with_user_config(text).unwrap_err();
             assert_eq!(error.code(), "PHOENIX-CAD-011", "{text:?}: {error}");
         }
+    }
+
+    #[test]
+    fn the_limits_of_the_attachments_are_read_and_refused_by_their_keys() {
+        assert_eq!(
+            UiSettings::defaults().attachments,
+            eh3d_attachpanel::PanelLimits::default()
+        );
+        let mine =
+            UiSettings::with_user_config("[attachments]\nmax_mb = 16\n[viewer]\nmax_pdf_mb = 8\n")
+                .unwrap();
+        assert_eq!(mine.attachments.attachments.max_attachment_bytes, 16 << 20);
+        assert_eq!(mine.attachments.viewer.max_pdf_bytes, 8 << 20);
+        for bad in [
+            "[attachments]\nmax_mb = 0",
+            "[attachments]\nmax_mb = 4097",
+            "[viewer]\nother = 4",
+            "[viewer]\nmax_pdf_mb = x",
+        ] {
+            let e = UiSettings::with_user_config(bad).unwrap_err().to_string();
+            assert!(e.contains("4096"), "{bad}: {e}");
+        }
+        // the settings of the library accept the same file
+        crate::config::Settings::with_user_config("[attachments]\nmax_mb = 16\n").unwrap();
     }
 
     #[test]

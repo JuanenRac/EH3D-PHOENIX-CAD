@@ -27,9 +27,9 @@ fn entry_ids(bar: &MenuBar<Cmd>) -> Vec<String> {
 #[test]
 fn the_panels_have_names_that_hold_and_titles_in_the_eight_languages() {
     let d = defs();
-    assert_eq!(d.len(), 12);
+    assert_eq!(d.len(), 13);
     let names: Vec<&str> = d.iter().map(|p| p.id.as_str()).collect();
-    // the six of the sector first, then the six of this program
+    // the six of the sector first, then the six of this program and the shared one of the attachments
     assert_eq!(
         names[..6],
         [
@@ -242,7 +242,9 @@ fn the_submenu_of_the_suite_file_follows_the_recent_files_and_has_every_entry_on
     let Item::Submenu(suite) = &file.items[at] else {
         panic!("not a submenu");
     };
-    assert_eq!(suite.items.len(), SUITE_ENTRIES.len());
+    // the entries of the project file and the one that shows the panel of its attachments
+    assert_eq!(suite.items.len(), SUITE_ENTRIES.len() + 1);
+    assert!(matches!(suite.items.last(), Some(Item::Entry(e)) if e.id == "file.suite.attachments"));
     let ids = entry_ids(&bar);
     for (id, words, _) in SUITE_ENTRIES {
         assert_eq!(ids.iter().filter(|i| *i == id).count(), 1, "{id}");

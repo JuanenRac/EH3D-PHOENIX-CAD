@@ -42,6 +42,10 @@ A variant also switches steps of the recipe off and on, a variable can follow a 
 
 A project keeps variants, named values of its variables (`docs/PROJECT_DOMAIN.md`), which are applied, checked and exported one file each from the command `variants` and from a window of the Tools menu. A dimension of a sketch can be a reference that reads the drawing and holds nothing (`docs/SKETCH.md`). The title and the description of a `.eh3d` project are edited from the window, and the signatures of its branches are checked with public keys the person trusts (`docs/BOARD_INTERCHANGE.md`); the program does not sign. The logic is tested without a screen and none of the windows has been seen on one.
 
+## The attachments
+
+The window has the panel «Attachments» of the suite (the shared `eh3d-attachpanel`): the data sheets, manuals and other files of the `.eh3d` project are listed, attached, linked to a part, extracted and removed after a question, and shown beside the list, with the limits of the sections `[attachments]` and `[viewer]` of the settings (`BOARD_INTERCHANGE.md`). The panel itself is tested in EH3D-COMMON; it has not been tried on a screen by a person.
+
 ## Capabilities
 
 The official state of each capability is in REQUIREMENTS.md: 35 requirements: 34 `prototype` (FCAD-001 and FCAD-003 to FCAD-035) and 1 `planned` (FCAD-002). This page never states a state that REQUIREMENTS.md does not.
