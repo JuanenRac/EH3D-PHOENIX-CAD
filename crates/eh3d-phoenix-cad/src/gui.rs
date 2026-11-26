@@ -7,6 +7,7 @@ use crate::body::StepState;
 use crate::browse::{self, Browser};
 use crate::catalog;
 use crate::config::Settings;
+use crate::consent::{self, Write};
 use crate::dockui::{self, Cmd, LayoutWatch, MenuFacts};
 use crate::eh3dfile::SaveSettings;
 use crate::enclosure::Face;
@@ -40,6 +41,7 @@ use eh3d_dock::core::AboutInfo;
 use eh3d_dock::gui::Dock;
 use eh3d_dock::menu::{Chosen as MenuChosen, DockAction, MenuBar, StdAction};
 use eh3d_dock::palette;
+use eh3d_project::suitetext::{Said, S};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -181,6 +183,8 @@ struct App {
     viewer: Option<modelview::ViewerState>,
     /// The window that signs the project of the suite, while it is open.
     signing: Option<signing::SignForm>,
+    /// A write that waits for the person, with what it would take away.
+    asking: Option<(Write, Vec<Said>)>,
     /// The settings file given with `--config`, where the arrangement of the panels is kept.
     config_path: Option<PathBuf>,
     /// Whether the 3D view and the sketch were drawn in this frame.
@@ -231,6 +235,7 @@ impl App {
             chosen_keys: Vec::new(),
             viewer: None,
             signing: None,
+            asking: None,
             config_path: None,
             drew_view3d: false,
             drew_sketch: false,
@@ -291,8 +296,16 @@ impl App {
     fn suite_pick(&mut self, ask: SuiteAsk, path: &Path, overwrite: bool) -> bool {
         let done = match ask {
             SuiteAsk::Open => suitewin::open(&mut self.win, path) != suitewin::Opened::Refused,
-            SuiteAsk::SaveAs => suitewin::save_as(&mut self.win, path, overwrite),
-            SuiteAsk::Import => self.suite_import(path),
+            SuiteAsk::SaveAs => {
+                let write = Write::SaveAs {
+                    target: path.to_path_buf(),
+                    overwrite,
+                };
+                !self.ask_first(write) && suitewin::save_as(&mut self.win, path, overwrite)
+            }
+            SuiteAsk::Import => {
+                !self.ask_first(Write::Import(path.to_path_buf())) && self.suite_import(path)
+            }
             SuiteAsk::Key => {
                 let key = path.display().to_string();
                 if !self.chosen_keys.contains(&key) {
@@ -348,6 +361,12 @@ impl App {
 
     /// Takes the board of the branch `pcb` into the box and tells what changed.
     fn suite_board(&mut self) {
+        if !self.ask_first(Write::TakeBoard) {
+            self.take_board_now();
+        }
+    }
+
+    fn take_board_now(&mut self) {
         let lines = match suitewin::take_board(&mut self.win) {
             Ok(taken) => taken.text.lines().map(str::to_owned).collect(),
             Err(why) => vec![why],
@@ -357,13 +376,105 @@ impl App {
     }
 
     /// Checks the fit, cuts the openings or hands the box back, and shows the answer.
-    fn suite_work(&mut self, work: BoardWork, title: Msg) {
+    fn suite_work(&mut self, work: BoardWork) {
+        if !self.ask_first(Write::Board(work)) {
+            self.board_work_now(work);
+        }
+    }
+
+    fn board_work_now(&mut self, work: BoardWork) {
+        let title = match work {
+            BoardWork::CheckFit => Msg::SuiteMenuCheck,
+            BoardWork::CutOpenings => Msg::SuiteMenuOpenings,
+            BoardWork::HandBack => Msg::SuiteMenuHandBack,
+        };
         let lines = match suitewin::board_work(&mut self.win, work) {
             Ok(done) => done.text.lines().map(str::to_owned).collect(),
             Err(why) => vec![why],
         };
         self.suite_note = Some((title, lines));
         self.refresh_branches();
+    }
+
+    /// Asks before a write that would remove a signature of the project of the suite. True when
+    /// it is not to be done now: the question is open, or the project could not be looked at
+    /// and the status line says why.
+    fn ask_first(&mut self, write: Write) -> bool {
+        match consent::question(&self.win, &write) {
+            Ok(lines) if lines.is_empty() => false,
+            Ok(lines) => {
+                self.asking = Some((write, lines));
+                true
+            }
+            Err(why) => {
+                self.win.status = Status::Error(CadError::SuiteFile(why));
+                true
+            }
+        }
+    }
+
+    /// The person agreed: the write that was waiting is done. Nothing happens when nothing was
+    /// asked.
+    fn confirm_write(&mut self) {
+        let Some((write, _)) = self.asking.take() else {
+            return;
+        };
+        match write {
+            Write::Save(path) => {
+                if self.win.save_to(&path) {
+                    self.recent_added.push(path.display().to_string());
+                }
+            }
+            Write::SaveAs { target, overwrite } => {
+                if suitewin::save_as(&mut self.win, &target, overwrite) {
+                    self.recent_added.push(target.display().to_string());
+                }
+            }
+            Write::Import(foreign) => {
+                self.suite_import(&foreign);
+            }
+            Write::Texts {
+                language,
+                title,
+                description,
+            } => self.write_texts_now(language, &title, &description),
+            Write::TakeBoard => self.take_board_now(),
+            Write::Board(work) => self.board_work_now(work),
+        }
+        self.refresh_branches();
+    }
+
+    /// The question before a write that would remove a signature. Escape, a click outside and
+    /// Cancel write nothing, and no button has the keyboard, so Enter does not write either.
+    fn consent_window(&mut self, ctx: &egui::Context) {
+        let Some((_, asked)) = &self.asking else {
+            return;
+        };
+        let lang = self.win.lang;
+        let lines: Vec<String> = asked.iter().map(|w| w.text(lang.code())).collect();
+        let (mut write, mut cancel) = (false, false);
+        let answer = egui::Modal::new(egui::Id::unique("confirm_signature")).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.label(
+                egui::RichText::new(S::ConfirmTitle.tr(lang.code()))
+                    .strong()
+                    .color(ACCENT),
+            );
+            ui.separator();
+            for line in &lines {
+                ui.colored_label(DANGER, line.as_str());
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                write = ui.button(S::Write.tr(lang.code())).clicked();
+                cancel = ui.button(Msg::Cancel.tr(lang)).clicked();
+            });
+        });
+        if write {
+            self.confirm_write();
+        } else if cancel || answer.should_close() {
+            self.asking = None;
+        }
     }
 
     /// Checks the sketch that is being drawn and shows what it found.
@@ -605,10 +716,13 @@ impl App {
 
     /// Saves to the file the project has, or asks for a name when it has none.
     fn save_or_ask(&mut self) {
-        if self.win.path.is_none() {
-            self.save_dialog();
-        } else {
-            self.win.save();
+        match self.win.path.clone() {
+            None => self.save_dialog(),
+            Some(path) => {
+                if !self.ask_first(Write::Save(path)) {
+                    self.win.save();
+                }
+            }
         }
     }
 
@@ -2118,7 +2232,9 @@ impl App {
                     self.win.open_library(&path)
                 } else {
                     match (dialog.sketch, dialog.save.is_some()) {
-                        (false, true) => self.win.save_to(&path),
+                        (false, true) => {
+                            !self.ask_first(Write::Save(path.clone())) && self.win.save_to(&path)
+                        }
                         (false, false) => suitewin::open_any(&mut self.win, &path),
                         (true, true) => self.sketch.save_to(&path),
                         (true, false) => {
@@ -2128,6 +2244,10 @@ impl App {
                         }
                     }
                 };
+                // a write that waits for the person closes the window that asked for it
+                if self.asking.is_some() {
+                    return;
+                }
                 // a file to import and a key are not projects to open again
                 let imported = matches!(
                     dialog.suite,
@@ -3084,7 +3204,8 @@ impl App {
         // attached there
         self.attachments.set_limits(self.win.ui.attachments.clone());
         let dropped = self.attachments.take_drop(ctx, suitewin::opens_file);
-        if let Some(p) = dropped.first() {
+        // a file dropped while a question waits is not opened
+        if let Some(p) = dropped.first().filter(|_| self.asking.is_none()) {
             let opened = if crate::shot::is_sketch_file(p) {
                 self.fit_next = self.sketch.open_file(p);
                 self.workspace = StartView::Sketch;
@@ -3101,7 +3222,9 @@ impl App {
         if self.workspace == StartView::Sketch {
             self.sketch.lang = self.win.lang;
             self.sketch.set_variables(&self.win.mech.vars);
-            self.sketch_keys(ctx);
+            if self.asking.is_none() {
+                self.sketch_keys(ctx);
+            }
         } else if !ctx.egui_wants_keyboard_input()
             && ctx.input(|i| i.key_pressed(egui::Key::Escape))
         {
@@ -3128,6 +3251,7 @@ impl App {
         self.viewer_window(ctx);
         self.signing_window(ctx);
         self.dialog_window(ctx);
+        self.consent_window(ctx);
         self.shot_tick(ctx);
     }
 
@@ -3592,6 +3716,10 @@ impl App {
 
     /// Does what a command of the menus says.
     fn run_cmd(&mut self, cmd: Cmd, ctx: &egui::Context) {
+        // while a question waits for the person, only leaving the program is listened to
+        if self.asking.is_some() && !matches!(cmd, Cmd::Std(StdAction::Quit)) {
+            return;
+        }
         let sketch = self.workspace == StartView::Sketch;
         match cmd {
             Cmd::Std(StdAction::New) => {
@@ -3641,15 +3769,7 @@ impl App {
             Cmd::OpenLibrary => self.open_library_dialog(),
             Cmd::ImportDxf => self.panels.open = Some(Panel::ImportDxf),
             Cmd::SuiteOpen => self.suite_dialog(SuiteAsk::Open),
-            Cmd::SuiteSave => match suitewin::save(&mut self.win) {
-                Saved::NeedsName => self.suite_dialog(SuiteAsk::SaveAs),
-                Saved::Written(written) => {
-                    if let Some(path) = self.win.path.as_ref().filter(|_| written) {
-                        self.recent_added.push(path.display().to_string());
-                    }
-                    self.refresh_branches();
-                }
-            },
+            Cmd::SuiteSave => self.suite_save(),
             Cmd::SuiteSaveAs => self.suite_dialog(SuiteAsk::SaveAs),
             Cmd::SuiteImport => self.suite_dialog(SuiteAsk::Import),
             Cmd::SuiteBranches => self.branches = Some(self.read_branches()),
@@ -3657,13 +3777,9 @@ impl App {
             Cmd::SuiteSign => self.open_signing(),
             Cmd::ViewFile => self.suite_dialog(SuiteAsk::ViewFile),
             Cmd::SuiteBoard => self.suite_board(),
-            Cmd::SuiteCheck => self.suite_work(BoardWork::CheckFit, Msg::SuiteMenuCheck),
-            Cmd::SuiteOpenings => {
-                self.suite_work(BoardWork::CutOpenings, Msg::SuiteMenuOpenings);
-            }
-            Cmd::SuiteHandBack => {
-                self.suite_work(BoardWork::HandBack, Msg::SuiteMenuHandBack);
-            }
+            Cmd::SuiteCheck => self.suite_work(BoardWork::CheckFit),
+            Cmd::SuiteOpenings => self.suite_work(BoardWork::CutOpenings),
+            Cmd::SuiteHandBack => self.suite_work(BoardWork::HandBack),
             Cmd::CheckSketch => self.check_sketch(),
             Cmd::Variants => self.open_variants(),
             Cmd::Export(format) => self.export_dialog(format),
@@ -3707,6 +3823,23 @@ impl App {
             }
             Cmd::Report(panel) => self.panels.open = Some(panel),
             Cmd::Language(lang) => self.win.lang = lang,
+        }
+    }
+
+    /// The entry that saves the suite project: into its file, or a name is asked for.
+    fn suite_save(&mut self) {
+        let file = suitewin::current_file(&self.win);
+        if file.is_some_and(|file| self.ask_first(Write::Save(file))) {
+            return;
+        }
+        match suitewin::save(&mut self.win) {
+            Saved::NeedsName => self.suite_dialog(SuiteAsk::SaveAs),
+            Saved::Written(written) => {
+                if let Some(path) = self.win.path.as_ref().filter(|_| written) {
+                    self.recent_added.push(path.display().to_string());
+                }
+                self.refresh_branches();
+            }
         }
     }
 
@@ -4263,6 +4396,88 @@ mod tests {
             app.attachments.limits().attachments.max_attachment_bytes,
             16 << 20
         );
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
+
+    /// A frame of the question alone, with one key pressed (or none).
+    fn consent_frame(app: &mut App, ctx: &egui::Context, key: Option<egui::Key>) {
+        let mut input = egui::RawInput::default();
+        if let Some(key) = key {
+            input.events.push(egui::Event::Key {
+                key,
+                physical_key: Some(key),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        let out = ctx.run_ui(input, |ui| {
+            let ctx = ui.ctx().clone();
+            app.consent_window(&ctx);
+        });
+        out.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn a_write_that_removes_a_signature_waits_and_enter_and_escape_write_nothing() {
+        let win = Window::new(
+            Lang::En,
+            crate::config::Settings::defaults(),
+            UiSettings::defaults(),
+        )
+        .unwrap();
+        let sketch = SketchEditor::new(
+            Lang::En,
+            crate::config::Settings::defaults(),
+            SketchSettings::defaults(),
+            SketchUiSettings::defaults(),
+        );
+        let mut app = App::new(win, sketch, StartView::Model);
+        let folder =
+            std::env::temp_dir().join(format!("phoenix-cad-consent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("box.eh3d");
+        let key = folder.join("mine.key");
+        crate::signing::new_key(&key).unwrap();
+        assert!(suitewin::save_as(&mut app.win, &file, false));
+        crate::signing::sign(&file, &key, &crate::signing::Request::own()).unwrap();
+        let before = std::fs::read(&file).unwrap();
+        let ctx = egui::Context::default();
+
+        app.save_or_ask();
+        assert!(app.asking.is_some());
+        consent_frame(&mut app, &ctx, None);
+        consent_frame(&mut app, &ctx, Some(egui::Key::Enter));
+        consent_frame(&mut app, &ctx, None);
+        assert!(app.asking.is_some(), "Enter does not answer");
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+        // no command goes behind the question
+        app.run_cmd(Cmd::Std(StdAction::New), &ctx);
+        assert_eq!(app.win.path.as_deref(), Some(file.as_path()));
+        consent_frame(&mut app, &ctx, Some(egui::Key::Escape));
+        assert!(app.asking.is_none(), "Escape says no");
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+        app.confirm_write();
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+
+        // every other entry that writes asks too, and agreeing does it
+        app.suite_work(BoardWork::HandBack);
+        assert!(app.asking.is_some());
+        app.suite_board();
+        assert!(app.asking.is_some());
+        app.asking = None;
+        app.suite_save();
+        assert!(app.asking.is_some());
+        app.confirm_write();
+        assert!(app.asking.is_none());
+        assert!(matches!(
+            app.win.status,
+            Status::Done(Msg::SignatureRemoved, _)
+        ));
+        // with no signature left there is nothing to ask
+        app.suite_save();
+        assert!(app.asking.is_none());
         std::fs::remove_dir_all(&folder).unwrap();
     }
 

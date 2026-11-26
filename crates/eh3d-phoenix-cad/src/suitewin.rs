@@ -192,21 +192,25 @@ pub fn save_as(win: &mut Window, target: &Path, overwrite: bool) -> bool {
         )));
         return false;
     }
-    let same = win.path.as_deref() == Some(target);
-    if !same && !overwrite && target.exists() {
-        match eh3dfile::has_project(target) {
-            Ok(false) => {}
-            Ok(true) => {
-                win.status = Status::Error(CadError::ExportExists(name_of(target)));
-                return false;
-            }
-            Err(e) => {
-                win.status = Status::Error(e);
-                return false;
-            }
-        }
+    if let Some(why) = refusal(win, target, overwrite) {
+        win.status = Status::Error(why);
+        return false;
     }
     win.save_to(target)
+}
+
+/// Why [`save_as`] does not write `target`: it holds the box of another project and writing over
+/// it was not asked for, or it cannot be read.
+pub(crate) fn refusal(win: &Window, target: &Path, overwrite: bool) -> Option<CadError> {
+    let same = win.path.as_deref() == Some(target);
+    if same || overwrite || !target.exists() {
+        return None;
+    }
+    match eh3dfile::has_project(target) {
+        Ok(false) => None,
+        Ok(true) => Some(CadError::ExportExists(name_of(target))),
+        Err(e) => Some(e),
+    }
 }
 
 /// What an import read and kept.

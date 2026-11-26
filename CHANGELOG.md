@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **The window asks before it removes a signature:** saving, the import that keeps an original, the title and the description and the work with the board show what would be removed from the suite project and write nothing unless it is agreed; Enter and Escape do not write, and the commands of the suite file do not ask.
+
 - **Cut the view to see inside:** the view of a 3D file can be cut along x, y or z with a slider, showing the inside of an enclosure or a connector in a colour of its own; corners that are cut away are not measured.
 
 - **Opening a signed suite project says what is known:** the status line tells whether the signature of the branch `cad` and of the project is valid, wrong, of a key that is not trusted or only seen, with the keys of `suite.trusted_keys`; a project given on the command line opens the same way as from the menu.
