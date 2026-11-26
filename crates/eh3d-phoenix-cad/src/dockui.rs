@@ -22,7 +22,7 @@ use crate::window::format_msg;
 use eh3d_dock::about::{AboutBrand, Phoenix};
 use eh3d_dock::core::PanelDef;
 use eh3d_dock::geom::Side;
-use eh3d_dock::menu::{Entry, Item, Label, Menu, MenuBar, StdAction};
+use eh3d_dock::menu::{Entry, Gen, Item, Label, Menu, MenuBar, StdAction};
 use eh3d_dock::model::{Layout, Node};
 use eh3d_dock::sectors::Sector;
 use eh3d_dock::stdmenus::{edit_menu, file_menu, help_menu, view_menu, window_menu, HelpOptions};
@@ -231,6 +231,26 @@ pub enum Cmd {
     OpenLibrary,
     /// Open a DXF drawing as a sketch.
     ImportDxf,
+    /// Open a project file of the suite (`.eh3d`).
+    SuiteOpen,
+    /// Save into the project file of the suite.
+    SuiteSave,
+    /// Save the project as a file of the suite with another name.
+    SuiteSaveAs,
+    /// Keep the original of a file of another program in the suite file.
+    SuiteImport,
+    /// Show the branches of the suite file.
+    SuiteBranches,
+    /// Take the board of the branch `pcb` into the box.
+    SuiteBoard,
+    /// Check the box against the board and the room of its parts.
+    SuiteCheck,
+    /// Cut the openings of the connectors.
+    SuiteOpenings,
+    /// Hand the box back to the other programs.
+    SuiteHandBack,
+    /// Check the sketch.
+    CheckSketch,
     /// Write the model in a format.
     Export(Format),
     /// Open the window with the fit report.
@@ -261,6 +281,32 @@ fn own(id: &str, m: Msg, cmd: Cmd) -> Entry<Cmd> {
     Entry::app(id, Label::Own(t8(m)), cmd)
 }
 
+/// The entries of the submenu of the project file of the suite, in order: their ids, their words
+/// and what they do.
+pub const SUITE_ENTRIES: [(&str, Msg, Cmd); 9] = [
+    ("file.suite.open", Msg::SuiteMenuOpen, Cmd::SuiteOpen),
+    ("file.suite.save", Msg::SuiteMenuSave, Cmd::SuiteSave),
+    ("file.suite.save_as", Msg::SuiteMenuSaveAs, Cmd::SuiteSaveAs),
+    ("file.suite.import", Msg::SuiteMenuImport, Cmd::SuiteImport),
+    (
+        "file.suite.branches",
+        Msg::SuiteMenuBranches,
+        Cmd::SuiteBranches,
+    ),
+    ("file.suite.board", Msg::SuiteMenuBoard, Cmd::SuiteBoard),
+    ("file.suite.check", Msg::SuiteMenuCheck, Cmd::SuiteCheck),
+    (
+        "file.suite.openings",
+        Msg::SuiteMenuOpenings,
+        Cmd::SuiteOpenings,
+    ),
+    (
+        "file.suite.hand_back",
+        Msg::SuiteMenuHandBack,
+        Cmd::SuiteHandBack,
+    ),
+];
+
 /// The id of the entry that exports a format.
 pub fn export_id(f: Format) -> String {
     format!(
@@ -282,8 +328,9 @@ pub fn language_id(l: Lang) -> String {
     format!("tools.language.{}", l.code())
 }
 
-/// The menu bar: File, Edit, View, Tools, Window and Help. File has the exports of the model in a
-/// submenu in the place of the standard Export entry; View has the fit of the views after the
+/// The menu bar: File, Edit, View, Tools, Window and Help. File has the project file of the suite
+/// in a submenu after the recent files and the exports of the model in a submenu in the place of
+/// the standard Export entry; View has the fit of the views after the
 /// panels and the layout; Tools has the two modes, the sketch kept in the project, the panels of
 /// the reports and the language.
 pub fn menu_bar() -> MenuBar<Cmd> {
@@ -308,6 +355,16 @@ pub fn menu_bar() -> MenuBar<Cmd> {
         Some(i) => file.items[i] = Item::Submenu(export),
         None => file = file.submenu(export),
     }
+    let mut suite = Menu::new("file.suite", Label::Own(t8(Msg::SuiteMenu)));
+    for (id, words, cmd) in SUITE_ENTRIES {
+        suite = suite.entry(own(id, words, cmd));
+    }
+    let after_recent = file
+        .items
+        .iter()
+        .position(|i| matches!(i, Item::Generated(Gen::Recent)))
+        .map_or(file.items.len(), |i| i + 1);
+    file.items.insert(after_recent, Item::Submenu(suite));
     file = file
         .sep()
         .entry(own("file.open_library", Msg::OpenLibrary, Cmd::OpenLibrary))
@@ -337,6 +394,7 @@ pub fn menu_bar() -> MenuBar<Cmd> {
         ))
         .entry(own("tools.keep_sketch", Msg::KeepSketch, Cmd::KeepSketch))
         .entry(own("tools.drawings", Msg::PlTitle, Cmd::ShowDrawings))
+        .entry(own("tools.check_sketch", Msg::CheckMenu, Cmd::CheckSketch))
         .sep()
         .submenu(reports)
         .sep()
@@ -355,6 +413,8 @@ pub struct MenuFacts {
     pub can_redo: bool,
     /// The project may be written (it is not open read-only).
     pub can_save: bool,
+    /// The project of the window is a file of the suite.
+    pub suite_file: bool,
 }
 
 /// The ids of the entries that cannot be chosen now. The ones for things the program does not have
@@ -380,6 +440,17 @@ pub fn disabled_entries(f: &MenuFacts) -> Vec<String> {
         off.push("file.open_library".to_string());
         off.push("file.fit_report".to_string());
         off.extend(Panel::ALL.iter().map(|p| report_id(*p)));
+    }
+    for (id, _, cmd) in SUITE_ENTRIES {
+        // the suite file is the model's; some entries need one, and writing needs leave to write
+        let needs_file = !matches!(cmd, Cmd::SuiteOpen | Cmd::SuiteSave | Cmd::SuiteSaveAs);
+        let writes = !matches!(cmd, Cmd::SuiteOpen | Cmd::SuiteBranches | Cmd::SuiteCheck);
+        if f.sketch_mode || (needs_file && !f.suite_file) || (writes && !f.can_save) {
+            off.push(id.to_string());
+        }
+    }
+    if !f.sketch_mode {
+        off.push("tools.check_sketch".to_string());
     }
     // the sketch is kept in the project from the sketch, and only when the project may be written
     if !f.sketch_mode || !f.can_save {

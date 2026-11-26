@@ -8,9 +8,10 @@ use crate::browse::{self, Browser};
 use crate::catalog;
 use crate::config::Settings;
 use crate::dockui::{self, Cmd, LayoutWatch, MenuFacts};
+use crate::eh3dfile::SaveSettings;
 use crate::enclosure::Face;
 use crate::export::Format;
-use crate::lang::{Lang, Msg};
+use crate::lang::{fill, Lang, Msg};
 use crate::panels::{default_drawing_name, Panel, PanelState, SketchFormat};
 use crate::plans::panel::{FormAction, PlanForm, PlanState, Tone as PlanTone};
 use crate::plans::prim::{Anchor as PlanAnchor, Shape as PlanShape};
@@ -22,6 +23,8 @@ use crate::sketch_ui::{
     ConstraintTool, DimTool, Prim, RowMark, SketchEditor, SketchUiSettings, Stroke as SketchStroke,
     Tone, Tool,
 };
+use crate::sketchcheck;
+use crate::suitewin::{self, BoardWork, Branches, Saved};
 use crate::uiconfig::UiSettings;
 use crate::window::{
     error_text, face_msg, Input, Mark, MeasureTool, NewStep, Selection, Status, ViewKind, Window,
@@ -70,8 +73,21 @@ enum Outcome {
     Pick(PathBuf),
 }
 
+/// What a dialog of the project file of the suite asks for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SuiteAsk {
+    /// The file to open.
+    Open,
+    /// The name to save the project under.
+    SaveAs,
+    /// The file of another program whose original is kept.
+    Import,
+}
+
 /// The window that opens a project or asks for the name of the file to write.
 struct Dialog {
+    /// What the dialog is for when it is one of the project file of the suite.
+    suite: Option<SuiteAsk>,
     browser: Browser,
     /// The name being typed when the window asks for a file to write.
     save: Option<String>,
@@ -121,6 +137,12 @@ struct App {
     pending_active: Vec<&'static str>,
     /// The files opened or written since the frame last looked, for the list of recent files.
     recent_added: Vec<String>,
+    /// The files of the suite among the recent ones, as the frame keeps them.
+    recent_suite: Vec<String>,
+    /// The window of the branches of the suite file, while it is open: what was read of it.
+    branches: Option<Result<Branches, String>>,
+    /// The window that tells what an import or the board did.
+    suite_note: Option<(Msg, Vec<String>)>,
     /// The settings file given with `--config`, where the arrangement of the panels is kept.
     config_path: Option<PathBuf>,
     /// Whether the 3D view and the sketch were drawn in this frame.
@@ -157,6 +179,9 @@ impl App {
             pending_dock: Vec::new(),
             pending_active: Vec::new(),
             recent_added: Vec::new(),
+            recent_suite: Vec::new(),
+            branches: None,
+            suite_note: None,
             config_path: None,
             drew_view3d: false,
             drew_sketch: false,
@@ -177,6 +202,7 @@ impl App {
 
     fn open_dialog(&mut self) {
         self.dialog = Some(Dialog {
+            suite: None,
             browser: Browser::new(self.folder(), &PROJECT_EXTENSIONS),
             save: None,
             sketch: false,
@@ -187,9 +213,238 @@ impl App {
         });
     }
 
+    /// Asks for a file of the suite, a name to save one or a file to import into one.
+    fn suite_dialog(&mut self, ask: SuiteAsk) {
+        let extensions: &[&'static str] = match ask {
+            SuiteAsk::Import => &suitewin::IMPORT_EXTENSIONS,
+            SuiteAsk::Open | SuiteAsk::SaveAs => &suitewin::SUITE_EXTENSIONS,
+        };
+        let save = (ask == SuiteAsk::SaveAs).then(|| suitewin::suggested_name(&self.win));
+        self.dialog = Some(Dialog {
+            suite: Some(ask),
+            browser: Browser::new(self.folder(), extensions),
+            save,
+            sketch: false,
+            export: None,
+            overwrite: false,
+            library: false,
+            dxf: false,
+        });
+    }
+
+    /// Does what was chosen in a dialog of the suite file; false leaves the dialog open.
+    fn suite_pick(&mut self, ask: SuiteAsk, path: &Path, overwrite: bool) -> bool {
+        let done = match ask {
+            SuiteAsk::Open => suitewin::open(&mut self.win, path) != suitewin::Opened::Refused,
+            SuiteAsk::SaveAs => suitewin::save_as(&mut self.win, path, overwrite),
+            SuiteAsk::Import => self.suite_import(path),
+        };
+        self.refresh_branches();
+        done
+    }
+
+    /// Keeps the original of a file in the suite file and tells what was read of it.
+    fn suite_import(&mut self, foreign: &Path) -> bool {
+        let lang = self.win.lang;
+        let Some(target) = suitewin::current_file(&self.win) else {
+            self.suite_note = Some((
+                Msg::SuiteImportTitle,
+                vec![Msg::SuiteNeedFile.tr(lang).into()],
+            ));
+            return false;
+        };
+        let how = SaveSettings {
+            keep_backup: self.win.settings.backups > 0,
+            ..SaveSettings::default()
+        };
+        match suitewin::import_original(&target, foreign, &self.win.settings.mesh, &how) {
+            Ok(done) => {
+                let mut lines = vec![fill(
+                    Msg::SuiteImported.tr(lang),
+                    &[
+                        &done.name,
+                        &done.solids.to_string(),
+                        &done.triangles.to_string(),
+                    ],
+                )];
+                lines.extend(suitewin::report_lines(&done.report, lang));
+                self.suite_note = Some((Msg::SuiteImportTitle, lines));
+                true
+            }
+            Err(e) => {
+                self.suite_note = Some((Msg::SuiteImportTitle, vec![e.text(lang)]));
+                false
+            }
+        }
+    }
+
+    /// Takes the board of the branch `pcb` into the box and tells what changed.
+    fn suite_board(&mut self) {
+        let lines = match suitewin::take_board(&mut self.win) {
+            Ok(taken) => taken.text.lines().map(str::to_owned).collect(),
+            Err(why) => vec![why],
+        };
+        self.suite_note = Some((Msg::SuiteMenuBoard, lines));
+        self.refresh_branches();
+    }
+
+    /// Checks the fit, cuts the openings or hands the box back, and shows the answer.
+    fn suite_work(&mut self, work: BoardWork, title: Msg) {
+        let lines = match suitewin::board_work(&mut self.win, work) {
+            Ok(done) => done.text.lines().map(str::to_owned).collect(),
+            Err(why) => vec![why],
+        };
+        self.suite_note = Some((title, lines));
+        self.refresh_branches();
+    }
+
+    /// Checks the sketch that is being drawn and shows what it found.
+    fn check_sketch(&mut self) {
+        let lang = self.win.lang;
+        let lines = match sketchcheck::check(&self.sketch.sketch, &self.win.sketch_settings) {
+            Ok(report) => report.lines(lang),
+            Err(e) => vec![error_text(&e, lang)],
+        };
+        self.suite_note = Some((Msg::CheckMenu, lines));
+    }
+
+    /// Reads the branches of the suite file again.
+    fn read_branches(&self) -> Result<Branches, String> {
+        let lang = self.win.lang;
+        let file = suitewin::current_file(&self.win)
+            .ok_or_else(|| Msg::SuiteNeedFile.tr(lang).to_owned())?;
+        suitewin::branches(&file).map_err(|e| error_text(&e, lang))
+    }
+
+    /// Reads the branches again when their window is open.
+    fn refresh_branches(&mut self) {
+        if self.branches.is_some() {
+            self.branches = Some(self.read_branches());
+        }
+    }
+
+    /// The window with the branches of the suite file, their state and the recent suite files.
+    fn branches_window(&mut self, ctx: &egui::Context) {
+        let Some(read) = &self.branches else {
+            return;
+        };
+        let lang = self.win.lang;
+        let editable = !self.win.read_only;
+        let mut open = true;
+        let mut again = false;
+        let mut board = false;
+        let mut pick: Option<PathBuf> = None;
+        egui::Window::new(Msg::SuiteBranchesTitle.tr(lang))
+            .open(&mut open)
+            .default_size([640.0, 360.0])
+            .show(ctx, |ui| {
+                match read {
+                    Ok(found) => {
+                        ui.label(found.file.display().to_string());
+                        egui::Grid::new("suite-branches")
+                            .striped(true)
+                            .show(ui, |ui| {
+                                for head in [
+                                    Msg::SuiteColBranch,
+                                    Msg::SuiteColApp,
+                                    Msg::SuiteColFormat,
+                                    Msg::SuiteColFiles,
+                                    Msg::SuiteColState,
+                                ] {
+                                    ui.label(egui::RichText::new(head.tr(lang)).strong());
+                                }
+                                ui.end_row();
+                                for line in &found.summary.branches {
+                                    ui.label(line.id.as_str());
+                                    ui.label(line.app.as_str());
+                                    ui.label(line.format.as_str());
+                                    ui.label(line.files.to_string());
+                                    let colour = if line.stale.is_empty() { TEXT } else { ACCENT };
+                                    let state = suitewin::state_text(line, lang);
+                                    ui.colored_label(colour, state);
+                                    ui.end_row();
+                                }
+                            });
+                        if !found.summary.findings.is_empty() {
+                            let count = found.summary.findings.len().to_string();
+                            ui.colored_label(DANGER, fill(Msg::SuiteFindings.tr(lang), &[&count]));
+                            for f in &found.summary.findings {
+                                ui.label(format!("{} {}", f.code.code(), f.detail));
+                            }
+                        }
+                        if let Some(report) = &found.original {
+                            for text in suitewin::report_lines(report, lang) {
+                                ui.label(text);
+                            }
+                        }
+                    }
+                    Err(why) => {
+                        ui.colored_label(DANGER, why.as_str());
+                    }
+                }
+                ui.horizontal(|ui| {
+                    if ui.button(Msg::SuiteRefresh.tr(lang)).clicked() {
+                        again = true;
+                    }
+                    let take = egui::Button::new(Msg::SuiteMenuBoard.tr(lang));
+                    if ui.add_enabled(editable && read.is_ok(), take).clicked() {
+                        board = true;
+                    }
+                });
+                if !self.recent_suite.is_empty() {
+                    ui.separator();
+                    ui.label(Msg::SuiteRecent.tr(lang));
+                    for p in &self.recent_suite {
+                        if ui.selectable_label(false, p.as_str()).clicked() {
+                            pick = Some(PathBuf::from(p));
+                        }
+                    }
+                }
+            });
+        if !open {
+            self.branches = None;
+            return;
+        }
+        if let Some(path) = pick {
+            if suitewin::open_any(&mut self.win, &path) {
+                self.recent_added.push(path.display().to_string());
+            }
+            again = true;
+        }
+        if board {
+            self.suite_board();
+        } else if again {
+            self.refresh_branches();
+        }
+    }
+
+    /// The window that tells what an import or the board did.
+    fn suite_note_window(&mut self, ctx: &egui::Context) {
+        let Some((title, lines)) = &self.suite_note else {
+            return;
+        };
+        let lang = self.win.lang;
+        let mut open = true;
+        egui::Window::new(title.tr(lang))
+            .id(egui::Id::unique("suite-note"))
+            .open(&mut open)
+            .default_size([520.0, 240.0])
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for line in lines {
+                        ui.label(line.as_str());
+                    }
+                });
+            });
+        if !open {
+            self.suite_note = None;
+        }
+    }
+
     /// Asks which library of parts to open.
     fn open_library_dialog(&mut self) {
         self.dialog = Some(Dialog {
+            suite: None,
             browser: Browser::new(self.folder(), &LIBRARY_EXTENSIONS),
             save: None,
             sketch: false,
@@ -203,6 +458,7 @@ impl App {
     /// Asks which DXF drawing to import; the file chosen goes to the import panel.
     fn open_dxf_dialog(&mut self) {
         self.dialog = Some(Dialog {
+            suite: None,
             browser: Browser::new(self.folder(), &DXF_EXTENSIONS),
             save: None,
             sketch: false,
@@ -218,6 +474,7 @@ impl App {
     fn export_dialog(&mut self, format: Format) {
         self.win.export_format = format;
         self.dialog = Some(Dialog {
+            suite: None,
             browser: Browser::new(self.folder(), &[format.extension()]),
             save: Some(self.win.export_name(format)),
             sketch: false,
@@ -236,6 +493,7 @@ impl App {
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
             .unwrap_or_else(|| format!("box.{}", PROJECT_EXTENSIONS[0]));
         self.dialog = Some(Dialog {
+            suite: None,
             browser: Browser::new(self.folder(), &PROJECT_EXTENSIONS),
             save: Some(name),
             sketch: false,
@@ -1688,7 +1946,9 @@ impl App {
             Some(Outcome::Pick(path)) => {
                 // the box to write over a file that exists is ticked again only by the settings
                 // or by the person: an order to write over is for one file
-                let done = if let Some(format) = dialog.export {
+                let done = if let Some(ask) = dialog.suite {
+                    self.suite_pick(ask, &path, dialog.overwrite)
+                } else if let Some(format) = dialog.export {
                     self.win.export_to(format, &path, dialog.overwrite)
                 } else if dialog.dxf {
                     self.panels.import_file = path.display().to_string();
@@ -1699,7 +1959,7 @@ impl App {
                 } else {
                     match (dialog.sketch, dialog.save.is_some()) {
                         (false, true) => self.win.save_to(&path),
-                        (false, false) => self.win.open(&path),
+                        (false, false) => suitewin::open_any(&mut self.win, &path),
                         (true, true) => self.sketch.save_to(&path),
                         (true, false) => {
                             let opened = self.sketch.open_file(&path);
@@ -1708,7 +1968,8 @@ impl App {
                         }
                     }
                 };
-                if done && dialog.export.is_none() && !dialog.dxf {
+                let imported = dialog.suite == Some(SuiteAsk::Import);
+                if done && dialog.export.is_none() && !dialog.dxf && !imported {
                     self.recent_added.push(path.display().to_string());
                 }
                 if !done {
@@ -1758,6 +2019,9 @@ fn show_dialog(ctx: &egui::Context, d: &mut Dialog, lang: Lang) -> Option<Outcom
     let mut outcome = None;
     let mut open = true;
     let title = match (d.sketch, d.save.is_some()) {
+        _ if d.suite == Some(SuiteAsk::Open) => Msg::SuiteOpenTitle,
+        _ if d.suite == Some(SuiteAsk::SaveAs) => Msg::SuiteSaveTitle,
+        _ if d.suite == Some(SuiteAsk::Import) => Msg::SuiteImportTitle,
         _ if d.export.is_some() => Msg::ExportTitle,
         _ if d.dxf => Msg::ImportDxfTitle,
         _ if d.library => Msg::OpenLibraryTitle,
@@ -1768,7 +2032,11 @@ fn show_dialog(ctx: &egui::Context, d: &mut Dialog, lang: Lang) -> Option<Outcom
     };
     let export_extension = d.export.map(Format::extension);
     let export_extensions: Vec<&str> = export_extension.into_iter().collect();
-    let extensions: &[&str] = if d.export.is_some() {
+    let extensions: &[&str] = if d.suite == Some(SuiteAsk::Import) {
+        &suitewin::IMPORT_EXTENSIONS
+    } else if d.suite.is_some() {
+        &suitewin::SUITE_EXTENSIONS
+    } else if d.export.is_some() {
         &export_extensions
     } else if d.dxf {
         &DXF_EXTENSIONS
@@ -1833,7 +2101,7 @@ fn show_dialog(ctx: &egui::Context, d: &mut Dialog, lang: Lang) -> Option<Outcom
                     }
                 });
             ui.separator();
-            if d.export.is_some() {
+            if d.export.is_some() || d.suite == Some(SuiteAsk::SaveAs) {
                 ui.checkbox(&mut d.overwrite, Msg::ExportOverwrite.tr(lang));
             }
             ui.horizontal(|ui| {
@@ -1983,6 +2251,7 @@ impl App {
 
     fn open_sketch_dialog(&mut self) {
         self.dialog = Some(Dialog {
+            suite: None,
             browser: Browser::new(self.sketch_folder(), &SKETCH_EXTENSIONS),
             save: None,
             sketch: true,
@@ -2002,6 +2271,7 @@ impl App {
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
             .unwrap_or_else(|| format!("sketch.{}", SKETCH_EXTENSIONS[0]));
         self.dialog = Some(Dialog {
+            suite: None,
             browser: Browser::new(self.sketch_folder(), &SKETCH_EXTENSIONS),
             save: Some(name),
             sketch: true,
@@ -2628,14 +2898,18 @@ impl App {
                 .collect()
         });
         if let Some(p) = dropped.first() {
-            if crate::shot::is_sketch_file(p) {
+            let opened = if crate::shot::is_sketch_file(p) {
                 self.fit_next = self.sketch.open_file(p);
                 self.workspace = StartView::Sketch;
                 self.pending_active.push(dockui::id::SKETCH);
+                self.fit_next
             } else {
-                self.win.open(p);
+                suitewin::open_any(&mut self.win, p)
+            };
+            if opened {
+                self.recent_added.push(p.display().to_string());
             }
-            self.recent_added.push(p.display().to_string());
+            self.refresh_branches();
         }
         if self.workspace == StartView::Sketch {
             self.sketch.lang = self.win.lang;
@@ -2660,6 +2934,8 @@ impl App {
             dockui::mode_after_frame(self.workspace, self.drew_view3d, self.drew_sketch);
         self.report_window(ctx);
         self.panel_window(ctx);
+        self.branches_window(ctx);
+        self.suite_note_window(ctx);
         self.dialog_window(ctx);
         self.shot_tick(ctx);
     }
@@ -2680,6 +2956,7 @@ impl App {
                 self.win.can_redo()
             },
             can_save: !self.win.read_only,
+            suite_file: suitewin::current_file(&self.win).is_some(),
         }
     }
 
@@ -3157,6 +3434,28 @@ impl App {
             Cmd::Std(_) => {}
             Cmd::OpenLibrary => self.open_library_dialog(),
             Cmd::ImportDxf => self.panels.open = Some(Panel::ImportDxf),
+            Cmd::SuiteOpen => self.suite_dialog(SuiteAsk::Open),
+            Cmd::SuiteSave => match suitewin::save(&mut self.win) {
+                Saved::NeedsName => self.suite_dialog(SuiteAsk::SaveAs),
+                Saved::Written(written) => {
+                    if let Some(path) = self.win.path.as_ref().filter(|_| written) {
+                        self.recent_added.push(path.display().to_string());
+                    }
+                    self.refresh_branches();
+                }
+            },
+            Cmd::SuiteSaveAs => self.suite_dialog(SuiteAsk::SaveAs),
+            Cmd::SuiteImport => self.suite_dialog(SuiteAsk::Import),
+            Cmd::SuiteBranches => self.branches = Some(self.read_branches()),
+            Cmd::SuiteBoard => self.suite_board(),
+            Cmd::SuiteCheck => self.suite_work(BoardWork::CheckFit, Msg::SuiteMenuCheck),
+            Cmd::SuiteOpenings => {
+                self.suite_work(BoardWork::CutOpenings, Msg::SuiteMenuOpenings);
+            }
+            Cmd::SuiteHandBack => {
+                self.suite_work(BoardWork::HandBack, Msg::SuiteMenuHandBack);
+            }
+            Cmd::CheckSketch => self.check_sketch(),
             Cmd::Export(format) => self.export_dialog(format),
             Cmd::FitReport => self.report_open = true,
             Cmd::EditModel => {
@@ -3312,14 +3611,22 @@ impl Shell {
             Some(MenuChosen::App(cmd)) => app.run_cmd(cmd, ctx),
             Some(MenuChosen::Recent(path)) => {
                 let path = PathBuf::from(path);
-                if crate::shot::is_sketch_file(&path) {
+                let opened = if crate::shot::is_sketch_file(&path) {
                     app.fit_next = app.sketch.open_file(&path);
                     app.workspace = StartView::Sketch;
                     app.pending_active.push(dockui::id::SKETCH);
+                    app.fit_next
                 } else {
-                    app.win.open(&path);
+                    suitewin::open_any(&mut app.win, &path)
+                };
+                if opened {
+                    app.recent_added.push(path.display().to_string());
+                } else if !path.exists() {
+                    // a file that is gone is taken out of the list
+                    let gone = path.display().to_string();
+                    self.dock.core_mut().recent_mut().remove(&gone);
                 }
-                app.recent_added.push(path.display().to_string());
+                app.refresh_branches();
             }
             Some(MenuChosen::Dock(_)) | None => {}
         }
@@ -3332,6 +3639,7 @@ impl Shell {
         for path in std::mem::take(&mut app.recent_added) {
             self.dock.core_mut().recent_mut().push(&path);
         }
+        app.recent_suite = suitewin::recent_projects(self.dock.core().recent().items());
     }
 }
 

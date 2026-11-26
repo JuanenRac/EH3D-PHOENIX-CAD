@@ -32,9 +32,11 @@ The sheet of views can also be written as a PDF file (`export --format pdf`) and
 
 A project can live in the branch `cad` of a `.eh3d` file (`docs/BOARD_INTERCHANGE.md`, record `adr/0021-the-suite-file-and-the-board-of-the-other-branch.md`). A box is made round the board that `pcb/outline2d.json` describes, follows it, checks the room of its parts and hands back the STL, the flat faces and the posts; selectors, parameter limits and flat faces work on any project. The board program writes no such file yet, so only boards made by tests have been used. The CI adds up the tests it runs, the examples of the documentation included, and fails when the README files state another figure.
 
+The File menu of the window has the submenu of the project file of the suite (open, save, save as with every branch, import keeping the original, the list of branches with their state and the board of `pcb`), decided in `suitewin` and tested without a screen, and `sketch-check` reports what is wrong or almost right in a sketch file (`docs/BOARD_INTERCHANGE.md`, `docs/SKETCH.md`). Neither has been seen on a screen.
+
 ## Capabilities
 
-The official state of each capability is in REQUIREMENTS.md: 29 requirements: 28 `prototype` (FCAD-001 and FCAD-003 to FCAD-029) and 1 `planned` (FCAD-002). This page never states a state that REQUIREMENTS.md does not.
+The official state of each capability is in REQUIREMENTS.md: 31 requirements: 30 `prototype` (FCAD-001 and FCAD-003 to FCAD-031) and 1 `planned` (FCAD-002). This page never states a state that REQUIREMENTS.md does not.
 
 ## Open questions
 

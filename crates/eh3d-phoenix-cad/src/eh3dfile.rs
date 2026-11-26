@@ -13,9 +13,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use eh3d_container::{sha256_hex, to_canonical_file_bytes, AtomicOptions, ContainerError, PkgCode};
+use eh3d_project::appbranch::{self, Conversion};
 use eh3d_project::meta::{
-    ConversionReport, Converter, Counted, DocIndex, DocKind, Document as DocEntry, LocalText,
-    Metadata, SourceFile, DOC_INDEX_FILE, META_FILE, REPORT_FILE,
+    ConversionReport, Counted, DocIndex, DocKind, Document as DocEntry, LocalText, Metadata,
+    DOC_INDEX_FILE, META_FILE, REPORT_FILE,
 };
 use eh3d_project::{
     BranchUpdate, Checks, Dependency, Finding, NewProject, OpenOptions, Project, SaveOptions, Seal,
@@ -277,6 +278,39 @@ pub fn ensure_project(path: &Path, seed: &[u8], settings: &SaveSettings) -> Resu
     Ok(())
 }
 
+/// Whether the branch `cad` of a project file of the suite holds a project of this program. A
+/// project of another program only (just a board, say) answers no.
+pub fn has_project(path: &Path) -> Result<bool, CadError> {
+    let project = open_project(path)?;
+    Ok(project
+        .branch(BRANCH)
+        .is_some_and(|b| b.files.contains_key(PROJECT_ENTRY)))
+}
+
+/// Copies a project file of the suite under another name, with every branch as it is, so that
+/// saving under a new name loses nothing. The source is checked first and a file that exists is
+/// never written over.
+pub fn copy_project(from: &Path, to: &Path) -> Result<(), CadError> {
+    if to.exists() {
+        return Err(CadError::ExportExists(to.display().to_string()));
+    }
+    open_project(from)?;
+    let bytes = store::load_limited(from, MAX_CARRIED)?;
+    store::save_atomic(to, &bytes, 0)
+}
+
+/// The report of the original that the branch `cad` keeps, when there is one.
+pub fn origin_report(path: &Path) -> Result<Option<ConversionReport>, CadError> {
+    let mut project = open_project(path)?;
+    usable(&project, BRANCH)?;
+    read_file(&mut project, BRANCH, REPORT_FILE, 1 << 24)?
+        .map(|bytes| {
+            serde_json::from_slice(&bytes)
+                .map_err(|e| CadError::SuiteFile(format!("{REPORT_FILE}: {e}")))
+        })
+        .transpose()
+}
+
 /// Saves the project file of this program in the branch `cad`, making the file of the suite when
 /// it is not there. The other branches keep their bytes, and so do the other files of `cad`.
 pub fn save_cad_project(
@@ -306,6 +340,8 @@ pub struct BranchLine {
     pub sealed: bool,
     /// Whether it is encrypted.
     pub encrypted: bool,
+    /// Whether its record carries a signature (which this program does not check).
+    pub signed: bool,
     /// The branches it was derived from that have changed since.
     pub stale: Vec<String>,
 }
@@ -350,6 +386,7 @@ pub fn summary(path: &Path) -> Result<Summary, CadError> {
                 .sum(),
             sealed: b.is_sealed(),
             encrypted: b.is_encrypted(),
+            signed: b.record.as_ref().is_some_and(|r| r.signature.is_some()),
             stale: stale
                 .iter()
                 .filter(|s| s.branch == b.id)
@@ -471,10 +508,9 @@ pub struct ImportCount {
 
 fn counted(list: &[(String, u64)], reason: Option<&str>) -> Vec<Counted> {
     list.iter()
-        .map(|(item, count)| Counted {
-            item: item.clone(),
-            count: *count,
-            reason: reason.map(str::to_owned),
+        .map(|(item, count)| {
+            let count = usize::try_from(*count).unwrap_or(usize::MAX);
+            appbranch::counted(item, count, reason)
         })
         .collect()
 }
@@ -502,24 +538,18 @@ pub fn keep_origin(
         }
     }
     let original = format!("origin/{file_name}");
-    let report = ConversionReport {
-        schema: 1,
-        source: SourceFile {
-            format: format.to_owned(),
-            name: file_name.to_owned(),
-            sha256: sha256_hex(bytes),
-            size: bytes.len() as u64,
+    let report = appbranch::conversion_report(
+        "eh3d-phoenix-cad",
+        env!("CARGO_PKG_VERSION"),
+        format,
+        file_name,
+        bytes,
+        Conversion {
+            read: counted(&count.read, None),
+            not_read: counted(&count.not_read, Some("not understood by this program")),
+            export_losses: Vec::new(),
         },
-        converter: Converter {
-            name: "eh3d-phoenix-cad".to_owned(),
-            version: env!("CARGO_PKG_VERSION").to_owned(),
-        },
-        original: Some(original.clone()),
-        read: counted(&count.read, None),
-        not_read: counted(&count.not_read, Some("not understood by this program")),
-        export_losses: Vec::new(),
-        extra: BTreeMap::new(),
-    };
+    );
     changes.insert(original, Some(bytes.to_vec()));
     changes.insert(REPORT_FILE.to_owned(), Some(record_bytes(&report)?));
     write_branch(path, BRANCH, changes, None, settings)?;

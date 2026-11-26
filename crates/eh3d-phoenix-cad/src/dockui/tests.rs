@@ -178,6 +178,7 @@ fn the_entries_that_cannot_be_chosen_follow_the_mode_and_the_history() {
         can_undo: true,
         can_redo: false,
         can_save: true,
+        suite_file: false,
     };
     let off = disabled_entries(&model);
     assert!(off.contains(&"edit.cut".to_string()) && off.contains(&"edit.preferences".to_string()));
@@ -198,6 +199,7 @@ fn the_entries_that_cannot_be_chosen_follow_the_mode_and_the_history() {
         can_undo: false,
         can_redo: false,
         can_save: true,
+        suite_file: true,
     });
     assert!(
         sketch.contains(&export_id(Format::Step))
@@ -225,6 +227,72 @@ fn the_entries_that_cannot_be_chosen_follow_the_mode_and_the_history() {
             assert!(bar_ids.contains(id), "{id} is not an entry");
         }
     }
+}
+
+#[test]
+fn the_submenu_of_the_suite_file_follows_the_recent_files_and_has_every_entry_once() {
+    let bar = menu_bar();
+    let file = &bar.menus[0];
+    let at = file
+        .items
+        .iter()
+        .position(|i| matches!(i, Item::Submenu(m) if m.id == "file.suite"))
+        .unwrap();
+    assert!(matches!(file.items[at - 1], Item::Generated(Gen::Recent)));
+    let Item::Submenu(suite) = &file.items[at] else {
+        panic!("not a submenu");
+    };
+    assert_eq!(suite.items.len(), SUITE_ENTRIES.len());
+    let ids = entry_ids(&bar);
+    for (id, words, _) in SUITE_ENTRIES {
+        assert_eq!(ids.iter().filter(|i| *i == id).count(), 1, "{id}");
+        for l in Lang::ALL {
+            assert!(!words.tr(l).trim().is_empty(), "{id} {l:?}");
+        }
+    }
+}
+
+#[test]
+fn the_entries_of_the_suite_file_need_a_file_leave_to_write_and_the_model() {
+    let on = |facts: &MenuFacts| -> Vec<&'static str> {
+        let off = disabled_entries(facts);
+        SUITE_ENTRIES
+            .into_iter()
+            .map(|(id, _, _)| id)
+            .filter(|id| !off.contains(&(*id).to_string()))
+            .map(|id| id.trim_start_matches("file.suite."))
+            .collect()
+    };
+    let facts = |sketch_mode, can_save, suite_file| MenuFacts {
+        sketch_mode,
+        can_save,
+        suite_file,
+        ..MenuFacts::default()
+    };
+    assert_eq!(on(&facts(false, true, false)), ["open", "save", "save_as"]);
+    assert_eq!(
+        on(&facts(false, true, true)),
+        [
+            "open",
+            "save",
+            "save_as",
+            "import",
+            "branches",
+            "board",
+            "check",
+            "openings",
+            "hand_back"
+        ]
+    );
+    assert_eq!(
+        on(&facts(false, false, true)),
+        ["open", "branches", "check"]
+    );
+    assert!(on(&facts(true, true, true)).is_empty());
+    // the sketch is checked from the sketch
+    let check = "tools.check_sketch".to_string();
+    assert!(disabled_entries(&facts(false, true, true)).contains(&check));
+    assert!(!disabled_entries(&facts(true, false, false)).contains(&check));
 }
 
 #[test]
