@@ -568,6 +568,9 @@ impl Constraint {
     }
 }
 
+/// The two ends of a line in nanometres, as numbers for the measurements.
+type Ends = ((f64, f64), (f64, f64));
+
 /// A constraint with its identifier.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConstraintEntry {
@@ -1520,7 +1523,7 @@ impl Sketch {
             Ok((x.get() as f64, y.get() as f64))
         };
         let distance = |a: (f64, f64), b: (f64, f64)| (b.0 - a.0).hypot(b.1 - a.1);
-        let ends = |line: ElementId| -> Result<((f64, f64), (f64, f64)), CadError> {
+        let ends = |line: ElementId| -> Result<Ends, CadError> {
             let (a, b) = self.line_points(line)?;
             Ok((at(a)?, at(b)?))
         };
