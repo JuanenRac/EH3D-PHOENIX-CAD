@@ -1,0 +1,65 @@
+name: Window pictures
+
+# Takes the pictures of the window with the picture mode of the program (`eh3d-phoenix-cad ... --shot`) on a virtual screen and keeps them as an artifact of the run, so the
+# pictures of the README can be renewed without building the window on a personal machine. Run it by hand: Actions > Window pictures > Run workflow; then put the pictures of the
+# artifact in images/screens/ and in a pull request. Each language has the box of the examples (the model view) and its sketch.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: window-pictures
+  cancel-in-progress: false
+
+env:
+  # The tag of the sibling repository the window is built against.
+  COMMON_REF: "v0.3.3"
+
+jobs:
+  pictures:
+    name: Take the pictures of the window
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          path: EH3D-PHOENIX-CAD
+      - name: The sibling repository the window is built against
+        shell: bash
+        run: git -c advice.detachedHead=false clone --quiet --depth 1 --branch "${COMMON_REF}" "https://github.com/${GITHUB_REPOSITORY_OWNER}/EH3D-COMMON.git" EH3D-COMMON
+      - name: Libraries of the window and a virtual screen
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgl1-mesa-dri xvfb fonts-noto-cjk
+      - name: Rust toolchain
+        working-directory: EH3D-PHOENIX-CAD
+        run: rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal
+      - name: Build the window
+        working-directory: EH3D-PHOENIX-CAD
+        run: cargo build --release -p eh3d-phoenix-cad --features gui
+      - name: Take the pictures
+        # the examples are opened from their own folder, so that no path of the machine appears in a picture; the run
+        # has a home folder of its own
+        working-directory: EH3D-PHOENIX-CAD/crates/eh3d-phoenix-cad/examples
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe="$GITHUB_WORKSPACE/EH3D-PHOENIX-CAD/target/release/eh3d-phoenix-cad"
+          out="$GITHUB_WORKSPACE/window-pictures"
+          export HOME="$RUNNER_TEMP/home" XDG_CONFIG_HOME="$RUNNER_TEMP/home/config"
+          mkdir -p "$XDG_CONFIG_HOME"
+          for lang in en es de fr it ja zh pt; do
+            mkdir -p "$out/$lang"
+            shot() { xvfb-run -a -s "-screen 0 1920x1080x24" timeout 90 "$exe" gui "$1" --view "$2" --lang "$lang" --size 1800x960 --theme forge --wait 12 --shot "$out/$lang/$3"; }
+            shot box.phoenixproj model phoenix-cad-01-box.png
+            shot box.phoenixsketch sketch phoenix-cad-02-sketch.png
+          done
+          ls -lR "$out"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: window-pictures
+          path: window-pictures/**/*.png
+          if-no-files-found: error
+          retention-days: 14
