@@ -290,7 +290,7 @@ fn an_attachment_of_the_project_is_shown_without_taking_it_out() {
     let item = panel.selected().cloned().expect("the new attachment");
     assert!(can_show(&item.name));
     let source = panel.source(&item.id).unwrap().unwrap();
-    let origin = Origin::Attachment(source);
+    let origin = Origin::Attachment(Box::new(source));
     assert_eq!(origin.name(), "connector.stl");
     let job = Job::start(origin, options(), Lang::En);
     assert_eq!(solid(finished(&job).unwrap()).size(), [10.0, 10.0, 10.0]);

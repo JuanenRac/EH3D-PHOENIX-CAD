@@ -648,7 +648,7 @@ pub enum Origin {
     /// A file on the disk.
     File(PathBuf),
     /// An attachment inside the project of the suite.
-    Attachment(AttachmentSource),
+    Attachment(Box<AttachmentSource>),
     /// Bytes already in memory under a name (the original that an import kept).
     Bytes(String, Vec<u8>),
 }

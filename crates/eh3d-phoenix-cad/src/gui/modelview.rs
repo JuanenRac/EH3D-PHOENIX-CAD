@@ -123,7 +123,7 @@ impl App {
             return;
         }
         match self.attachments.model.source(&item.id) {
-            Some(Ok(source)) => self.open_viewer(Origin::Attachment(source)),
+            Some(Ok(source)) => self.open_viewer(Origin::Attachment(Box::new(source))),
             Some(Err(why)) => self.suite_note = Some((Msg::MvOriginal, vec![why])),
             None => {}
         }
