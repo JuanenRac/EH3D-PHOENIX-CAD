@@ -22,6 +22,7 @@ use crate::placement::PlacementSettings;
 use crate::printer::PrinterProfile;
 use crate::titleblock::TitleBlockSettings;
 use crate::units::{parse_length, Unit};
+use crate::variants::VariantLimits;
 use crate::{CadError, Length};
 
 /// The default settings, as shipped.
@@ -1034,6 +1035,8 @@ pub struct Settings {
     pub mechanical: MechanicalLimits,
     /// The limits of the operations that repeat things or grow the box.
     pub design: DesignLimits,
+    /// The limits of the variants of a project (`[variants]`).
+    pub variants: VariantLimits,
     /// The values of the estimate of the heat that cooling fins give to the air.
     pub thermal: ThermalSettings,
     /// The settings of the solid made for the STL file.
@@ -1356,6 +1359,10 @@ impl Settings {
             c.number("mechanical.max_board_holes")?,
         )?;
         let design = DesignLimits::from_config(c)?;
+        let variants = VariantLimits::new(
+            c.number("variants.max_count")?,
+            c.number("variants.max_values")?,
+        )?;
         let thermal = ThermalSettings::from_config(c)?;
         let mesh = MeshSettings::from_config(c)?;
         let drawing = DrawingSettings::from_config(c)?;
@@ -1382,6 +1389,7 @@ impl Settings {
             expr,
             mechanical,
             design,
+            variants,
             thermal,
             mesh,
             drawing,

@@ -25,7 +25,9 @@ use crate::scad::mm_text;
 use crate::sketch::file;
 use crate::sketch::settings::{SketchSettings, DEFAULT_SKETCH_CONFIG};
 use crate::sketch::solver::Outcome;
-use crate::sketch::{Constraint, ConstraintId, Dim, Element, ElementId, Kind, Sketch, SketchPlane};
+use crate::sketch::{
+    Constraint, ConstraintEntry, ConstraintId, Dim, Element, ElementId, Kind, Sketch, SketchPlane,
+};
 use crate::units::{div_round_half_away, Angle};
 use crate::vars::Variables;
 use crate::window::Status;
@@ -618,6 +620,8 @@ pub struct ConstraintRow {
     pub edit: Option<String>,
     /// Whether the solver takes it into account.
     pub enabled: bool,
+    /// Whether it is a reference dimension: its value is what the drawing measures, in brackets.
+    pub reference: bool,
     /// Whether it is selected.
     pub selected: bool,
     /// How it stands.
@@ -2547,7 +2551,14 @@ impl SketchEditor {
             .constraints()
             .iter()
             .map(|entry| {
-                let texts = SketchEditor::dimension_texts(&entry.constraint);
+                let texts =
+                    SketchEditor::dimension_texts(&self.shown_constraint(entry)).map(|texts| {
+                        if entry.reference {
+                            (format!("({})", texts.0), texts.1)
+                        } else {
+                            texts
+                        }
+                    });
                 let ids: Vec<String> = entry
                     .constraint
                     .elements()
@@ -2568,6 +2579,7 @@ impl SketchEditor {
                     value: texts.as_ref().map(|t| t.0.clone()),
                     edit: texts.map(|t| t.1),
                     enabled: entry.enabled,
+                    reference: entry.reference,
                     selected: self.picked.constraints.contains(&entry.id),
                     mark,
                 }
@@ -2647,6 +2659,31 @@ impl SketchEditor {
     // ---------------------------------------------------------------------------------------
     // Editing what is there
     // ---------------------------------------------------------------------------------------
+
+    /// The constraint as it is shown: a reference dimension with what the drawing measures now.
+    fn shown_constraint(&self, entry: &ConstraintEntry) -> Constraint {
+        if entry.reference {
+            if let Ok(measured) = self.sketch.measured(entry.id) {
+                return measured;
+            }
+        }
+        entry.constraint.clone()
+    }
+
+    /// Makes a dimension a reference (it reads the drawing and holds nothing) or makes it drive
+    /// the drawing again, and solves again. A refusal leaves the sketch as it was.
+    pub fn set_reference(&mut self, id: ConstraintId, reference: bool) {
+        let name = self.dimension_name(id);
+        let done = self.edit(&name, |s, _| s.set_reference(id, reference));
+        if done.is_some() {
+            let message = if reference {
+                Msg::ReferenceOn
+            } else {
+                Msg::ReferenceOff
+            };
+            self.status = Status::Done(message, vec![name]);
+        }
+    }
 
     /// Switches a constraint on or off and solves again.
     pub fn set_enabled(&mut self, id: ConstraintId, enabled: bool) {
@@ -3158,7 +3195,8 @@ impl SketchEditor {
             if !entry.enabled {
                 continue;
             }
-            let c = &entry.constraint;
+            let shown = self.shown_constraint(entry);
+            let c = &shown;
             let stroke = if self.report.conflicting.contains(&entry.id) {
                 Stroke::Conflict
             } else if self.report.redundant.contains(&entry.id) {
@@ -3218,6 +3256,12 @@ impl SketchEditor {
             let text = match name {
                 Some(expr) => format!("{prefix}{value}{suffix} ({expr})"),
                 None => format!("{prefix}{value}{suffix}"),
+            };
+            // a reference is written in brackets, as on a drawing
+            let text = if entry.reference {
+                format!("({text})")
+            } else {
+                text
             };
             match c {
                 Constraint::Distance { a, b, .. }
@@ -4193,6 +4237,53 @@ mod tests {
         assert_eq!(e.report.tone(), Tone::Green);
         assert_eq!(e.state_text(), "Fully constrained");
         assert_eq!(e.report.dof, Some(0));
+    }
+
+    #[test]
+    fn a_dimension_made_a_reference_reads_the_drawing_in_brackets() {
+        let mut e = editor();
+        e.set_tool(Tool::Line);
+        click(&mut e, 0.0, 0.0);
+        click(&mut e, 30.0, 40.0);
+        e.set_tool(Tool::Select);
+        pick(&mut e, &[3]);
+        e.add_dimension(DimTool::Length);
+        pick(&mut e, &[3]);
+        e.add_dimension(DimTool::Length);
+        assert_eq!(e.report.health, Health::Over);
+        let second = e.constraint_rows()[1].id;
+        // as a reference it no longer repeats the first
+        e.set_reference(second, true);
+        assert_eq!(e.report.health, Health::Under);
+        let row = e.constraint_rows()[1].clone();
+        assert!(row.reference && row.enabled);
+        assert_eq!(row.value.as_deref(), Some("(50)"));
+        assert!(matches!(e.status, Status::Done(Msg::ReferenceOn, _)));
+        let labelled = e
+            .scene()
+            .into_iter()
+            .any(|p| matches!(p, Prim::Text { ref text, .. } if text == "(50)"));
+        assert!(labelled, "the label is in brackets");
+        // it follows the one that holds the line
+        let first = e.constraint_rows()[0].id;
+        e.edit_dimension(first, "60");
+        // the reading, within what the grid of nanometres leaves
+        let read = |e: &SketchEditor| -> f64 {
+            let value = e.constraint_rows()[1].value.clone().unwrap();
+            let inside = value.strip_prefix('(').and_then(|v| v.strip_suffix(')'));
+            inside.unwrap().parse().unwrap()
+        };
+        assert!((read(&e) - 60.0).abs() < 1e-4, "{}", read(&e));
+        // it is read, not set
+        e.edit_dimension(second, "10");
+        assert!(matches!(e.status, Status::Error(_)));
+        assert!((read(&e) - 60.0).abs() < 1e-4, "{}", read(&e));
+        // driving again it holds the value of now and repeats the first
+        e.set_reference(second, false);
+        assert_eq!(e.report.health, Health::Over);
+        assert!(!e.constraint_rows()[1].reference);
+        e.undo();
+        assert!(e.constraint_rows()[1].reference);
     }
 
     #[test]

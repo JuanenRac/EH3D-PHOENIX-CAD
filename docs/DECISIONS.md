@@ -68,6 +68,12 @@ State: **accepted** (record 0021).
 
 The project is kept byte for byte in the branch `cad` of a `.eh3d` file; only `cad`, `docs/cad` and the metadata of `common` are written; the board comes from `pcb` as the artifact `outline2d`, with a reference that carries its content hash; posts follow holes by identity and nothing is guessed.
 
+## Variants, reference dimensions and checked signatures
+
+State: **accepted** (record 0022).
+
+A variant holds values of variables, kept in an optional domain of its own; a reference dimension is a state of a dimension and takes version 3 of the sketch file; signatures of a suite project are checked only with public keys the person gives, and this program does not sign.
+
 ## The lid is fixed with screws into posts
 
 State: **accepted**.

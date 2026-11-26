@@ -534,6 +534,23 @@ impl Constraint {
         }
     }
 
+    /// Whether the constraint is a dimension whose value follows an expression.
+    pub fn has_expression(&self) -> bool {
+        match self {
+            Constraint::Distance { dim, .. }
+            | Constraint::DistanceX { dim, .. }
+            | Constraint::DistanceY { dim, .. }
+            | Constraint::LineLength { dim, .. }
+            | Constraint::PointLineDistance { dim, .. }
+            | Constraint::Radius { dim, .. }
+            | Constraint::Diameter { dim, .. } => dim.expr.is_some(),
+            Constraint::AngleBetween { dim, .. } | Constraint::LineAngle { dim, .. } => {
+                dim.expr.is_some()
+            }
+            _ => false,
+        }
+    }
+
     /// Whether the constraint is a dimension (it has a value).
     pub fn is_dimension(&self) -> bool {
         matches!(
@@ -560,6 +577,16 @@ pub struct ConstraintEntry {
     pub constraint: Constraint,
     /// A constraint that is not enabled is kept but the solver ignores it.
     pub enabled: bool,
+    /// A reference dimension: it shows what the drawing measures and holds nothing, so the solver
+    /// ignores it. Only a dimension can be one, and it has no expression.
+    pub reference: bool,
+}
+
+impl ConstraintEntry {
+    /// Whether the solver takes the constraint into account: enabled and not a reference.
+    pub fn drives(&self) -> bool {
+        self.enabled && !self.reference
+    }
 }
 
 /// The four points and four lines of a rectangle made by [`Sketch::add_rectangle`].
@@ -1448,6 +1475,7 @@ impl Sketch {
             id,
             constraint,
             enabled: true,
+            reference: false,
         });
         Ok(id)
     }
@@ -1480,12 +1508,139 @@ impl Sketch {
         Ok(())
     }
 
+    /// The dimension `id` with the value that the drawing measures now, with no expression. A
+    /// constraint that is not a dimension is refused. An angle is given from 0 to less than a half
+    /// turn (a line has no preferred sense) and a distance from a point to a line without a side.
+    pub fn measured(&self, id: ConstraintId) -> Result<Constraint, CadError> {
+        let entry = self
+            .constraint(id)
+            .ok_or_else(|| CadError::UnknownName(id.to_string()))?;
+        let at = |p: ElementId| -> Result<(f64, f64), CadError> {
+            let (x, y) = self.point(p)?;
+            Ok((x.get() as f64, y.get() as f64))
+        };
+        let distance = |a: (f64, f64), b: (f64, f64)| (b.0 - a.0).hypot(b.1 - a.1);
+        let ends = |line: ElementId| -> Result<((f64, f64), (f64, f64)), CadError> {
+            let (a, b) = self.line_points(line)?;
+            Ok((at(a)?, at(b)?))
+        };
+        let radius = |round: ElementId| -> Result<f64, CadError> {
+            match self.element(round) {
+                Some(Element::Circle { radius, .. }) => Ok(radius.get() as f64),
+                Some(Element::Arc { center, start, .. }) => Ok(distance(at(*center)?, at(*start)?)),
+                _ => Err(bad_element(format!("{round} is not a circle or an arc"))),
+            }
+        };
+        let length = |nm: f64| -> Result<Dim<Length>, CadError> {
+            Ok(Dim::fixed(Length::new(nm.round() as i64)?))
+        };
+        let angle = |radians: f64| -> Result<Dim<Angle>, CadError> {
+            let half_turn: i64 = 180_000_000_000;
+            let nanodegrees = (radians.to_degrees() * 1e9).round() as i64;
+            Ok(Dim::fixed(Angle::new(nanodegrees.rem_euclid(half_turn))?))
+        };
+        Ok(match entry.constraint {
+            Constraint::Distance { a, b, .. } => Constraint::Distance {
+                a,
+                b,
+                dim: length(distance(at(a)?, at(b)?))?,
+            },
+            Constraint::DistanceX { a, b, .. } => Constraint::DistanceX {
+                a,
+                b,
+                dim: length(at(b)?.0 - at(a)?.0)?,
+            },
+            Constraint::DistanceY { a, b, .. } => Constraint::DistanceY {
+                a,
+                b,
+                dim: length(at(b)?.1 - at(a)?.1)?,
+            },
+            Constraint::LineLength { line, .. } => {
+                let (a, b) = ends(line)?;
+                Constraint::LineLength {
+                    line,
+                    dim: length(distance(a, b))?,
+                }
+            }
+            Constraint::Radius { round, .. } => Constraint::Radius {
+                round,
+                dim: length(radius(round)?)?,
+            },
+            Constraint::Diameter { round, .. } => Constraint::Diameter {
+                round,
+                dim: length(2.0 * radius(round)?)?,
+            },
+            Constraint::PointLineDistance { point, line, .. } => {
+                let (a, b) = ends(line)?;
+                let p = at(point)?;
+                let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                let cross = dx * (p.1 - a.1) - dy * (p.0 - a.0);
+                Constraint::PointLineDistance {
+                    point,
+                    line,
+                    dim: length(cross.abs() / dx.hypot(dy).max(1.0))?,
+                }
+            }
+            Constraint::AngleBetween { a, b, .. } => {
+                let ((p1, q1), (p2, q2)) = (ends(a)?, ends(b)?);
+                let (d1, d2) = ((q1.0 - p1.0, q1.1 - p1.1), (q2.0 - p2.0, q2.1 - p2.1));
+                let cross = d1.0 * d2.1 - d1.1 * d2.0;
+                let dot = d1.0 * d2.0 + d1.1 * d2.1;
+                Constraint::AngleBetween {
+                    a,
+                    b,
+                    dim: angle(cross.atan2(dot))?,
+                }
+            }
+            Constraint::LineAngle { line, .. } => {
+                let (a, b) = ends(line)?;
+                Constraint::LineAngle {
+                    line,
+                    dim: angle((b.1 - a.1).atan2(b.0 - a.0))?,
+                }
+            }
+            _ => return Err(bad_constraint(format!("{id} is not a dimension"))),
+        })
+    }
+
+    /// Makes a dimension a reference (it shows what the drawing measures and holds nothing) or
+    /// makes it drive the drawing again. Either way it takes the value measured now and loses its
+    /// expression, so nothing moves. A constraint that is not a dimension, and a distance of zero,
+    /// are refused.
+    pub fn set_reference(&mut self, id: ConstraintId, reference: bool) -> Result<(), CadError> {
+        let measured = self.measured(id)?;
+        if self
+            .constraint(id)
+            .is_some_and(|c| c.reference == reference)
+        {
+            return Ok(());
+        }
+        self.check_constraint(&measured)?;
+        if let Some(entry) = self.constraints.iter_mut().find(|c| c.id == id) {
+            entry.constraint = measured;
+            entry.reference = reference;
+        }
+        Ok(())
+    }
+
+    /// Refuses to give a value to a dimension that is a reference.
+    fn need_driving(&self, id: ConstraintId) -> Result<(), CadError> {
+        if self.constraint(id).is_some_and(|c| c.reference) {
+            Err(bad_constraint(format!(
+                "{id} is a reference dimension: it is read, not set"
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
     /// Changes the value of a dimension that is a length (and drops its expression).
     pub fn set_length_dimension(
         &mut self,
         id: ConstraintId,
         value: Length,
     ) -> Result<(), CadError> {
+        self.need_driving(id)?;
         let entry = self
             .constraints
             .iter_mut()
@@ -1524,6 +1679,7 @@ impl Sketch {
         if let Some(text) = expr {
             check_expr_text(text)?;
         }
+        self.need_driving(id)?;
         let entry = self
             .constraints
             .iter_mut()
@@ -1713,6 +1869,12 @@ impl Sketch {
                 )));
             }
             self.check_constraint(&c.constraint)?;
+            if c.reference && (!c.constraint.is_dimension() || c.constraint.has_expression()) {
+                return Err(bad_constraint(format!(
+                    "{} cannot be a reference: only a dimension with no expression can",
+                    c.id
+                )));
+            }
         }
         Ok(())
     }
@@ -1934,6 +2096,139 @@ mod tests {
             lifted.to_model(&e, mm(3), mm(4)).unwrap(),
             [mm(3), mm(-2), mm(4)]
         );
+    }
+
+    #[test]
+    fn a_reference_dimension_reads_the_drawing_and_holds_nothing() {
+        let mut k = sketch();
+        let a = k.add_point(mm(0), mm(0)).unwrap();
+        let b = k.add_point(mm(30), mm(40)).unwrap();
+        let c = k.add_point(mm(0), mm(10)).unwrap();
+        let ab = k.add_line(a, b).unwrap();
+        let ac = k.add_line(a, c).unwrap();
+        let circle = k.add_circle(c, mm(3)).unwrap();
+        let distance = k
+            .add_constraint(Constraint::Distance {
+                a,
+                b,
+                dim: Dim::fixed(mm(7)),
+            })
+            .unwrap();
+        let value = |k: &Sketch, id| match k.measured(id).unwrap() {
+            Constraint::Distance { dim, .. }
+            | Constraint::DistanceX { dim, .. }
+            | Constraint::DistanceY { dim, .. }
+            | Constraint::LineLength { dim, .. }
+            | Constraint::Radius { dim, .. }
+            | Constraint::Diameter { dim, .. }
+            | Constraint::PointLineDistance { dim, .. } => dim.value.get(),
+            Constraint::AngleBetween { dim, .. } | Constraint::LineAngle { dim, .. } => {
+                dim.value.get()
+            }
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(value(&k, distance), 50_000_000);
+        for (constraint, expected) in [
+            (
+                Constraint::DistanceX {
+                    a: b,
+                    b: a,
+                    dim: Dim::fixed(mm(1)),
+                },
+                -30_000_000,
+            ),
+            (
+                Constraint::DistanceY {
+                    a,
+                    b,
+                    dim: Dim::fixed(mm(1)),
+                },
+                40_000_000,
+            ),
+            (
+                Constraint::LineLength {
+                    line: ac,
+                    dim: Dim::fixed(mm(1)),
+                },
+                10_000_000,
+            ),
+            (
+                Constraint::Radius {
+                    round: circle,
+                    dim: Dim::fixed(mm(1)),
+                },
+                3_000_000,
+            ),
+            (
+                Constraint::Diameter {
+                    round: circle,
+                    dim: Dim::fixed(mm(1)),
+                },
+                6_000_000,
+            ),
+            (
+                Constraint::PointLineDistance {
+                    point: b,
+                    line: ac,
+                    dim: Dim::fixed(mm(1)),
+                },
+                30_000_000,
+            ),
+            (
+                Constraint::LineAngle {
+                    line: ac,
+                    dim: Dim::fixed(Angle::new(0).unwrap()),
+                },
+                90_000_000_000,
+            ),
+        ] {
+            let id = k.add_constraint(constraint).unwrap();
+            assert_eq!(value(&k, id), expected, "{id}");
+            k.remove_constraint(id).unwrap();
+        }
+        let angle = k
+            .add_constraint(Constraint::AngleBetween {
+                a: ab,
+                b: ac,
+                dim: Dim::fixed(Angle::new(1).unwrap()),
+            })
+            .unwrap();
+        // the line a-b is at 53.13 degrees and the line a-c at 90
+        let between = value(&k, angle);
+        assert!((between - 36_869_897_646).abs() < 5, "{between}");
+        k.remove_constraint(angle).unwrap();
+
+        // a reference takes the value of the drawing, loses the formula and holds nothing
+        k.set_dimension_expr(distance, Some("width")).unwrap();
+        k.set_reference(distance, true).unwrap();
+        let entry = k.constraint(distance).unwrap().clone();
+        assert!(entry.reference && entry.enabled && !entry.drives());
+        assert!(!entry.constraint.has_expression());
+        assert_eq!(value(&k, distance), 50_000_000);
+        assert!(k.set_length_dimension(distance, mm(9)).is_err());
+        assert!(k.set_dimension_expr(distance, Some("width")).is_err());
+        k.move_point(b, mm(60), mm(80)).unwrap();
+        assert_eq!(value(&k, distance), 100_000_000);
+        assert!(solved(&mut k));
+        assert_eq!(k.point(b).unwrap(), (mm(60), mm(80)));
+        // driving again, it holds the value of now
+        k.set_reference(distance, false).unwrap();
+        let entry = k.constraint(distance).unwrap();
+        assert!(!entry.reference);
+        assert!(matches!(
+            &entry.constraint,
+            Constraint::Distance { dim, .. } if dim.value == mm(100)
+        ));
+        k.validate().unwrap();
+
+        // only a dimension can be a reference, and a distance of nothing cannot
+        let level = k.add_constraint(Constraint::Horizontal(ac)).unwrap();
+        assert!(k.set_reference(level, true).is_err());
+        assert!(k.set_reference(ConstraintId(99), true).is_err());
+        k.remove_constraint(level).unwrap();
+        k.move_point(b, mm(0), mm(0)).unwrap();
+        assert!(k.set_reference(distance, true).is_err());
+        assert!(!k.constraint(distance).unwrap().reference);
     }
 
     #[test]

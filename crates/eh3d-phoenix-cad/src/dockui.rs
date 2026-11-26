@@ -241,6 +241,8 @@ pub enum Cmd {
     SuiteImport,
     /// Show the branches of the suite file.
     SuiteBranches,
+    /// Edit the title and the description of the project of the suite.
+    SuiteTexts,
     /// Take the board of the branch `pcb` into the box.
     SuiteBoard,
     /// Check the box against the board and the room of its parts.
@@ -251,6 +253,8 @@ pub enum Cmd {
     SuiteHandBack,
     /// Check the sketch.
     CheckSketch,
+    /// Open the window of the variants of the project.
+    Variants,
     /// Write the model in a format.
     Export(Format),
     /// Open the window with the fit report.
@@ -283,7 +287,7 @@ fn own(id: &str, m: Msg, cmd: Cmd) -> Entry<Cmd> {
 
 /// The entries of the submenu of the project file of the suite, in order: their ids, their words
 /// and what they do.
-pub const SUITE_ENTRIES: [(&str, Msg, Cmd); 9] = [
+pub const SUITE_ENTRIES: [(&str, Msg, Cmd); 10] = [
     ("file.suite.open", Msg::SuiteMenuOpen, Cmd::SuiteOpen),
     ("file.suite.save", Msg::SuiteMenuSave, Cmd::SuiteSave),
     ("file.suite.save_as", Msg::SuiteMenuSaveAs, Cmd::SuiteSaveAs),
@@ -293,6 +297,7 @@ pub const SUITE_ENTRIES: [(&str, Msg, Cmd); 9] = [
         Msg::SuiteMenuBranches,
         Cmd::SuiteBranches,
     ),
+    ("file.suite.texts", Msg::SuiteTextsMenu, Cmd::SuiteTexts),
     ("file.suite.board", Msg::SuiteMenuBoard, Cmd::SuiteBoard),
     ("file.suite.check", Msg::SuiteMenuCheck, Cmd::SuiteCheck),
     (
@@ -395,6 +400,7 @@ pub fn menu_bar() -> MenuBar<Cmd> {
         .entry(own("tools.keep_sketch", Msg::KeepSketch, Cmd::KeepSketch))
         .entry(own("tools.drawings", Msg::PlTitle, Cmd::ShowDrawings))
         .entry(own("tools.check_sketch", Msg::CheckMenu, Cmd::CheckSketch))
+        .entry(own("tools.variants", Msg::VariantsMenu, Cmd::Variants))
         .sep()
         .submenu(reports)
         .sep()
@@ -439,6 +445,7 @@ pub fn disabled_entries(f: &MenuFacts) -> Vec<String> {
         off.extend(Format::ALL.iter().map(|x| export_id(*x)));
         off.push("file.open_library".to_string());
         off.push("file.fit_report".to_string());
+        off.push("tools.variants".to_string());
         off.extend(Panel::ALL.iter().map(|p| report_id(*p)));
     }
     for (id, _, cmd) in SUITE_ENTRIES {

@@ -68,13 +68,14 @@ The File menu has the submenu *Suite project (.eh3d)*, in the eight languages:
 | Save suite project | Writes the branch `cad` of the file of the window; a project that is not in a `.eh3d` file yet is asked for a name. |
 | Save suite project as | Takes every branch of the open file to the new name. A file that holds the box of another project is written over only with the box *Write over an existing file* ticked. |
 | Import a file and keep the original | As `eh3d-import`: the original in `cad/origin/` byte for byte with the report; the warnings of the reader are listed as not read. |
-| Branches of the project | Each branch with its program, format, files and state (current, out of date and which branch changed, signed, sealed, encrypted), the findings of the checks, the report of the original and the suite files opened last. |
+| Branches of the project | Each branch with its program, format, files and state (current, out of date and which branch changed, signature, sealed, encrypted), the findings of the checks, the report of the original and the suite files opened last; a button chooses a public key that checks the signatures. |
+| Title and description | The title and the description of the project in each language (below). |
 | Take the board from the branch pcb | As `eh3d-new` when there is no box and as `eh3d-board` when there is one; refused while there are changes that are not saved. |
 | Check the fit with the board | As `eh3d-check`; it writes nothing. |
 | Cut the openings of the connectors | As `eh3d-openings --apply`. |
 | Hand the box to the other programs | As `eh3d-publish`. |
 
-A signature is only shown, never checked. The plain *Save as* of the File menu keeps every branch too. A file that was opened, saved or picked is added to the recent files only when that worked, and a recent file that is gone is taken out of the list; the list is kept between sessions in the settings folder of the user (`%APPDATA%\EH3D\recent-phoenix-cad.txt`, or `~/.config/eh3d/`), with or without `--config`. All of this is decided in `suitewin`, which is tested without a screen; the window has never been opened on a screen.
+The plain *Save as* of the File menu keeps every branch too. A file that was opened, saved or picked is added to the recent files only when that worked, and a recent file that is gone is taken out of the list; the list is kept between sessions in the settings folder of the user (`%APPDATA%\EH3D\recent-phoenix-cad.txt`, or `~/.config/eh3d/`), with or without `--config`. All of this is decided in `suitewin`, which is tested without a screen; the window has never been opened on a screen.
 
 ## The box made from a board
 
@@ -98,3 +99,9 @@ A signature is only shown, never checked. The plain *Save as* of the File menu k
 `params PROJECT [--limits FILE]` reads limits written one to a line as `parameter.min`, `parameter.max` or `parameter.step` `= length`.
 
 `panels PROJECT OUT.dxf|OUT.svg` draws each face as seen from outside at its outer size, with its holes; extrusions and pockets are not drawn, and there are no joints or kerf allowance.
+
+## The title, the description and the signatures
+
+**Title and description** (File, Suite project) reads and writes the two texts of `common/meta/meta.json` in each of the eight languages; only the branch `common` is written. A text needs its English version before another language, and an empty field takes the language away (`eh3d-meta --title ""` too).
+
+**Signatures** are checked with the public key files that the person trusts: `suite.trusted_keys` (full paths separated by `;`, `none` by default), `eh3d-info --key FILE` or the button of the list of branches, which holds for the time the program runs. Each signature is told as valid with the identifier of its key, wrong, of a key that is not trusted, or only seen when no key is given; `eh3d-info` ends with code 2 on a wrong one and its comma separated values have a last column `signature`. Only public keys are read (a secret key is refused), this program does not sign, and a valid signature says who signed the branch, not that the design is right.

@@ -12,7 +12,10 @@ mod mates;
 mod part_patterns;
 mod sections;
 mod steps;
+mod variants;
 mod versions;
+
+pub use variants::{VariantCheck, VariantFile, VariantRow};
 
 use crate::assembly::{Dim, Edge, Mate, MateKind, Report};
 use crate::body::{Built, Step, StepState};
@@ -4193,6 +4196,14 @@ impl Window {
             }
             Err(e) => Some(e),
         };
+        // variants that cannot be read are kept as they are in the same way
+        let damaged = match opened.document.variants(&self.settings.variants) {
+            Ok(set) => {
+                mech.variants = set;
+                damaged
+            }
+            Err(e) => damaged.or(Some(e)),
+        };
         let built = self.rebuild(&mech).map_err(Status::Error)?;
         // the units of the project win over the ones of the settings; units that cannot be read
         // leave the project open in the units of the settings
@@ -4246,6 +4257,7 @@ impl Window {
         let written = document
             .set_mechanical(&self.mech, &self.settings.mechanical)
             .and_then(|()| document.set_sketches(&self.mech.sketches, &self.sketch_settings))
+            .and_then(|()| document.set_variants(&self.mech.variants, &self.settings.variants))
             .and_then(|()| match &source {
                 Some(from) => eh3dfile::copy_project(from, path),
                 None => Ok(()),

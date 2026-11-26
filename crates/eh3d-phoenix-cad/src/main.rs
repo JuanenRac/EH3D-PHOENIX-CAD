@@ -41,7 +41,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad mesh-info FILE.stl|.obj|.3mf|.step|.stp|.ply|.off|.dxf [--density KG_M3 | --material NAME] [--config FILE]   reads a file of triangles (the ones this program writes or another program's stored 3MF) or a STEP file of solids made of flat faces (the limits are mesh.step_max_kib, mesh.step_max_entities and mesh.step_max_faces; a face on a cylinder, a surface of revolution or a curved edge is refused with the entity and its name) and prints, for each solid in it, its vertices, triangles, whether its surface is closed, its volume, its surface and its size, and, for a prism along an axis, its height and outlines; with a density (or a material of the settings) also its mass, centre of mass and tensor of inertia; it exits with 0 when every solid is closed and with 1 when one is not
   eh3d-phoenix-cad export PROJECT.phoenixproj --format stl|obj|3mf|dxf|svg|pdf|step|script|report|bill|order [--view top|front|side|sheet] [--out FILE] [--overwrite] [--ascii|--binary] [--title-field KEY=TEXT]... [--cut-line AXIS=POSITION[:LETTERS]] [--lang CODE] [--config FILE]   writes the model to a file: the solid as triangles (stl), as a Wavefront file (obj) or as a 3MF package (3mf), the plan, front or side, or all three on one sheet, as a drawing (dxf, svg), all three on one sheet as a PDF file of one page (pdf, which is always the sheet), the STEP file, the OpenSCAD-style script, the fit report, the bill of materials or the order sheet (an HTML page with the bars to buy, the holes to drill and the parts with their cost, in the language of --lang)
   eh3d-phoenix-cad faces PROJECT.phoenixproj --from FACE[:inner|:outer] --to FACE[:inner|:outer] [--lang CODE] [--config FILE]   measures between two faces of the box (front, back, left, right, top or bottom, the outer face of the wall unless :inner is given): the distance in millimetres between parallel faces (a wall, the inner height, the outer width) and the angle, 0 for parallel faces and 90 for faces that meet; the same face on the same side is refused
-  eh3d-phoenix-cad sketch-edit SKETCH.phoenixsketch --op chamfer|trim|extend|linear|circular|offset [--out FILE] [--overwrite] [--config FILE] ...   edits a sketch file the way the buttons of the sketch window do (elements are named as in the file, like e5; lengths are in mm or with a unit): chamfer --lines e5,e6 --distance 3; trim --line e5 --cutter e6 [--drop e1]; extend --line e5 --to e6; linear --items e1,e2 --step DX,DY --count N; circular --items e1 --center e3 --count N [--step DEGREES]; offset --items e5,e6,e7,e8 --distance D (negative goes inwards); the edited sketch is written to --out, or over the file itself with --overwrite, and a refused edit writes nothing
+  eh3d-phoenix-cad sketch-edit SKETCH.phoenixsketch --op chamfer|trim|extend|linear|circular|offset|reference|driving [--out FILE] [--overwrite] [--config FILE] ...   edits a sketch file the way the buttons of the sketch window do (elements are named as in the file, like e5; lengths are in mm or with a unit): chamfer --lines e5,e6 --distance 3; trim --line e5 --cutter e6 [--drop e1]; extend --line e5 --to e6; linear --items e1,e2 --step DX,DY --count N; circular --items e1 --center e3 --count N [--step DEGREES]; offset --items e5,e6,e7,e8 --distance D (negative goes inwards); reference --constraint c3 makes a dimension a reference (it reads the drawing and holds nothing, with the value of now and no formula) and driving --constraint c3 makes it hold the drawing again; the edited sketch is written to --out, or over the file itself with --overwrite, and a refused edit writes nothing
   eh3d-phoenix-cad server-status [--metrics] [--lang CODE] [--config FILE]        asks the EH3D server named in the [server] section of the settings (server_address, server_token, server_machine, server_timeout_s, server_retries, server_mdns, server_max_answer_mib, server_token_fixed, server_error_body_bytes) how it is: its name, version and state; --metrics adds what the link has done (requests, tries, retries, answers, losses and the latency of the answers, never a token or an address); with no address nothing is sent anywhere
   eh3d-phoenix-cad server-list [TEXT] [--user NAME] [--lang CODE] [--config FILE]        lists the projects this program keeps on the server (those whose name has TEXT, in any letter case); without a token in the settings, --user logs in with the password in the variable PHOENIX_CAD_SERVER_PASSWORD
   eh3d-phoenix-cad server-save PROJECT.phoenixproj [--name NAME] [--comment TEXT] [--user NAME] [--lang CODE] [--config FILE]   saves a project file on the server as a new version of the file of the project NAME (the name of the file without --name; the project is made when the server has none of that name, the write says which version it is made from, and the same bytes make no version)
@@ -55,6 +55,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad convert VALUE [--to nm|um|mm|cm|m|in|mil|deg|dms] [--decimals N] [--fraction N] [--lang CODE]   reads a length (1 1/2 in, 25.4 mm) or an angle (12.5, 12d30m15s or 12 degrees 30 minutes 15 seconds written with the signs of degrees, minutes and seconds) and writes it in another unit; --fraction N writes inches as a mixed number of N-ths (1, 2, 4 ... 128); dms writes degrees, minutes and seconds
   eh3d-phoenix-cad bolt-circle --count N --diameter LENGTH [--start DEGREES] [--center X:Y] [--text] [--lang CODE]   the holes of a bolt circle for the drill: the angle and the place of each hole as comma separated values, or with --text the angle and the distance between neighbours too
   eh3d-phoenix-cad bom-costs PROJECT.phoenixproj [--tax PERCENT] [--top N] [--text] [--lang CODE] [--config FILE]   where the money of the bill of materials goes: the lines from the dearest to the cheapest with their share of the subtotal and of the running sum, the first N of them, and with --tax the tax on the total
+  eh3d-phoenix-cad variants PROJECT [--keep NAME [--only V,V] | --set NAME --variable V --value TEXT | --remove NAME | --apply NAME | --check | --export FOLDER [--format stl|step|script|...] [--overwrite]] [--text] [--lang CODE] [--config FILE]   the variants of a project (named values of its variables): without an action they are listed as comma separated values; --keep saves the current values under a name, --set changes one value, --apply writes a variant into the variables (the project is saved), --check builds the box with each variant (exit 1 when one cannot be built, has a refused step or does not fit its board) and --export writes one file for each variant, named after the project and the variant, all or none, never over a file that exists unless --overwrite is given
   eh3d-phoenix-cad templates [--lang CODE]                                       lists the projects a new one can start from (box, plate, frame and assembly)
   eh3d-phoenix-cad new --template NAME --out FILE.phoenixproj [--overwrite] [--lang CODE]   writes a new project from a template, never over a file that exists unless --overwrite is given
   eh3d-phoenix-cad measure distance|angle POINT... [--lang CODE]                  measures between points written X:Y:Z (a length with its unit or bare millimetres): the distance between two points, from a point to an edge (three points) or between two edges (four), the angle at a vertex between three points or between two edges
@@ -73,7 +74,7 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad sketch-points [--start POINT] [--text] [--lang CODE] POINT...   places points typed as text one after another: 10,5 (from the origin), @3,-2 (from the last point), 20<45 (distance and angle from the origin) and @20<45 (from the last point); a number without a unit is in millimetres; prints point,x_nm,y_nm or lines in the language of --lang
   eh3d-phoenix-cad drawing-check PROJECT.phoenixproj [--text] [--lang CODE] [--config FILE]   builds the history and the sketches of a project and works its drawing sheet out against them: the views of the solids (front, top, right and isometric, with the visible and the hidden edges), the dimensions tied to the nodes of the history and the elements of the sketches (a dimension whose node or element is gone is an orphan, PHOENIX-CAD-055), the balloons tied to the bill of materials of the history; it reports every view, dimension and balloon as comma separated values (record,name,state,code,detail) or, with --text, as lines in the language of --lang; it exits with 0 when the sheet agrees with the model, with 2 when the verification did not pass and with 1 when it could not run
   eh3d-phoenix-cad drawing-export PROJECT.phoenixproj OUT.svg|OUT.pdf|OUT.dxf|OUT.csv [--format svg|pdf|dxf|bom] [--create] [--sheet NAME] [--portrait] [--scale auto|N:D] [--force] [--overwrite] [--lang CODE] [--config FILE]   writes the drawing sheet of a project as an SVG, PDF or DXF file, or its bill of materials as comma separated values, the same bytes for the same project; it writes nothing while the check does not pass (exit 2) unless --force is given, never over a file that exists unless --overwrite is given, and --create makes the four views of the result of the history when the project has no sheet
-  eh3d-phoenix-cad eh3d-info FILE.eh3d [--text] [--lang CODE]   the branches of a project file of the suite, the ones derived from a branch that has changed since and what its checks find; exit 2 when they find anything
+  eh3d-phoenix-cad eh3d-info FILE.eh3d [--text] [--key PUBLIC.pub] [--lang CODE] [--config FILE]   the branches of a project file of the suite, the ones derived from a branch that has changed since, what its checks find and what is known about each signature: with the public key of --key or of suite.trusted_keys a signature is checked (valid, wrong or made by a key that is not trusted), without one it is only seen; exit 2 when the checks find anything or a signature is wrong
   eh3d-phoenix-cad eh3d-save PROJECT FILE.eh3d [--time T] [--audit T] [--seal NAME] [--backup] [--lang CODE]   puts a project in the branch cad of the file of the suite (made when it is not there); the other branches keep their bytes
   eh3d-phoenix-cad eh3d-open FILE.eh3d --out PROJECT.phoenixproj [--overwrite] [--lang CODE]   writes the project of the branch cad to a file of its own
   eh3d-phoenix-cad eh3d-new FILE.eh3d [--gap L] [--headroom L] [--post-height L] [--screw M3] [--kind insert|self-tapping] [--overwrite] [--time T] [--lang CODE] [--config FILE]   makes the box round the board of the branch pcb with a post under every mounting hole (what is not given comes from the section [suite] of the settings)
@@ -1401,6 +1402,14 @@ fn element_words(text: &str) -> Result<Vec<eh3d_phoenix_cad::sketch::ElementId>,
     text.split(',').map(element_word).collect()
 }
 
+fn constraint_word(word: &str) -> Result<eh3d_phoenix_cad::sketch::ConstraintId, String> {
+    word.trim()
+        .strip_prefix('c')
+        .and_then(|n| n.parse::<u32>().ok())
+        .map(eh3d_phoenix_cad::sketch::ConstraintId)
+        .ok_or_else(|| format!("{word}: not a constraint (they are named like c3)"))
+}
+
 /// A length that is a bare number (millimetres) or has a unit.
 fn length_word(word: &str) -> Result<eh3d_phoenix_cad::Length, String> {
     let text = if word.trim().parse::<f64>().is_ok() {
@@ -1424,7 +1433,8 @@ fn run_sketch_edit(args: &[String]) -> Result<bool, String> {
         match arg.as_str() {
             "--overwrite" => overwrite = true,
             "--op" | "--lines" | "--distance" | "--line" | "--cutter" | "--drop" | "--to"
-            | "--items" | "--step" | "--count" | "--center" | "--out" | "--config" => {
+            | "--items" | "--step" | "--count" | "--center" | "--constraint" | "--out"
+            | "--config" => {
                 let value = iter.next().ok_or_else(|| format!("{arg} needs a value"))?;
                 options.insert(arg.clone(), value.clone());
             }
@@ -1515,6 +1525,10 @@ fn run_sketch_edit(args: &[String]) -> Result<bool, String> {
                 )
                 .map(|_| ())
         }
+        "reference" | "driving" => sketch.set_reference(
+            constraint_word(need("--constraint")?)?,
+            op == "reference",
+        ),
         "offset" => sketch
             .offset_outline(
                 &element_words(need("--items")?)?,
@@ -1523,7 +1537,7 @@ fn run_sketch_edit(args: &[String]) -> Result<bool, String> {
             .map(|_| ()),
         other => {
             return Err(format!(
-                "{other}: not an operation (chamfer, trim, extend, linear, circular or offset)"
+                "{other}: not an operation (chamfer, trim, extend, linear, circular, offset, reference or driving)"
             ))
         }
     };

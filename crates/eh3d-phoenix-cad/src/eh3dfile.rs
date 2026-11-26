@@ -19,8 +19,8 @@ use eh3d_project::meta::{
     DOC_INDEX_FILE, META_FILE, REPORT_FILE,
 };
 use eh3d_project::{
-    BranchUpdate, Checks, Dependency, Finding, NewProject, OpenOptions, Project, SaveOptions, Seal,
-    Writer,
+    BranchUpdate, Checks, Dependency, Ed25519Keyring, Finding, NewProject, OpenOptions, Project,
+    SaveOptions, Seal, SignatureStatus, Verifier, Writer,
 };
 
 use crate::{store, CadError};
@@ -340,8 +340,9 @@ pub struct BranchLine {
     pub sealed: bool,
     /// Whether it is encrypted.
     pub encrypted: bool,
-    /// Whether its record carries a signature (which this program does not check).
-    pub signed: bool,
+    /// What is known about its signature: without a public key a signature is only seen
+    /// ([`SignatureStatus::Unchecked`]).
+    pub signature: SignatureStatus,
     /// The branches it was derived from that have changed since.
     pub stale: Vec<String>,
 }
@@ -355,11 +356,42 @@ pub struct Summary {
     pub branches: Vec<BranchLine>,
     /// What the checks of the format found (errors and warnings).
     pub findings: Vec<Finding>,
+    /// What is known about the signature of the project record, which holds every branch.
+    pub project_signature: SignatureStatus,
+}
+
+impl Summary {
+    /// True when a signature that was checked is wrong.
+    pub fn any_wrong_signature(&self) -> bool {
+        std::iter::once(&self.project_signature)
+            .chain(self.branches.iter().map(|b| &b.signature))
+            .any(|s| *s == SignatureStatus::Invalid)
+    }
+}
+
+/// The public keys of the files named, and why each file that could not be used was not. Only
+/// public key files are taken: a secret key given here is refused.
+pub fn keyring(paths: &[String]) -> (Ed25519Keyring, Vec<String>) {
+    let mut ring = Ed25519Keyring::new();
+    let mut problems = Vec::new();
+    for path in paths {
+        if let Err(e) = ring.read_file(Path::new(path)) {
+            problems.push(format!("{path}: {e}"));
+        }
+    }
+    (ring, problems)
 }
 
 /// Lists the branches of a project and checks it.
 pub fn summary(path: &Path) -> Result<Summary, CadError> {
+    summary_with(path, None)
+}
+
+/// [`summary`], with the signatures judged by the public keys given. With no key (or `None`) a
+/// signature is only seen, not checked.
+pub fn summary_with(path: &Path, keys: Option<&Ed25519Keyring>) -> Result<Summary, CadError> {
     let mut project = open_project(path)?;
+    let signatures = project.signatures(keys.filter(|k| !k.is_empty()).map(|k| k as &dyn Verifier));
     let stale = project.stale_refs();
     let branches = project
         .branches()
@@ -386,7 +418,11 @@ pub fn summary(path: &Path) -> Result<Summary, CadError> {
                 .sum(),
             sealed: b.is_sealed(),
             encrypted: b.is_encrypted(),
-            signed: b.record.as_ref().is_some_and(|r| r.signature.is_some()),
+            signature: signatures
+                .branches
+                .get(&b.id)
+                .cloned()
+                .unwrap_or(SignatureStatus::Unsigned),
             stale: stale
                 .iter()
                 .filter(|s| s.branch == b.id)
@@ -400,6 +436,7 @@ pub fn summary(path: &Path) -> Result<Summary, CadError> {
         name,
         branches,
         findings,
+        project_signature: signatures.project,
     })
 }
 
@@ -416,9 +453,26 @@ fn record_bytes<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, CadError> {
     to_canonical_file_bytes(value).map_err(|e| CadError::SuiteFile(e.to_string()))
 }
 
+/// The metadata of a project of the suite (empty when it has none).
+pub fn read_metadata(path: &Path) -> Result<Metadata, CadError> {
+    let mut project = open_project(path)?;
+    metadata_of(&mut project)
+}
+
+fn metadata_of(project: &mut Project) -> Result<Metadata, CadError> {
+    match read_file(project, COMMON_BRANCH, META_FILE, 1 << 24)? {
+        Some(bytes) => serde_json::from_slice::<Metadata>(&bytes)
+            .map_err(|e| CadError::SuiteFile(format!("{META_FILE}: {e}"))),
+        None => Ok(Metadata {
+            schema: 1,
+            ..Metadata::default()
+        }),
+    }
+}
+
 /// Sets the title and the description of the project in one language, keeping the other
-/// languages and the other metadata. A text needs its English version, so a project without one
-/// is given English first.
+/// languages and the other metadata. An empty text takes that language away. A text needs its
+/// English version, so a project without one is given English first.
 pub fn set_metadata(
     path: &Path,
     language: &str,
@@ -427,20 +481,21 @@ pub fn set_metadata(
     settings: &SaveSettings,
 ) -> Result<Metadata, CadError> {
     let mut project = open_project(path)?;
-    let mut metadata = match read_file(&mut project, COMMON_BRANCH, META_FILE, 1 << 24)? {
-        Some(bytes) => serde_json::from_slice::<Metadata>(&bytes)
-            .map_err(|e| CadError::SuiteFile(format!("{META_FILE}: {e}")))?,
-        None => Metadata {
-            schema: 1,
-            ..Metadata::default()
-        },
-    };
+    let mut metadata = metadata_of(&mut project)?;
     let key = language_key(language).to_owned();
-    if let Some(text) = title {
-        metadata.title.insert(key.clone(), text.to_owned());
-    }
-    if let Some(text) = description {
-        metadata.description.insert(key, text.to_owned());
+    for (text, into) in [
+        (title, &mut metadata.title),
+        (description, &mut metadata.description),
+    ] {
+        match text {
+            Some("") => {
+                into.remove(&key);
+            }
+            Some(text) => {
+                into.insert(key.clone(), text.to_owned());
+            }
+            None => {}
+        }
     }
     metadata.validate().map_err(CadError::SuiteFile)?;
     let changes = BTreeMap::from([(META_FILE.to_owned(), Some(record_bytes(&metadata)?))]);

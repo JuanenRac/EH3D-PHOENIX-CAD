@@ -4,6 +4,18 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **Variants of a project:** named sets of values of its variables (a small, a medium and a large box of one recipe), kept in the project file in an optional domain `variants`, so an older program keeps them as they are. The command `variants` lists them, keeps the current values under a name, changes one value, removes one and applies one (a change of the project like any other, which can be undone); the new section `[variants]` of the settings limits how many there are.
+
+- **Every variant checked and exported at once:** `variants --check` builds the box with each variant and says its sizes, the steps the model refuses and, with a board, whether it fits (exit code 1 when one has a problem); `variants --export` writes one file for each variant in any format of the export, named after the project and the variant, all of them or none.
+
+- **The window of the variants:** a new entry of the Tools menu lists the variants with their values and the variables they name that are gone, and keeps, changes, applies, removes, checks and exports them, in the eight languages; it has not been seen on a screen.
+
+- **Reference dimensions in sketches:** a dimension can be made a reference, which shows what the drawing measures in brackets and holds nothing, so a drawing is not over-constrained by a figure that is only to be read; driving again it holds the value of that moment. From the dimensions panel of the sketch or with `sketch-edit --op reference` and `--op driving`; a sketch that has one is written as version 3 of the sketch file.
+
+- **The title and the description of the suite project from the window:** a new entry of the File menu reads and writes them in each of the eight languages, without touching the box or the other branches; an empty field takes the text of that language away, which `eh3d-meta` now does too.
+
+- **Signatures of a suite project are checked:** the list of branches and `eh3d-info` say whether each signature is valid (and made by which key), wrong or made by a key that is not trusted, using the public key files of the new setting `suite.trusted_keys`, of `eh3d-info --key` or chosen in the window; without a key a signature is only seen. `eh3d-info` has a new last column `signature` and ends with code 2 on a wrong one.
+
 - **The accents of the window are ice blue, the colour of the program:** the selection, the active tab, links, coloured outlines and main buttons take it from the frame of the suite, with text that reads on every ground; panels and bars stay as they were.
 - **Recent projects are kept in the folder of the user:** the list of *File > Open recent* lives in `%APPDATA%\EH3D\recent-phoenix-cad.txt` on Windows and in `~/.config/eh3d/` (or `$XDG_CONFIG_HOME/eh3d/`) elsewhere, the same way in every PHOENIX program, also when the program is started without `--config`; the list of the settings file moves there the first time, a damaged file is left aside, and it holds paths only.
 

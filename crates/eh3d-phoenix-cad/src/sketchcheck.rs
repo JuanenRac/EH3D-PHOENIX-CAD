@@ -291,7 +291,7 @@ fn near_points(sketch: &Sketch, near: f64) -> Vec<Finding> {
 fn almost_square(sketch: &Sketch, limit: f64) -> Vec<Finding> {
     let held = |line: ElementId| {
         sketch.constraints().iter().any(|c| {
-            c.enabled
+            c.drives()
                 && matches!(
                     c.constraint,
                     Constraint::Horizontal(..)
