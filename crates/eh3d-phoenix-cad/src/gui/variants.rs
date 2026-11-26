@@ -4,7 +4,7 @@
 //! [`crate::window`]; this only draws it.
 
 use super::*;
-use crate::window::format_msg;
+use crate::window::{format_msg, StepChoice};
 
 /// What is typed and chosen in the window of the variants.
 pub(super) struct VariantsForm {
@@ -15,6 +15,8 @@ pub(super) struct VariantsForm {
     folder: String,
     format: Format,
     overwrite: bool,
+    step: String,
+    table: String,
     /// What the last check or export said, and whether all was in order.
     lines: Vec<(String, bool)>,
 }
@@ -27,6 +29,10 @@ enum Ask {
     Remove(String),
     Check,
     Export,
+    Step(StepChoice),
+    Figures,
+    WriteTable,
+    ReadTable,
 }
 
 impl App {
@@ -40,6 +46,8 @@ impl App {
             folder: self.folder().display().to_string(),
             format: self.win.export_format,
             overwrite: false,
+            step: String::new(),
+            table: self.folder().join("variants.csv").display().to_string(),
             lines: Vec::new(),
         });
     }
@@ -52,6 +60,7 @@ impl App {
         let lang = self.win.lang;
         let editable = !self.win.read_only;
         let rows = self.win.variant_rows();
+        let steps = self.win.variant_step_rows();
         let mut open = true;
         let mut ask = None;
         egui::Window::new(Msg::VariantsMenu.tr(lang))
@@ -72,7 +81,12 @@ impl App {
                             {
                                 form.name = row.name.clone();
                             }
-                            ui.label(&row.values);
+                            let mut held = vec![row.values.clone(), row.steps.clone()];
+                            if row.current {
+                                held.push(Msg::VariantCurrent.tr(lang).to_string());
+                            }
+                            held.retain(|t| !t.is_empty());
+                            ui.label(held.join("; "));
                             if row.missing.is_empty() {
                                 ui.label("");
                             } else {
@@ -116,6 +130,48 @@ impl App {
                     }
                     if ui.button(Msg::VariantCheckButton.tr(lang)).clicked() {
                         ask = Some(Ask::Check);
+                    }
+                });
+                ui.collapsing(Msg::VariantStepsList.tr(lang), |ui| {
+                    for step in &steps {
+                        let text = format!("{} {}", step.number, step.label);
+                        let chosen = form.step == step.number.to_string();
+                        if ui.selectable_label(chosen, text).clicked() {
+                            form.step = step.number.to_string();
+                        }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(Msg::VariantStepField.tr(lang));
+                    ui.add(egui::TextEdit::singleline(&mut form.step).desired_width(160.0));
+                });
+                ui.horizontal(|ui| {
+                    for (words, choice) in [
+                        (Msg::VariantStepOffButton, StepChoice::Off),
+                        (Msg::VariantStepOnButton, StepChoice::On),
+                        (Msg::VariantStepKeepButton, StepChoice::Keep),
+                    ] {
+                        let button = egui::Button::new(words.tr(lang));
+                        if ui.add_enabled(editable, button).clicked() {
+                            ask = Some(Ask::Step(choice));
+                        }
+                    }
+                });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(Msg::VariantTableField.tr(lang));
+                    ui.add(egui::TextEdit::singleline(&mut form.table).desired_width(320.0));
+                });
+                ui.horizontal(|ui| {
+                    if ui.button(Msg::VariantTableWriteButton.tr(lang)).clicked() {
+                        ask = Some(Ask::WriteTable);
+                    }
+                    let read = egui::Button::new(Msg::VariantTableReadButton.tr(lang));
+                    if ui.add_enabled(editable, read).clicked() {
+                        ask = Some(Ask::ReadTable);
+                    }
+                    if ui.button(Msg::VariantFiguresButton.tr(lang)).clicked() {
+                        ask = Some(Ask::Figures);
                     }
                 });
                 ui.separator();
@@ -197,6 +253,25 @@ impl App {
                         vec![(fill(Msg::VariantFailed.tr(lang), &[&name, &why]), false)]
                     }
                 };
+            }
+            Some(Ask::Step(choice)) => {
+                self.win.set_variant_step(&form.name, &form.step, choice);
+            }
+            Some(Ask::Figures) => {
+                form.lines = self
+                    .win
+                    .variant_figures_csv()
+                    .lines()
+                    .map(|line| (line.to_string(), true))
+                    .collect();
+            }
+            Some(Ask::WriteTable) => {
+                let path = PathBuf::from(form.table.trim());
+                self.win.write_variant_grid(&path, form.overwrite);
+            }
+            Some(Ask::ReadTable) => {
+                let path = PathBuf::from(form.table.trim());
+                self.win.read_variant_grid(&path);
             }
             None => {}
         }

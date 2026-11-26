@@ -9,6 +9,7 @@
 use std::path::PathBuf;
 
 use super::*;
+use crate::mechanical::step_keys;
 
 /// A variant as the list shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,8 +18,49 @@ pub struct VariantRow {
     pub name: String,
     /// Its values in the unit of the project, `name = value` separated by commas.
     pub values: String,
-    /// The variables it names that the project does not have.
+    /// The steps it switches off and on, in words; empty when it leaves them all as they are.
+    pub steps: String,
+    /// The variables and the steps it names that the project does not have.
     pub missing: Vec<String>,
+    /// Whether the project is in this variant now: every value and every step it holds is the one
+    /// of the project.
+    pub current: bool,
+}
+
+/// A step of the recipe as the variants name it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VariantStepRow {
+    /// Its place in the recipe, from 1.
+    pub number: usize,
+    /// Its key, which stays the same when steps are added or removed.
+    pub key: String,
+    /// The name shown to people.
+    pub label: String,
+    /// Whether it is suppressed in the project now.
+    pub suppressed: bool,
+}
+
+/// What a variant does with a step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepChoice {
+    /// The step is switched off.
+    Off,
+    /// The step is switched on.
+    On,
+    /// The variant leaves the step as it is.
+    Keep,
+}
+
+impl StepChoice {
+    /// The choice with this word (`off`, `on` or `keep`).
+    pub fn from_word(word: &str) -> Option<StepChoice> {
+        match word {
+            "off" => Some(StepChoice::Off),
+            "on" => Some(StepChoice::On),
+            "keep" => Some(StepChoice::Keep),
+            _ => None,
+        }
+    }
 }
 
 /// What a variant gives when the box is built with it.
@@ -43,10 +85,221 @@ pub struct VariantFile {
     pub bytes: usize,
 }
 
+/// The cells of one line of a table: separated by `separator`, a cell may be quoted and a quote
+/// inside it is written twice.
+fn cells(line: &str, separator: char) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cell = String::new();
+    let mut quoted = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' if quoted && chars.peek() == Some(&'"') => {
+                cell.push('"');
+                chars.next();
+            }
+            '"' if quoted => quoted = false,
+            '"' if cell.trim().is_empty() => {
+                cell.clear();
+                quoted = true;
+            }
+            c if c == separator && !quoted => out.push(std::mem::take(&mut cell)),
+            c => cell.push(c),
+        }
+    }
+    out.push(cell);
+    out.iter().map(|c| c.trim().to_string()).collect()
+}
+
+fn quoted(text: &str) -> String {
+    if text.contains([',', ';', '"', '\n']) {
+        format!("\"{}\"", text.replace('"', "\"\""))
+    } else {
+        text.to_string()
+    }
+}
+
+/// The largest table of variants that is read, in bytes.
+const MAX_TABLE_BYTES: u64 = 1 << 20;
+
 impl Window {
+    /// What each variant gives, as comma separated values: the outer and inner sizes in mm, the
+    /// volume of the material in mm3, the steps the model refuses and, with a board, whether it
+    /// fits. A variant that cannot be built says why in the last column. The project does not
+    /// change.
+    pub fn variant_figures_csv(&self) -> String {
+        let mut out = "variant,outer_x_mm,outer_y_mm,outer_z_mm,inner_x_mm,inner_y_mm,\
+                       inner_z_mm,material_mm3,refused_steps,fits_board,error\n"
+            .to_string();
+        for name in self.mech.variants.names() {
+            let row = match self.variant_window(name) {
+                Err(e) => format!("{name},,,,,,,,,,{}", quoted(&error_text(&e, self.lang))),
+                Ok(copy) => {
+                    let info = &copy.info;
+                    let sizes: Vec<String> = info
+                        .outer
+                        .iter()
+                        .chain(&info.inner)
+                        .map(|l| mm_text(l.get()))
+                        .collect();
+                    let fits = match (info.fit_from_board, info.fit.fits || info.fit.fits_turned) {
+                        (false, _) => "",
+                        (true, true) => "yes",
+                        (true, false) => "no",
+                    };
+                    format!(
+                        "{name},{},{},{},{fits},",
+                        sizes.join(","),
+                        catalog::volume_mm3_text(info.material_nm3),
+                        info.failed
+                    )
+                }
+            };
+            out.push_str(&row);
+            out.push('\n');
+        }
+        out
+    }
+
+    /// The variants as a table to be edited in a spreadsheet: a column for each variable that a
+    /// variant holds, a line for each variant, each value in mm exactly and an empty cell where
+    /// the variant leaves the variable alone. The steps a variant switches are not in the table.
+    pub fn variant_grid_csv(&self) -> String {
+        let set = &self.mech.variants;
+        let columns: std::collections::BTreeSet<&String> = set
+            .names()
+            .into_iter()
+            .filter_map(|n| set.values(n).ok())
+            .flat_map(|values| values.keys())
+            .collect();
+        let mut out = "variant".to_string();
+        for column in &columns {
+            out.push(',');
+            out.push_str(column);
+        }
+        out.push('\n');
+        for name in set.names() {
+            out.push_str(name);
+            let values = set.values(name).ok();
+            for column in &columns {
+                out.push(',');
+                if let Some(value) = values.and_then(|v| v.get(*column)) {
+                    out.push_str(&format!("{} mm", mm_text(value.get())));
+                }
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Reads a table such as [`Window::variant_grid_csv`] writes (separated by commas or, when
+    /// the first line has one, semicolons): each line gives the values of one variant, lengths or
+    /// formulas; the variants it does not name stay and the steps a variant switches are kept. All
+    /// of it is one change of the history, or none of it: a column that is not a variable of the
+    /// project, a repeated variant, a line with nothing to keep or a value that is not understood
+    /// refuse the whole table.
+    pub fn import_variant_grid(&mut self, text: &str) -> bool {
+        if self.read_only_refusal() {
+            return false;
+        }
+        let result = self.variant_grid_change(text);
+        self.variant_done(result)
+    }
+
+    fn variant_grid_change(&mut self, text: &str) -> Result<(), CadError> {
+        let bad = |why: String| CadError::Format(format!("table of variants: {why}"));
+        let mut lines = text
+            .trim_start_matches('\u{feff}')
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| !l.trim().is_empty());
+        let (_, header) = lines.next().ok_or_else(|| bad("it is empty".to_string()))?;
+        let separator = if header.contains(';') { ';' } else { ',' };
+        let columns = cells(header, separator);
+        if columns.first().map(String::as_str) != Some("variant") || columns.len() < 2 {
+            return Err(bad(
+                "the first line is variant and the variables".to_string()
+            ));
+        }
+        for (i, column) in columns.iter().enumerate().skip(1) {
+            self.mech.vars.require(column)?;
+            if columns[..i].contains(column) {
+                return Err(CadError::Duplicate(column.clone()));
+            }
+        }
+        let mut next = self.mech.clone();
+        let mut seen = std::collections::BTreeSet::new();
+        for (number, line) in lines {
+            let row = cells(line, separator);
+            if row.len() > columns.len() {
+                return Err(bad(format!("line {} has too many cells", number + 1)));
+            }
+            let name = row.first().cloned().unwrap_or_default();
+            if !seen.insert(name.clone()) {
+                return Err(CadError::Duplicate(name));
+            }
+            let mut values = std::collections::BTreeMap::new();
+            for (column, cell) in columns.iter().zip(&row).skip(1) {
+                if !cell.is_empty() {
+                    values.insert(column.clone(), self.variable_value(cell)?);
+                }
+            }
+            next.variants.put(&name, values, &self.settings.variants)?;
+        }
+        if seen.is_empty() {
+            return Err(bad("it has no variant".to_string()));
+        }
+        let count = seen.len().to_string();
+        let title = fill(Msg::VariantsImported.tr(self.lang), &[&count]);
+        let done = Status::Done(Msg::VariantsImported, vec![count]);
+        self.variant_store(&title, done, next)
+    }
+
+    /// [`Window::import_variant_grid`] of a file.
+    pub fn read_variant_grid(&mut self, path: &Path) -> bool {
+        match store::load_limited(path, MAX_TABLE_BYTES) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(text) => self.import_variant_grid(&text),
+                Err(_) => {
+                    self.status =
+                        Status::Error(CadError::Format("table of variants: not text".to_string()));
+                    false
+                }
+            },
+            Err(e) => {
+                self.status = Status::Error(e);
+                false
+            }
+        }
+    }
+
+    /// Writes [`Window::variant_grid_csv`] to a file, never over one that exists unless
+    /// `overwrite` is true.
+    pub fn write_variant_grid(&mut self, path: &Path, overwrite: bool) -> bool {
+        let written = export::write_bytes(
+            path,
+            self.variant_grid_csv().as_bytes(),
+            overwrite,
+            self.path.as_deref(),
+            self.ui.export.max_kib,
+        );
+        match written {
+            Ok(_) => {
+                self.status =
+                    Status::Done(Msg::VariantGridWritten, vec![path.display().to_string()]);
+                true
+            }
+            Err(e) => {
+                self.status = Status::Error(e);
+                false
+            }
+        }
+    }
+
     /// The variants of the project, in the order of their names.
     pub fn variant_rows(&self) -> Vec<VariantRow> {
         let set = &self.mech.variants;
+        let steps = self.variant_step_rows();
         set.names()
             .into_iter()
             .filter_map(|name| {
@@ -55,17 +308,143 @@ impl Window {
                     .iter()
                     .map(|(variable, value)| format!("{variable} = {}", self.unit_text(*value)))
                     .collect();
+                let mut missing: Vec<String> = values
+                    .keys()
+                    .filter(|v| self.mech.vars.get(v).is_none())
+                    .cloned()
+                    .collect();
+                let mut off = Vec::new();
+                let mut on = Vec::new();
+                let mut current = values
+                    .iter()
+                    .all(|(v, value)| self.mech.vars.get(v) == Some(*value));
+                for (key, suppressed) in set.steps_of(name) {
+                    let Some(step) = steps.iter().find(|s| s.key == *key) else {
+                        missing.push(key.clone());
+                        current = false;
+                        continue;
+                    };
+                    current &= step.suppressed == *suppressed;
+                    let label = format!("{} {}", step.number, step.label);
+                    if *suppressed {
+                        off.push(label);
+                    } else {
+                        on.push(label);
+                    }
+                }
+                let mut words = Vec::new();
+                for (msg, list) in [(Msg::VariantStepsOff, off), (Msg::VariantStepsOn, on)] {
+                    if !list.is_empty() {
+                        words.push(fill(msg.tr(self.lang), &[&list.join(", ")]));
+                    }
+                }
                 Some(VariantRow {
                     name: name.to_string(),
                     values: text.join(", "),
-                    missing: values
-                        .keys()
-                        .filter(|v| self.mech.vars.get(v).is_none())
-                        .cloned()
-                        .collect(),
+                    steps: words.join("; "),
+                    current: current && missing.is_empty(),
+                    missing,
                 })
             })
             .collect()
+    }
+
+    /// The steps of the recipe with the keys the variants use for them.
+    pub fn variant_step_rows(&self) -> Vec<VariantStepRow> {
+        step_keys(&self.mech.steps, &self.settings.mechanical)
+            .into_iter()
+            .zip(&self.mech.steps)
+            .enumerate()
+            .map(|(i, (key, step))| VariantStepRow {
+                number: i + 1,
+                key,
+                label: step_label(step),
+                suppressed: step.suppressed,
+            })
+            .collect()
+    }
+
+    /// Says what the variant `name` does with a step, making the variant when there is none.
+    /// `which` is the number of the step from 1, its key or its name when only one step has it. A
+    /// step that is not there is refused with `PHOENIX-CAD-014` and a name that several steps
+    /// have with `PHOENIX-CAD-015`; nothing changes then.
+    pub fn set_variant_step(&mut self, name: &str, which: &str, choice: StepChoice) -> bool {
+        if self.read_only_refusal() {
+            return false;
+        }
+        let result = self.variant_step_change(name.trim(), which.trim(), choice);
+        self.variant_done(result)
+    }
+
+    fn variant_step_change(
+        &mut self,
+        name: &str,
+        which: &str,
+        choice: StepChoice,
+    ) -> Result<(), CadError> {
+        let rows = self.variant_step_rows();
+        let unknown = || CadError::UnknownName(which.to_string());
+        let by_number = which
+            .parse::<usize>()
+            .ok()
+            .and_then(|n| rows.iter().find(|r| r.number == n));
+        let (key, label) = match by_number.or_else(|| rows.iter().find(|r| r.key == which)) {
+            Some(row) => (row.key.clone(), row.label.clone()),
+            None => {
+                let named: Vec<&VariantStepRow> =
+                    rows.iter().filter(|r| r.label == which).collect();
+                match named.as_slice() {
+                    [one] => (one.key.clone(), one.label.clone()),
+                    // a step that is gone can still be taken out of a variant by its key
+                    [] if choice == StepChoice::Keep => (which.to_string(), which.to_string()),
+                    [] => return Err(unknown()),
+                    _ => return Err(CadError::Duplicate(which.to_string())),
+                }
+            }
+        };
+        let off = match choice {
+            StepChoice::Off => Some(true),
+            StepChoice::On => Some(false),
+            StepChoice::Keep => None,
+        };
+        let mut next = self.mech.clone();
+        next.variants
+            .set_step(name, &key, off, &self.settings.variants)?;
+        let msg = match choice {
+            StepChoice::Off => Msg::VariantStepOff,
+            StepChoice::On => Msg::VariantStepOn,
+            StepChoice::Keep => Msg::VariantStepKeep,
+        };
+        let shown = vec![name.to_string(), label];
+        let title = fill(msg.tr(self.lang), &[&shown[0], &shown[1]]);
+        self.variant_store(&title, Status::Done(msg, shown), next)
+    }
+
+    /// The recipe of the project with a variant written over it: its values in the variables and
+    /// its steps switched off or on. A variable or a step that the project does not have is
+    /// refused with `PHOENIX-CAD-014`, and a different value for a variable that follows a drawing
+    /// with `PHOENIX-CAD-016`.
+    fn variant_recipe(&self, name: &str) -> Result<Mechanical, CadError> {
+        let mut next = self.mech.clone();
+        next.vars = self.mech.variants.variables_for(name, &self.mech.vars)?;
+        if let Some(followed) = self
+            .mech
+            .links
+            .keys()
+            .find(|v| next.vars.get(v) != self.mech.vars.get(v))
+        {
+            return Err(CadError::InUse(followed.clone()));
+        }
+        let keys = step_keys(&self.mech.steps, &self.settings.mechanical);
+        for (key, suppressed) in self.mech.variants.steps_of(name) {
+            let step = keys
+                .iter()
+                .position(|k| k == key)
+                .and_then(|i| next.steps.get_mut(i))
+                .ok_or_else(|| CadError::UnknownName(key.clone()))?;
+            step.suppressed = *suppressed;
+        }
+        Ok(next)
     }
 
     /// Keeps the current values of the variables as the variant `name`, replacing the one of that
@@ -183,8 +562,7 @@ impl Window {
     }
 
     fn variant_application(&mut self, name: &str) -> Result<(), CadError> {
-        let mut next = self.mech.clone();
-        next.vars = self.mech.variants.variables_for(name, &self.mech.vars)?;
+        let next = self.variant_recipe(name)?;
         let title = fill(Msg::VariantApplied.tr(self.lang), &[name]);
         let done = Status::Done(Msg::VariantApplied, vec![name.to_string()]);
         self.variant_store(&title, done, next)
@@ -199,9 +577,9 @@ impl Window {
     /// A copy of the window with the values of a variant, built. The copy has no history and
     /// names the file `<project>-<variant>`, which is what the titles of its drawings say.
     pub fn variant_window(&self, name: &str) -> Result<Window, CadError> {
-        let vars = self.mech.variants.variables_for(name, &self.mech.vars)?;
+        let recipe = self.variant_recipe(name)?;
         let mut copy = self.clone();
-        copy.mech.vars = vars;
+        copy.mech = recipe;
         copy.built = copy.rebuild(&copy.mech)?;
         copy.history.clear();
         copy.drag = None;
@@ -522,6 +900,162 @@ mod tests {
             assert!(w.open(&path));
             assert!(w.mech.variants.is_empty());
         }
+    }
+
+    /// `family` with two fins on a wall as its only step.
+    fn finned() -> Window {
+        let mut w = family();
+        w.add_step(super::super::NewStep::Fins);
+        assert_eq!(w.mech.steps.len(), 1, "{:?}", w.status);
+        w
+    }
+
+    #[test]
+    fn a_variant_switches_steps_off_and_on_and_says_when_it_is_the_current_one() {
+        let mut w = finned();
+        assert!(w.variant_rows().iter().all(|r| r.steps.is_empty()));
+        assert!(
+            w.set_variant_step("small", "1", StepChoice::Off),
+            "{:?}",
+            w.status
+        );
+        let label = w.variant_step_rows()[0].label.clone();
+        let row = |w: &Window, name: &str| {
+            w.variant_rows()
+                .into_iter()
+                .find(|r| r.name == name)
+                .unwrap()
+        };
+        assert!(row(&w, "small").steps.contains(&label));
+        assert!(!row(&w, "small").current);
+        let with = w.export_bytes(Format::Script).unwrap();
+        // the variant built has not the step, and the project still has it
+        let small = w.variant_window("small").unwrap();
+        assert!(small.mech.steps[0].suppressed);
+        assert_ne!(small.export_bytes(Format::Script).unwrap(), with);
+        assert!(!w.mech.steps[0].suppressed);
+        assert!(w.apply_variant("small"));
+        assert!(w.mech.steps[0].suppressed);
+        assert!(row(&w, "small").current);
+        assert!(!row(&w, "large").current);
+        w.undo();
+        assert!(!w.mech.steps[0].suppressed);
+        // a variant that switches it on brings it back
+        assert!(w.set_variant_step("large", &label, StepChoice::On));
+        assert!(w.apply_variant("small") && w.apply_variant("large"));
+        assert!(!w.mech.steps[0].suppressed);
+        // what is not a step is refused, and a step that is gone is told and can be taken out
+        let before = w.mech.clone();
+        assert!(!w.set_variant_step("small", "7", StepChoice::Off));
+        assert!(!w.set_variant_step("small", "no step", StepChoice::On));
+        assert_eq!(w.mech, before);
+        let key = w.variant_step_rows()[0].key.clone();
+        w.mech.steps.clear();
+        w.mech.tip = 0;
+        assert_eq!(row(&w, "small").missing, vec![key.clone()]);
+        assert!(!w.apply_variant("small"));
+        assert!(w.status.text(Lang::En).contains("PHOENIX-CAD-014"));
+        assert!(w.set_variant_step("small", &key, StepChoice::Keep));
+        assert!(row(&w, "small").missing.is_empty());
+        assert_eq!(StepChoice::from_word("off"), Some(StepChoice::Off));
+        assert_eq!(StepChoice::from_word("maybe"), None);
+    }
+
+    #[test]
+    fn the_steps_of_the_variants_are_saved_with_the_project() {
+        let folder = Folder::new("steps");
+        let path = folder.0.join("family.phoenixproj");
+        let mut w = finned();
+        assert!(w.set_variant_step("bare", "1", StepChoice::Off));
+        assert!(w.save_to(&path), "{:?}", w.status);
+        let mut again =
+            Window::new(Lang::En, Settings::defaults(), UiSettings::defaults()).unwrap();
+        assert!(again.open(&path), "{:?}", again.status);
+        assert!(!again.read_only);
+        assert_eq!(again.mech.variants, w.mech.variants);
+        assert_eq!(
+            again.variant_step_rows()[0].key,
+            w.variant_step_rows()[0].key
+        );
+        assert!(again.apply_variant("bare"));
+        assert!(again.mech.steps[0].suppressed);
+    }
+
+    #[test]
+    fn the_figures_say_what_each_variant_gives() {
+        let mut w = family();
+        let csv = w.variant_figures_csv();
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(lines.len(), 3);
+        let column = |line: &str, i: usize| line.split(',').nth(i).unwrap().to_string();
+        assert!(lines[0].starts_with("variant,outer_x_mm"));
+        assert_eq!(column(lines[1], 0), "large");
+        // the inner width is the value of the variant and the larger box takes more material
+        assert_eq!(column(lines[1], 5), "90");
+        assert_eq!(column(lines[2], 5), "60");
+        let volume = |i: usize| column(lines[i], 7).parse::<f64>().unwrap();
+        assert!(volume(1) > volume(2), "{csv}");
+        assert_eq!(
+            (column(lines[1], 8), column(lines[1], 9)),
+            ("0".into(), "".into())
+        );
+        assert!(lines.iter().all(|l| l.split(',').count() == 11), "{csv}");
+        assert!(w.set_variant_value("large", "width", "-5 mm"));
+        let csv = w.variant_figures_csv();
+        assert!(
+            csv.lines().nth(1).unwrap().contains("PHOENIX-CAD-"),
+            "{csv}"
+        );
+    }
+
+    #[test]
+    fn the_table_of_the_variants_goes_to_a_spreadsheet_and_comes_back() {
+        let mut w = family();
+        w.add_variable("depth", "2.5 mm");
+        assert!(w.set_variant_value("small", "depth", "3.000001 mm"));
+        let table = w.variant_grid_csv();
+        assert_eq!(
+            table,
+            "variant,depth,width\nlarge,,90 mm\nsmall,3.000001 mm,60 mm\n"
+        );
+        let before = w.mech.clone();
+        assert!(w.import_variant_grid(&table), "{:?}", w.status);
+        assert_eq!(w.mech, before);
+        // semicolons, quotes, formulas, a new variant, and one change of the history
+        let entries = w.undo_names().len();
+        let edited = "\u{feff}variant;width\r\nsmall;\"61 mm\"\r\n\r\nmedium;depth * 30\r\n";
+        assert!(w.import_variant_grid(edited), "{:?}", w.status);
+        assert_eq!(w.undo_names().len(), entries + 1);
+        assert_eq!(w.mech.variants.values("small").unwrap().len(), 1);
+        assert_eq!(w.mech.variants.values("small").unwrap()["width"], mm(61));
+        assert_eq!(w.mech.variants.values("medium").unwrap()["width"], mm(75));
+        assert_eq!(w.mech.variants.values("large").unwrap()["width"], mm(90));
+        // all or none
+        let before = w.mech.clone();
+        for table in [
+            "",
+            "variant\nsmall\n",
+            "name,width\nsmall,1\n",
+            "variant,height\nsmall,1\n",
+            "variant,width,width\nsmall,1,1\n",
+            "variant,width\n",
+            "variant,width\nsmall,61\nsmall,62\n",
+            "variant,width\nsmall,61\nother,wide\n",
+            "variant,width\nnew,\n",
+            "variant,width\nsmall,1,2\n",
+        ] {
+            assert!(!w.import_variant_grid(table), "{table:?}");
+            assert_eq!(w.mech, before, "{table:?}");
+        }
+        let folder = Folder::new("grid");
+        let path = folder.0.join("family.csv");
+        assert!(w.write_variant_grid(&path, false), "{:?}", w.status);
+        assert!(!w.write_variant_grid(&path, false));
+        assert!(w.write_variant_grid(&path, true));
+        assert!(w.read_variant_grid(&path), "{:?}", w.status);
+        assert!(!w.read_variant_grid(&folder.0.join("none.csv")));
+        w.read_only = true;
+        assert!(!w.import_variant_grid(&table));
     }
 
     #[test]

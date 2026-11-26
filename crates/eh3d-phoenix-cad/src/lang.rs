@@ -4,6 +4,8 @@
 //! The diagnostics of the library have their own texts in [`crate::messages`]; these are the
 //! words of the window itself. Every sentence has a text in each language, and a test checks it.
 
+use eh3d_project::suitetext::S;
+
 /// The languages of the window, in the order the lists of words below follow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lang {
@@ -101,18 +103,20 @@ pub fn fill(template: &str, values: &[&str]) -> String {
 
 /// Declares every sentence once, with its eight texts in the order of [`Lang::ALL`].
 macro_rules! messages {
-    ($($name:ident => [$en:expr, $es:expr, $de:expr, $fr:expr, $it:expr, $ja:expr, $zh:expr, $pt:expr],)*) => {
+    (shared { $($alias:ident => $word:ident,)* }
+     $($name:ident => [$en:expr, $es:expr, $de:expr, $fr:expr, $it:expr, $ja:expr, $zh:expr, $pt:expr],)*) => {
         /// Every word and sentence of the window.
         #[allow(missing_docs)]
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum Msg {
             $($name,)*
+            $($alias,)*
         }
 
         impl Msg {
             /// Every sentence, once.
             pub fn all() -> &'static [Msg] {
-                &[$(Msg::$name,)*]
+                &[$(Msg::$name,)* $(Msg::$alias,)*]
             }
 
             /// The words in the order English, Spanish, German, French, Italian, Japanese,
@@ -120,6 +124,8 @@ macro_rules! messages {
             fn words(self) -> [&'static str; 8] {
                 match self {
                     $(Msg::$name => [$en, $es, $de, $fr, $it, $ja, $zh, $pt],)*
+                    // the words that every program of the suite says alike
+                    $(Msg::$alias => S::$word.words(),)*
                 }
             }
         }
@@ -127,6 +133,24 @@ macro_rules! messages {
 }
 
 messages! {
+    shared {
+        SuiteMenu => Menu,
+        SuiteMenuOpen => MenuOpen,
+        SuiteMenuSave => MenuSave,
+        SuiteMenuSaveAs => MenuSaveAs,
+        SuiteMenuImport => MenuImport,
+        SuiteMenuBranches => MenuBranches,
+        SuiteColBranch => ColBranch,
+        SuiteColApp => ColApp,
+        SuiteColFormat => ColFormat,
+        SuiteColFiles => ColFiles,
+        SuiteColState => ColState,
+        SuiteStateCurrent => StateCurrent,
+        SuiteStateStale => StateStale,
+        SuiteStateSigned => StateSigned,
+        SuiteStateSealed => StateSealed,
+        SuiteStateEncrypted => StateEncrypted,
+    }
     New => ["New", "Nuevo", "Neu", "Nouveau", "Nuovo", "新規", "新建", "Novo"],
     Open => ["Open...", "Abrir...", "Öffnen...", "Ouvrir...", "Apri...", "開く...", "打开...", "Abrir..."],
     Save => ["Save", "Guardar", "Speichern", "Enregistrer", "Salva", "保存", "保存", "Guardar"],
@@ -971,12 +995,6 @@ messages! {
     ParamStep => ["{0}: not on its step", "{0}: no cae en su paso", "{0}: nicht auf der Schrittweite", "{0} : hors de son pas", "{0}: non rispetta il passo", "{0}：刻み幅に合っていません", "{0}：不符合步长", "{0}: fora do seu passo"],
     SelectNone => ["Nothing is selected", "No se selecciona nada", "Nichts ausgewählt", "Rien n'est sélectionné", "Niente è selezionato", "該当する要素はありません", "没有选中任何对象", "Nada está selecionado"],
     PanelsWrote => ["Wrote {0}: six faces on {1} x {2} mm", "Escrito {0}: seis caras en {1} x {2} mm", "{0} geschrieben: sechs Flächen auf {1} x {2} mm", "{0} écrit : six faces sur {1} x {2} mm", "Scritto {0}: sei facce su {1} x {2} mm", "{0} を書き出しました：6 面、{1} x {2} mm", "已写出 {0}：六个面，{1} x {2} mm", "Escrito {0}: seis faces em {1} x {2} mm"],
-    SuiteMenu => ["Suite project (.eh3d)", "Proyecto de la suite (.eh3d)", "Suite-Projekt (.eh3d)", "Projet de la suite (.eh3d)", "Progetto della suite (.eh3d)", "スイートプロジェクト (.eh3d)", "套件项目 (.eh3d)", "Projeto da suite (.eh3d)"],
-    SuiteMenuOpen => ["Open suite project...", "Abrir proyecto de la suite...", "Suite-Projekt öffnen...", "Ouvrir un projet de la suite...", "Apri progetto della suite...", "スイートプロジェクトを開く...", "打开套件项目...", "Abrir projeto da suite..."],
-    SuiteMenuSave => ["Save suite project", "Guardar proyecto de la suite", "Suite-Projekt speichern", "Enregistrer le projet de la suite", "Salva progetto della suite", "スイートプロジェクトを保存", "保存套件项目", "Guardar projeto da suite"],
-    SuiteMenuSaveAs => ["Save suite project as...", "Guardar proyecto de la suite como...", "Suite-Projekt speichern unter...", "Enregistrer le projet de la suite sous...", "Salva progetto della suite con nome...", "スイートプロジェクトに名前を付けて保存...", "套件项目另存为...", "Guardar projeto da suite como..."],
-    SuiteMenuImport => ["Import a file and keep the original...", "Importar un fichero y guardar el original...", "Datei importieren und Original behalten...", "Importer un fichier et garder l'original...", "Importa un file e conserva l'originale...", "ファイルを取り込み原本を保持...", "导入文件并保留原件...", "Importar um ficheiro e guardar o original..."],
-    SuiteMenuBranches => ["Branches of the project...", "Ramas del proyecto...", "Zweige des Projekts...", "Branches du projet...", "Rami del progetto...", "プロジェクトのブランチ...", "项目分支...", "Ramos do projeto..."],
     SuiteMenuBoard => ["Take the board from the branch pcb", "Tomar la placa de la rama pcb", "Platine aus dem Zweig pcb übernehmen", "Prendre la carte de la branche pcb", "Prendi la scheda dal ramo pcb", "pcb ブランチから基板を取り込む", "从 pcb 分支导入电路板", "Importar a placa do ramo pcb"],
     SuiteOpenTitle => ["Open a suite project", "Abrir un proyecto de la suite", "Ein Suite-Projekt öffnen", "Ouvrir un projet de la suite", "Apri un progetto della suite", "スイートプロジェクトを開く", "打开套件项目", "Abrir um projeto da suite"],
     SuiteSaveTitle => ["Save a suite project", "Guardar un proyecto de la suite", "Ein Suite-Projekt speichern", "Enregistrer un projet de la suite", "Salva un progetto della suite", "スイートプロジェクトを保存する", "保存套件项目", "Guardar um projeto da suite"],
@@ -985,21 +1003,8 @@ messages! {
     SuiteNoCad => ["{0} has no box yet: this is a new one, saved into it", "{0} todavía no tiene caja: esta es nueva y se guarda en él", "{0} hat noch kein Gehäuse: dies ist ein neues, das darin gespeichert wird", "{0} n'a pas encore de boîtier : celui-ci est nouveau et sera enregistré dedans", "{0} non ha ancora un contenitore: questo è nuovo e viene salvato lì", "{0} にはまだ筐体がありません。新しい筐体をこの中に保存します", "{0} 中还没有外壳：这是一个新外壳，将保存到其中", "{0} ainda não tem caixa: esta é nova e é guardada nele"],
     SuiteSaveFirst => ["Save the changes first: this works on the file as it was saved", "Guarda antes los cambios: esto trabaja con el fichero tal como se guardó", "Bitte zuerst speichern: dies arbeitet mit der Datei, wie sie gespeichert wurde", "Enregistrez d'abord : ceci travaille sur le fichier tel qu'il a été enregistré", "Salva prima le modifiche: l'operazione lavora sul file come è stato salvato", "先に変更を保存してください。保存済みのファイルを対象に処理します", "请先保存更改：此操作处理的是已保存的文件", "Guarde primeiro as alterações: isto trabalha com o ficheiro tal como foi guardado"],
     SuiteNeedFile => ["Save the project as a .eh3d file first", "Guarda antes el proyecto como fichero .eh3d", "Bitte das Projekt zuerst als .eh3d-Datei speichern", "Enregistrez d'abord le projet dans un fichier .eh3d", "Salva prima il progetto come file .eh3d", "先にプロジェクトを .eh3d ファイルとして保存してください", "请先将项目保存为 .eh3d 文件", "Guarde primeiro o projeto como ficheiro .eh3d"],
-    SuiteColBranch => ["Branch", "Rama", "Zweig", "Branche", "Ramo", "ブランチ", "分支", "Ramo"],
-    SuiteColApp => ["Program", "Programa", "Programm", "Programme", "Programma", "プログラム", "程序", "Programa"],
-    SuiteColFormat => ["Format", "Formato", "Format", "Format", "Formato", "形式", "格式", "Formato"],
-    SuiteColFiles => ["Files", "Ficheros", "Dateien", "Fichiers", "File", "ファイル", "文件", "Ficheiros"],
-    SuiteColState => ["State", "Estado", "Stand", "État", "Stato", "状態", "状态", "Estado"],
-    SuiteStateCurrent => ["current", "actual", "aktuell", "à jour", "attuale", "最新", "最新", "atual"],
-    SuiteStateStale => ["out of date: {0} has changed", "desactualizada: {0} ha cambiado", "veraltet: {0} hat sich geändert", "périmée : {0} a changé", "non aggiornato: {0} è cambiato", "古い状態：{0} が変更されました", "已过期：{0} 已更改", "desatualizado: {0} mudou"],
-    SuiteStateSigned => ["signed (not checked)", "firmada (sin comprobar)", "signiert (nicht geprüft)", "signée (non vérifiée)", "firmato (non verificato)", "署名あり（未検証）", "已签名（未校验）", "assinado (não verificado)"],
-    SuiteStateSealed => ["sealed", "sellada", "versiegelt", "scellée", "sigillato", "封印済み", "已封存", "selado"],
-    SuiteStateEncrypted => ["encrypted", "cifrada", "verschlüsselt", "chiffrée", "cifrato", "暗号化", "已加密", "cifrado"],
     SuiteRefresh => ["Read again", "Volver a leer", "Neu lesen", "Relire", "Rileggi", "再読み込み", "重新读取", "Ler novamente"],
     SuiteRecent => ["Recent suite projects", "Proyectos de la suite recientes", "Zuletzt benutzte Suite-Projekte", "Projets de la suite récents", "Progetti della suite recenti", "最近のスイートプロジェクト", "最近的套件项目", "Projetos da suite recentes"],
-    SuiteOriginal => ["Original kept: {0} ({1} bytes)", "Original guardado: {0} ({1} bytes)", "Original aufbewahrt: {0} ({1} Bytes)", "Original conservé : {0} ({1} octets)", "Originale conservato: {0} ({1} byte)", "保持している原本：{0}（{1} バイト）", "已保留原件：{0}（{1} 字节）", "Original guardado: {0} ({1} bytes)"],
-    SuiteReportRead => ["Read: {0}", "Leído: {0}", "Gelesen: {0}", "Lu : {0}", "Letto: {0}", "読み込んだ内容：{0}", "已读取：{0}", "Lido: {0}"],
-    SuiteReportNotRead => ["Not read: {0}", "No leído: {0}", "Nicht gelesen: {0}", "Non lu : {0}", "Non letto: {0}", "読み込めなかった内容：{0}", "未读取：{0}", "Não lido: {0}"],
     SuiteFindings => ["Findings of the checks: {0}", "Avisos de las comprobaciones: {0}", "Befunde der Prüfungen: {0}", "Constats des contrôles : {0}", "Segnalazioni dei controlli: {0}", "検査の指摘：{0} 件", "检查发现：{0} 条", "Avisos das verificações: {0}"],
     SuiteMenuCheck => ["Check the fit with the board", "Comprobar el ajuste con la placa", "Passung zur Platine prüfen", "Vérifier l'ajustement avec la carte", "Controlla l'adattamento alla scheda", "基板との適合を確認", "检查与电路板的配合", "Verificar o ajuste com a placa"],
     SuiteMenuOpenings => ["Cut the openings of the connectors", "Abrir los huecos de los conectores", "Öffnungen der Steckverbinder ausschneiden", "Découper les ouvertures des connecteurs", "Ritaglia le aperture dei connettori", "コネクタの開口を作成", "开出连接器开口", "Abrir as aberturas dos conectores"],
@@ -1023,6 +1028,32 @@ messages! {
     VariantMissing => ["missing variables: {0}", "variables que faltan: {0}", "fehlende Variablen: {0}", "variables manquantes : {0}", "variabili mancanti: {0}", "存在しない変数：{0}", "缺少的变量：{0}", "variáveis em falta: {0}"],
     VariantFailed => ["Variant {0}: {1}", "Variante {0}: {1}", "Variante {0}: {1}", "Variante {0} : {1}", "Variante {0}: {1}", "バリアント {0}：{1}", "变体 {0}：{1}", "Variante {0}: {1}"],
     ChangeVariant => ["variant {0}", "variante {0}", "Variante {0}", "variante {0}", "variante {0}", "バリアント {0}", "变体 {0}", "variante {0}"],
+    VariantStepOff => ["Variant {0}: {1} is switched off", "Variante {0}: {1} queda desactivado", "Variante {0}: {1} wird abgeschaltet", "Variante {0} : {1} est désactivé", "Variante {0}: {1} è disattivato", "バリアント {0}：{1} を無効にします", "变体 {0}：{1} 已停用", "Variante {0}: {1} fica desativado"],
+    VariantStepOn => ["Variant {0}: {1} is switched on", "Variante {0}: {1} queda activado", "Variante {0}: {1} wird eingeschaltet", "Variante {0} : {1} est activé", "Variante {0}: {1} è attivato", "バリアント {0}：{1} を有効にします", "变体 {0}：{1} 已启用", "Variante {0}: {1} fica ativado"],
+    VariantStepKeep => ["Variant {0}: {1} is left as it is", "Variante {0}: {1} se deja como esté", "Variante {0}: {1} bleibt, wie es ist", "Variante {0} : {1} reste tel quel", "Variante {0}: {1} resta com'è", "バリアント {0}：{1} は変更しません", "变体 {0}：{1} 保持原状", "Variante {0}: {1} fica como está"],
+    VariantStepsOff => ["off: {0}", "desactivados: {0}", "aus: {0}", "désactivés : {0}", "disattivati: {0}", "無効：{0}", "停用：{0}", "desativados: {0}"],
+    VariantStepsOn => ["on: {0}", "activados: {0}", "ein: {0}", "activés : {0}", "attivati: {0}", "有効：{0}", "启用：{0}", "ativados: {0}"],
+    VariantCurrent => ["as the project is now", "como está ahora el proyecto", "wie das Projekt jetzt ist", "comme le projet maintenant", "come il progetto ora", "現在のプロジェクトと同じ", "与当前项目一致", "como o projeto está agora"],
+    VariantStepField => ["Step (number or name)", "Paso (número o nombre)", "Schritt (Nummer oder Name)", "Étape (numéro ou nom)", "Passo (numero o nome)", "ステップ（番号または名前）", "步骤（编号或名称）", "Passo (número ou nome)"],
+    VariantStepOffButton => ["Switch the step off", "Desactivar el paso", "Schritt abschalten", "Désactiver l'étape", "Disattiva il passo", "ステップを無効にする", "停用步骤", "Desativar o passo"],
+    VariantStepOnButton => ["Switch the step on", "Activar el paso", "Schritt einschalten", "Activer l'étape", "Attiva il passo", "ステップを有効にする", "启用步骤", "Ativar o passo"],
+    VariantStepKeepButton => ["Leave the step alone", "No tocar el paso", "Schritt unverändert lassen", "Ne pas toucher à l'étape", "Lascia il passo com'è", "ステップを変更しない", "不改动步骤", "Não mexer no passo"],
+    VariantStepsList => ["Steps of the box", "Pasos de la caja", "Schritte des Gehäuses", "Étapes du boîtier", "Passi della scatola", "ケースのステップ", "盒体步骤", "Passos da caixa"],
+    VariantFiguresButton => ["Figures of all variants", "Cifras de todas las variantes", "Kennzahlen aller Varianten", "Chiffres de toutes les variantes", "Cifre di tutte le varianti", "すべてのバリアントの数値", "所有变体的数据", "Valores de todas as variantes"],
+    VariantTableField => ["File of the table (CSV)", "Archivo de la tabla (CSV)", "Datei der Tabelle (CSV)", "Fichier du tableau (CSV)", "File della tabella (CSV)", "表のファイル（CSV）", "表格文件（CSV）", "Ficheiro da tabela (CSV)"],
+    VariantTableWriteButton => ["Write the table", "Escribir la tabla", "Tabelle schreiben", "Écrire le tableau", "Scrivi la tabella", "表を書き出す", "写出表格", "Escrever a tabela"],
+    VariantTableReadButton => ["Read the table", "Leer la tabla", "Tabelle lesen", "Lire le tableau", "Leggi la tabella", "表を読み込む", "读取表格", "Ler a tabela"],
+    VariantsImported => ["{0} variants read from the table", "{0} variantes leídas de la tabla", "{0} Varianten aus der Tabelle gelesen", "{0} variantes lues dans le tableau", "{0} varianti lette dalla tabella", "表から {0} 件のバリアントを読み込みました", "已从表格读取 {0} 个变体", "{0} variantes lidas da tabela"],
+    VariantGridWritten => ["Table of the variants written in {0}", "Tabla de variantes escrita en {0}", "Tabelle der Varianten in {0} geschrieben", "Tableau des variantes écrit dans {0}", "Tabella delle varianti scritta in {0}", "バリアントの表を {0} に書き出しました", "变体表格已写入 {0}", "Tabela das variantes escrita em {0}"],
+    FollowKept => ["{0} follows {1} of the sketch {2}: {3}", "{0} sigue a {1} del boceto {2}: {3}", "{0} folgt {1} der Skizze {2}: {3}", "{0} suit {1} de l'esquisse {2} : {3}", "{0} segue {1} dello schizzo {2}: {3}", "{0} はスケッチ {2} の {1} に追従します：{3}", "{0} 跟随草图 {2} 的 {1}：{3}", "{0} segue {1} do esboço {2}: {3}"],
+    FollowStopped => ["{0} no longer follows the drawing", "{0} deja de seguir al dibujo", "{0} folgt der Zeichnung nicht mehr", "{0} ne suit plus le dessin", "{0} non segue più il disegno", "{0} は図面への追従をやめました", "{0} 不再跟随图形", "{0} deixa de seguir o desenho"],
+    FollowRow => ["follows {0} of the sketch {1}", "sigue a {0} del boceto {1}", "folgt {0} der Skizze {1}", "suit {0} de l'esquisse {1}", "segue {0} dello schizzo {1}", "スケッチ {1} の {0} に追従", "跟随草图 {1} 的 {0}", "segue {0} do esboço {1}"],
+    FollowBroken => ["broken link: {0}", "enlace roto: {0}", "Verknüpfung unterbrochen: {0}", "lien rompu : {0}", "collegamento interrotto: {0}", "リンクが切れています：{0}", "链接已断开：{0}", "ligação quebrada: {0}"],
+    FollowHeading => ["Follow a reference dimension", "Seguir una cota de referencia", "Einem Referenzmaß folgen", "Suivre une cote de référence", "Segui una quota di riferimento", "参照寸法に追従", "跟随参考尺寸", "Seguir uma cota de referência"],
+    FollowSketchField => ["Sketch", "Boceto", "Skizze", "Esquisse", "Schizzo", "スケッチ", "草图", "Esboço"],
+    FollowConstraintField => ["Dimension (like c3)", "Cota (como c3)", "Maß (wie c3)", "Cote (comme c3)", "Quota (come c3)", "寸法（例 c3）", "尺寸（如 c3）", "Cota (como c3)"],
+    FollowButton => ["Follow", "Seguir", "Folgen", "Suivre", "Segui", "追従する", "跟随", "Seguir"],
+    FollowStopButton => ["Stop following", "Dejar de seguir", "Nicht mehr folgen", "Ne plus suivre", "Smetti di seguire", "追従をやめる", "停止跟随", "Deixar de seguir"],
     VariantsMenu => ["Variants", "Variantes", "Varianten", "Variantes", "Varianti", "バリアント", "变体", "Variantes"],
     VariantNameField => ["Name of the variant", "Nombre de la variante", "Name der Variante", "Nom de la variante", "Nome della variante", "バリアント名", "变体名称", "Nome da variante"],
     VariantOnlyField => ["Variables kept (empty: all)", "Variables que guarda (vacío: todas)", "Gespeicherte Variablen (leer: alle)", "Variables gardées (vide : toutes)", "Variabili salvate (vuoto: tutte)", "保存する変数（空欄はすべて）", "保存的变量（留空为全部）", "Variáveis guardadas (vazio: todas)"],

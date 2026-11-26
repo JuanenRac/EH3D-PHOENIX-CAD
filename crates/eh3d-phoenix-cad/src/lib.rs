@@ -120,6 +120,7 @@ pub mod featuredag;
 pub mod fins;
 pub mod fit;
 pub mod flatpanels;
+pub mod follow;
 pub mod glb;
 pub mod graph;
 #[cfg(feature = "gui")]

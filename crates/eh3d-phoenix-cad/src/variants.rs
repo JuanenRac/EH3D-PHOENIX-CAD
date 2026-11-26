@@ -3,16 +3,21 @@
 //! box of the same recipe), kept in the project file in the optional domain [`VARIANTS_DOMAIN`].
 //!
 //! A variant holds a value for some of the variables of the project; the variables it does not name
-//! keep the value they have. Applying a variant writes its values into the sheet of variables, so
+//! keep the value they have. It can also switch steps of the recipe off or on (a small box without
+//! the fins, say), by the keys of [`crate::mechanical::step_keys`]; the steps it does not name
+//! stay as they are. Applying a variant writes its values into the sheet of variables, so
 //! every parameter, step and dimension that follows a variable follows the variant. A variant that
 //! names a variable the project no longer has is kept and is refused with `PHOENIX-CAD-014` when it
 //! is applied.
 //!
 //! The text is one canonical form: the header `PHOENIX-CAD-VARIANTS 1` and then, for each variant in
 //! the order of the names, a line `variant NAME` followed by one line `set VARIABLE NANOMETRES` for
-//! each value, in the order of the variables. A domain that is not well formed, repeats a name, has a
-//! variant with no value or is over the limits of the settings (`[variants]`) is refused with
-//! `PHOENIX-CAD-018`. A program that does not know the domain keeps it as it is.
+//! each value, in the order of the variables. When a variant switches a step, the header is
+//! `PHOENIX-CAD-VARIANTS 2` and its lines `off KEY` and `on KEY` follow its values, in the order of
+//! the keys; without any, version 1 is written, which older programs read. A domain that is not well
+//! formed, repeats a name, has a variant with nothing in it or is over the limits of the settings
+//! (`[variants]`) is refused with `PHOENIX-CAD-018`. A program that does not know the domain keeps
+//! it as it is.
 
 use std::collections::BTreeMap;
 
@@ -24,13 +29,28 @@ use crate::{CadError, Length};
 pub const VARIANTS_DOMAIN: &str = "variants";
 
 const HEADER: &str = "PHOENIX-CAD-VARIANTS 1";
+const HEADER_STEPS: &str = "PHOENIX-CAD-VARIANTS 2";
+const MAX_KEY_LEN: usize = 128;
+
+fn check_key(key: &str) -> Result<(), CadError> {
+    let ok = !key.is_empty()
+        && key.len() <= MAX_KEY_LEN
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | ':' | '@'));
+    if ok {
+        Ok(())
+    } else {
+        Err(CadError::InvalidName(key.to_string()))
+    }
+}
 
 /// The limits of the variants (`[variants]`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VariantLimits {
     /// The most variants of a project.
     pub max_count: usize,
-    /// The most values of one variant.
+    /// The most values of one variant, and the most steps one switches.
     pub max_values: usize,
 }
 
@@ -61,6 +81,9 @@ impl VariantLimits {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct VariantSet {
     list: BTreeMap<String, BTreeMap<String, Length>>,
+    /// The steps that variants switch: by variant and then by key, true for off. A variant that
+    /// switches none has no entry.
+    steps: BTreeMap<String, BTreeMap<String, bool>>,
 }
 
 impl VariantSet {
@@ -99,7 +122,8 @@ impl VariantSet {
         for variable in values.keys() {
             check_name(variable)?;
         }
-        if values.is_empty() || values.len() > limits.max_values {
+        if (values.is_empty() && !self.steps.contains_key(name)) || values.len() > limits.max_values
+        {
             return Err(CadError::ValueOutOfRange("values of the variant"));
         }
         if !self.list.contains_key(name) && self.list.len() >= limits.max_count {
@@ -109,11 +133,60 @@ impl VariantSet {
         Ok(())
     }
 
+    /// The steps that a variant switches, by key: true for off, false for on.
+    pub fn steps_of(&self, name: &str) -> impl Iterator<Item = (&String, &bool)> {
+        self.steps.get(name).into_iter().flatten()
+    }
+
+    /// Says what a variant does with the step `key`: off, on or (`None`) nothing. A variant that
+    /// does not exist is made when it is given something to hold. A change that would leave a
+    /// variant with nothing in it, or go over the limits, is refused and nothing changes.
+    pub fn set_step(
+        &mut self,
+        name: &str,
+        key: &str,
+        off: Option<bool>,
+        limits: &VariantLimits,
+    ) -> Result<(), CadError> {
+        check_name(name)?;
+        check_key(key)?;
+        let known = self.list.contains_key(name);
+        let mut steps = self.steps.get(name).cloned().unwrap_or_default();
+        match off {
+            Some(off) => {
+                steps.insert(key.to_string(), off);
+            }
+            None => {
+                if steps.remove(key).is_none() {
+                    return Err(CadError::UnknownName(key.to_string()));
+                }
+            }
+        }
+        if steps.len() > limits.max_values {
+            return Err(CadError::ValueOutOfRange("steps of the variant"));
+        }
+        if !known && self.list.len() >= limits.max_count {
+            return Err(CadError::ValueOutOfRange("variants"));
+        }
+        if steps.is_empty() && self.list.get(name).is_none_or(BTreeMap::is_empty) {
+            return Err(CadError::ValueOutOfRange("values of the variant"));
+        }
+        self.list.entry(name.to_string()).or_default();
+        if steps.is_empty() {
+            self.steps.remove(name);
+        } else {
+            self.steps.insert(name.to_string(), steps);
+        }
+        Ok(())
+    }
+
     /// Takes a variant away. An unknown name is refused with `PHOENIX-CAD-014`.
     pub fn remove(&mut self, name: &str) -> Result<(), CadError> {
         self.list
             .remove(name)
-            .map(|_| ())
+            .map(|_| {
+                self.steps.remove(name);
+            })
             .ok_or_else(|| CadError::UnknownName(name.to_string()))
     }
 
@@ -130,11 +203,20 @@ impl VariantSet {
 
     /// The text of the domain.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = format!("{HEADER}\n");
+        let header = if self.steps.is_empty() {
+            HEADER
+        } else {
+            HEADER_STEPS
+        };
+        let mut out = format!("{header}\n");
         for (name, values) in &self.list {
             out.push_str(&format!("variant {name}\n"));
             for (variable, value) in values {
                 out.push_str(&format!("set {variable} {}\n", value.get()));
+            }
+            for (key, off) in self.steps_of(name) {
+                let word = if *off { "off" } else { "on" };
+                out.push_str(&format!("{word} {key}\n"));
             }
         }
         out.into_bytes()
@@ -145,17 +227,23 @@ impl VariantSet {
         let bad = |why: &str| CadError::Format(format!("variants: {why}"));
         let text = std::str::from_utf8(bytes).map_err(|_| bad("not text"))?;
         let mut lines = text.lines();
-        if lines.next() != Some(HEADER) {
-            return Err(bad("no header of this version"));
-        }
+        let with_steps = match lines.next() {
+            Some(HEADER) => false,
+            Some(HEADER_STEPS) => true,
+            _ => return Err(bad("no header of this version")),
+        };
         let mut set = VariantSet::default();
-        let mut open: Option<(String, BTreeMap<String, Length>)> = None;
-        let keep = |set: &mut VariantSet, open: Option<(String, BTreeMap<String, Length>)>| {
-            let Some((name, values)) = open else {
+        type Open = (String, BTreeMap<String, Length>, BTreeMap<String, bool>);
+        let mut open: Option<Open> = None;
+        let keep = |set: &mut VariantSet, open: Option<Open>| {
+            let Some((name, values, steps)) = open else {
                 return Ok(());
             };
             if set.list.contains_key(&name) {
                 return Err(bad("a variant is repeated"));
+            }
+            if !steps.is_empty() {
+                set.steps.insert(name.clone(), steps);
             }
             set.put(&name, values, limits)
                 .map_err(|e| bad(&format!("variant {name}: {e}")))
@@ -165,10 +253,10 @@ impl VariantSet {
             match words.as_slice() {
                 ["variant", name] => {
                     keep(&mut set, open.take())?;
-                    open = Some(((*name).to_string(), BTreeMap::new()));
+                    open = Some(((*name).to_string(), BTreeMap::new(), BTreeMap::new()));
                 }
                 ["set", variable, value] => {
-                    let Some((_, values)) = open.as_mut() else {
+                    let Some((_, values, _)) = open.as_mut() else {
                         return Err(bad("a value has no variant"));
                     };
                     let value = value
@@ -181,6 +269,18 @@ impl VariantSet {
                     }
                     if values.insert((*variable).to_string(), value).is_some() {
                         return Err(bad("a value is repeated"));
+                    }
+                }
+                [word @ ("off" | "on"), key] if with_steps => {
+                    let Some((_, _, steps)) = open.as_mut() else {
+                        return Err(bad("a step has no variant"));
+                    };
+                    check_key(key).map_err(|_| bad("the key of a step is not valid"))?;
+                    if steps.len() >= limits.max_values {
+                        return Err(bad("a variant has too many steps"));
+                    }
+                    if steps.insert((*key).to_string(), *word == "off").is_some() {
+                        return Err(bad("a step is repeated"));
                     }
                 }
                 _ => return Err(bad("a line is not understood")),
@@ -320,7 +420,12 @@ mod tests {
     fn a_domain_that_is_not_well_formed_is_refused() {
         for text in [
             "",
-            "PHOENIX-CAD-VARIANTS 2\n",
+            "PHOENIX-CAD-VARIANTS 3\n",
+            "PHOENIX-CAD-VARIANTS 1\nvariant a\noff set-lid\n",
+            "PHOENIX-CAD-VARIANTS 2\noff set-lid\n",
+            "PHOENIX-CAD-VARIANTS 2\nvariant a\noff set-lid\non set-lid\n",
+            "PHOENIX-CAD-VARIANTS 2\nvariant a\noff set_lid\n",
+            "PHOENIX-CAD-VARIANTS 2\nvariant a\non a\non b\non c\n",
             "PHOENIX-CAD-VARIANTS 1\nset a 1\n",
             "PHOENIX-CAD-VARIANTS 1\nvariant a\n",
             "PHOENIX-CAD-VARIANTS 1\nvariant a\nset w 1\nset w 2\n",
@@ -333,6 +438,46 @@ mod tests {
             let e = VariantSet::from_bytes(text.as_bytes(), &limits()).unwrap_err();
             assert_eq!(e.code(), "PHOENIX-CAD-018", "{text:?}");
         }
+    }
+
+    #[test]
+    fn steps_are_switched_by_variants_in_version_two() {
+        let mut set = sample();
+        set.set_step("small", "add-fins:a1", Some(true), &limits())
+            .unwrap();
+        set.set_step("bare", "set-lid", Some(false), &limits())
+            .unwrap();
+        let text = String::from_utf8(set.to_bytes()).unwrap();
+        assert_eq!(
+            text,
+            "PHOENIX-CAD-VARIANTS 2\nvariant bare\non set-lid\nvariant large\n\
+             set length 150000000\nset width 90000000\nvariant small\nset width 40000000\n\
+             off add-fins:a1\n"
+        );
+        assert_eq!(
+            VariantSet::from_bytes(text.as_bytes(), &limits()).unwrap(),
+            set
+        );
+        // the last thing of a variant cannot be taken out, and an unknown key neither
+        let before = set.clone();
+        for (name, key) in [("bare", "set-lid"), ("small", "set-lid"), ("none", "a")] {
+            assert!(set.set_step(name, key, None, &limits()).is_err(), "{name}");
+        }
+        assert!(set
+            .set_step("small", "bad key", Some(true), &limits())
+            .is_err());
+        assert!(set
+            .set_step("fourth", "set-lid", Some(true), &limits())
+            .is_err());
+        assert_eq!(set, before);
+        // new values keep the steps, and a removed variant takes them with it
+        set.put("small", values(&[("width", 41)]), &limits())
+            .unwrap();
+        assert_eq!(set.steps_of("small").count(), 1);
+        set.set_step("small", "add-fins:a1", None, &limits())
+            .unwrap();
+        set.remove("bare").unwrap();
+        assert!(set.to_bytes().starts_with(b"PHOENIX-CAD-VARIANTS 1\n"));
     }
 
     #[test]

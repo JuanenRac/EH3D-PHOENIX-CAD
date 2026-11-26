@@ -91,6 +91,9 @@ pub struct Mechanical {
     /// part of the text of this domain (the domain `variants` keeps them) and they are here so that
     /// one history goes back and forward over them too.
     pub variants: VariantSet,
+    /// The variables that follow a reference dimension of a sketch, kept in a domain of their own
+    /// like the variants.
+    pub links: crate::follow::Links,
 }
 
 fn bad(why: &str) -> CadError {
@@ -629,6 +632,31 @@ fn layout_of(word: &str) -> Result<Layout, CadError> {
     }
 }
 
+/// A key for each step that stays the same when steps are added, removed or reordered: the kind of
+/// operation and the id it works on (`add-hole:ID`), or the kind alone for the steps without one
+/// (`set-lid`). A key that is repeated gets `@2`, `@3` and so on, in the order of the steps.
+pub fn step_keys(steps: &[Step], limits: &MechanicalLimits) -> Vec<String> {
+    let mut seen: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    steps
+        .iter()
+        .map(|step| {
+            let words = operation_words(&step.op, limits).unwrap_or_default();
+            let kind = words.first().map_or("step", String::as_str);
+            let key = match words.get(1) {
+                Some(id) if id_of(id).is_ok() => format!("{kind}:{id}"),
+                _ => kind.to_string(),
+            };
+            let count = seen.entry(key.clone()).or_insert(0);
+            *count += 1;
+            if *count > 1 {
+                format!("{key}@{count}")
+            } else {
+                key
+            }
+        })
+        .collect()
+}
+
 /// The version of the domain a step needs: 6 for a turned or a swept body or a mate of the newer
 /// kinds (offset, symmetric and turn), 5 for a mate, 4 for a placed part, 3 for a pattern or
 /// cooling fins, 2 for an extrusion or a pocket and 1 for the rest.
@@ -1002,6 +1030,7 @@ impl Mechanical {
             board: None,
             sketches: Vec::new(),
             variants: VariantSet::default(),
+            links: crate::follow::Links::new(),
         }
     }
 
@@ -1177,6 +1206,7 @@ impl Mechanical {
             board,
             sketches: Vec::new(),
             variants: VariantSet::default(),
+            links: crate::follow::Links::new(),
         })
     }
 }
