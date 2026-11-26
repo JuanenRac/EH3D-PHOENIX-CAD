@@ -4,6 +4,9 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **The accents of the window are ice blue, the colour of the program:** the selection, the active tab, links, coloured outlines and main buttons take it from the frame of the suite, with text that reads on every ground; panels and bars stay as they were.
+- **Recent projects are kept in the folder of the user:** the list of *File > Open recent* lives in `%APPDATA%\EH3D\recent-phoenix-cad.txt` on Windows and in `~/.config/eh3d/` (or `$XDG_CONFIG_HOME/eh3d/`) elsewhere, the same way in every PHOENIX program, also when the program is started without `--config`; the list of the settings file moves there the first time, a damaged file is left aside, and it holds paths only.
+
 - **The submenu «Suite project (.eh3d)» of the File menu:** open a project of the suite, save it, save it under another name, import into it, list its branches and take the board, in the eight languages. A file that holds only the branches of other programs (just a board) opens as a new box that is saved into it, and opening writes nothing; the entries that need a file or leave to write are off without one. The logic is tested without a screen and the menus have not been seen in a window.
 
 - **Save and Save as of the suite project:** *Save suite project* writes the branch `cad` of the file of the window and asks for a name when the project is not in a `.eh3d` file yet; *Save suite project as* writes over a file that holds the box of another project only when the box for it is ticked (`PHOENIX-CAD-040` otherwise).

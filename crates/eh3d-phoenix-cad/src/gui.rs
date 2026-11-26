@@ -3836,12 +3836,10 @@ pub fn run(start: Start) -> Result<(), String> {
         Box::new(move |cc| {
             install_fonts(&cc.egui_ctx);
             apply_theme(&cc.egui_ctx, ShotTheme::Forge);
-            Ok(Box::new(Shell::new(
-                App::new(win, sketch, view),
-                window,
-                &settings,
-                config,
-            )))
+            let mut shell = Shell::new(App::new(win, sketch, view), window, &settings, config);
+            // the list of recent projects lives in the folder of the user, with or without `--config`
+            shell.dock.keep_user_recent(eh3d_dock::about::Phoenix::Cad);
+            Ok(Box::new(shell))
         }),
     )
     .map_err(|e| e.to_string())
