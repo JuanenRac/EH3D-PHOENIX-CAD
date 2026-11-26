@@ -74,7 +74,7 @@ The File menu has the submenu *Suite project (.eh3d)*, in the eight languages:
 | Cut the openings of the connectors | As `eh3d-openings --apply`. |
 | Hand the box to the other programs | As `eh3d-publish`. |
 
-A signature is only shown, never checked. The plain *Save as* of the File menu keeps every branch too. A file that was opened, saved or picked is added to the recent files only when that worked, and a recent file that is gone is taken out of the list; the list is kept between sessions in the settings file given with `--config`. All of this is decided in `suitewin`, which is tested without a screen; the window has never been opened on a screen.
+A signature is only shown, never checked. The plain *Save as* of the File menu keeps every branch too. A file that was opened, saved or picked is added to the recent files only when that worked, and a recent file that is gone is taken out of the list; the list is kept between sessions in the settings folder of the user (`%APPDATA%\EH3D\recent-phoenix-cad.txt`, or `~/.config/eh3d/`), with or without `--config`. All of this is decided in `suitewin`, which is tested without a screen; the window has never been opened on a screen.
 
 ## The box made from a board
 
