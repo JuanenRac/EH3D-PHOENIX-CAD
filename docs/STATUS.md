@@ -48,7 +48,7 @@ The window has the panel «Attachments» of the suite (the shared `eh3d-attachpa
 
 ## Looking at files and signing
 
-3D files and flat DXF drawings (attachments, the original of an import, files of the disk) are seen inside the window, with their size, volume and whether they fit in the box, and the suite project is signed from the window and from the commands `eh3d-keygen` and `eh3d-sign`; a save that removes a signature says so (`docs/BOARD_INTERCHANGE.md`). Both were tried on made-up files by the tests only; the windows have not been seen on a screen.
+3D files and flat DXF drawings (attachments, the original of an import, files of the disk) are seen inside the window, with their size, volume and whether they fit in the box, and the suite project is signed from the window and from the commands `eh3d-keygen` and `eh3d-sign`; the window asks before a write that would remove a signature (`docs/BOARD_INTERCHANGE.md`). Both were tried on made-up files by the tests only; the windows have not been seen on a screen.
 
 ## Capabilities
 

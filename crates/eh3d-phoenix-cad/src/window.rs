@@ -4257,6 +4257,16 @@ impl Window {
         Ok(())
     }
 
+    /// The file of the suite whose branches go along when the project is saved as `path`: the
+    /// one the window works on, when `path` is another file of the suite that is not there yet.
+    pub(crate) fn carried_from(&self, path: &Path) -> Option<PathBuf> {
+        self.path
+            .as_deref()
+            .filter(|from| eh3dfile::is_eh3d(from) && eh3dfile::is_eh3d(path))
+            .filter(|from| from.is_file() && !path.exists())
+            .map(Path::to_path_buf)
+    }
+
     /// Writes the project to `path` (atomically, keeping the copies of the settings). The answer
     /// is false when it could not be written.
     pub fn save_to(&mut self, path: &Path) -> bool {
@@ -4266,12 +4276,7 @@ impl Window {
         }
         let mut document = self.document.clone();
         // a project of the suite saved under a new name takes every branch with it
-        let source = self
-            .path
-            .as_deref()
-            .filter(|from| eh3dfile::is_eh3d(from) && eh3dfile::is_eh3d(path))
-            .filter(|from| from.is_file() && !path.exists())
-            .map(Path::to_path_buf);
+        let source = self.carried_from(path);
         // saving what a signature covers removes it: the person is told
         let signed = crate::signing::standing(source.as_deref().unwrap_or(path));
         let written = document

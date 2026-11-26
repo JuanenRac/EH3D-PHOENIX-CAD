@@ -104,6 +104,7 @@ pub mod clearance;
 pub mod compare;
 pub mod config;
 pub mod configdiff;
+pub mod consent;
 pub mod convert;
 pub mod coordentry;
 pub mod datum;

@@ -84,22 +84,34 @@ impl App {
                     }
                 }
             });
-        if write {
-            let said =
-                suitewin::write_texts(&self.win, form.language, &form.title, &form.description);
+        if let Some(language) = chosen {
+            *form = TextsForm::read(&self.win, language);
+        }
+        let asked = write.then(|| (form.language, form.title.clone(), form.description.clone()));
+        if !open {
+            self.texts = None;
+        }
+        if let Some((language, title, description)) = asked {
+            let write = Write::Texts {
+                language,
+                title: title.clone(),
+                description: description.clone(),
+            };
+            if !self.ask_first(write) {
+                self.write_texts_now(language, &title, &description);
+            }
+        }
+    }
+
+    /// Writes the title and the description and says how it went in the window of the texts.
+    pub(super) fn write_texts_now(&mut self, language: Lang, title: &str, description: &str) {
+        let said = suitewin::write_texts(&self.win, language, title, description);
+        if let Some(form) = &mut self.texts {
             form.said = Some(match said {
                 Ok(text) => (text, true),
                 Err(why) => (why, false),
             });
         }
-        if let Some(language) = chosen {
-            *form = TextsForm::read(&self.win, language);
-        }
-        if write {
-            self.refresh_branches();
-        }
-        if !open {
-            self.texts = None;
-        }
+        self.refresh_branches();
     }
 }
