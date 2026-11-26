@@ -46,11 +46,16 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
+mod modelview;
+mod signing;
 mod texts;
 mod variants;
 
 /// The extensions of the public key files that check signatures.
 const KEY_EXTENSIONS: [&str; 1] = ["pub"];
+
+/// The extension offered for the secret key files; every file can be listed too.
+const SECRET_EXTENSIONS: [&str; 1] = ["key"];
 
 // the colours of the theme Forge, the one the other programs of the suite start with: charcoal, with
 // titles in the colour of the program and amber for what asks for attention and what is selected
@@ -94,6 +99,12 @@ enum SuiteAsk {
     Import,
     /// A public key file that checks the signatures.
     Key,
+    /// A 3D file or a flat drawing to look at.
+    ViewFile,
+    /// The secret key file that signs.
+    SignKey,
+    /// The name of a new secret key.
+    NewKey,
 }
 
 /// The window that opens a project or asks for the name of the file to write.
@@ -166,6 +177,10 @@ struct App {
     texts: Option<texts::TextsForm>,
     /// The public key files chosen while the program runs, besides those of the settings.
     chosen_keys: Vec<String>,
+    /// The window of a file of another program, while it is open.
+    viewer: Option<modelview::ViewerState>,
+    /// The window that signs the project of the suite, while it is open.
+    signing: Option<signing::SignForm>,
     /// The settings file given with `--config`, where the arrangement of the panels is kept.
     config_path: Option<PathBuf>,
     /// Whether the 3D view and the sketch were drawn in this frame.
@@ -214,6 +229,8 @@ impl App {
             variants: None,
             texts: None,
             chosen_keys: Vec::new(),
+            viewer: None,
+            signing: None,
             config_path: None,
             drew_view3d: false,
             drew_sketch: false,
@@ -248,11 +265,16 @@ impl App {
     /// Asks for a file of the suite, a name to save one or a file to import into one.
     fn suite_dialog(&mut self, ask: SuiteAsk) {
         let extensions: &[&'static str] = match ask {
-            SuiteAsk::Import => &suitewin::IMPORT_EXTENSIONS,
+            SuiteAsk::Import | SuiteAsk::ViewFile => &suitewin::IMPORT_EXTENSIONS,
+            SuiteAsk::SignKey | SuiteAsk::NewKey => &SECRET_EXTENSIONS,
             SuiteAsk::Open | SuiteAsk::SaveAs => &suitewin::SUITE_EXTENSIONS,
             SuiteAsk::Key => &KEY_EXTENSIONS,
         };
-        let save = (ask == SuiteAsk::SaveAs).then(|| suitewin::suggested_name(&self.win));
+        let save = match ask {
+            SuiteAsk::SaveAs => Some(suitewin::suggested_name(&self.win)),
+            SuiteAsk::NewKey => Some(signing::NEW_KEY_NAME.to_owned()),
+            _ => None,
+        };
         self.dialog = Some(Dialog {
             suite: Some(ask),
             browser: Browser::new(self.folder(), extensions),
@@ -278,6 +300,12 @@ impl App {
                 }
                 true
             }
+            SuiteAsk::ViewFile => {
+                self.open_viewer(crate::modelview::Origin::File(path.to_path_buf()));
+                true
+            }
+            SuiteAsk::SignKey => self.take_sign_key(path),
+            SuiteAsk::NewKey => self.make_sign_key(path),
         };
         self.refresh_branches();
         done
@@ -377,6 +405,7 @@ impl App {
         let mut board = false;
         let mut trust = false;
         let mut pick: Option<PathBuf> = None;
+        let mut original: Option<PathBuf> = None;
         egui::Window::new(Msg::SuiteBranchesTitle.tr(lang))
             .open(&mut open)
             .default_size([640.0, 360.0])
@@ -430,6 +459,13 @@ impl App {
                             for text in suitewin::report_lines(report, lang) {
                                 ui.label(text);
                             }
+                            let shown = report
+                                .original
+                                .as_deref()
+                                .is_some_and(crate::modelview::can_show);
+                            if shown && ui.button(Msg::MvOriginal.tr(lang)).clicked() {
+                                original = Some(found.file.clone());
+                            }
                         }
                     }
                     Err(why) => {
@@ -461,6 +497,9 @@ impl App {
         if !open {
             self.branches = None;
             return;
+        }
+        if let Some(file) = original {
+            self.view_original(&file);
         }
         if let Some(path) = pick {
             if suitewin::open_any(&mut self.win, &path) {
@@ -2090,7 +2129,16 @@ impl App {
                     }
                 };
                 // a file to import and a key are not projects to open again
-                let imported = matches!(dialog.suite, Some(SuiteAsk::Import | SuiteAsk::Key));
+                let imported = matches!(
+                    dialog.suite,
+                    Some(
+                        SuiteAsk::Import
+                            | SuiteAsk::Key
+                            | SuiteAsk::ViewFile
+                            | SuiteAsk::SignKey
+                            | SuiteAsk::NewKey
+                    )
+                );
                 if done && dialog.export.is_none() && !dialog.dxf && !imported {
                     self.recent_added.push(path.display().to_string());
                 }
@@ -2145,6 +2193,9 @@ fn show_dialog(ctx: &egui::Context, d: &mut Dialog, lang: Lang) -> Option<Outcom
         _ if d.suite == Some(SuiteAsk::SaveAs) => Msg::SuiteSaveTitle,
         _ if d.suite == Some(SuiteAsk::Import) => Msg::SuiteImportTitle,
         _ if d.suite == Some(SuiteAsk::Key) => Msg::SuiteTrustKey,
+        _ if d.suite == Some(SuiteAsk::ViewFile) => Msg::MvMenu,
+        _ if d.suite == Some(SuiteAsk::SignKey) => Msg::SignChoose,
+        _ if d.suite == Some(SuiteAsk::NewKey) => Msg::SignNewKey,
         _ if d.export.is_some() => Msg::ExportTitle,
         _ if d.dxf => Msg::ImportDxfTitle,
         _ if d.library => Msg::OpenLibraryTitle,
@@ -2155,8 +2206,10 @@ fn show_dialog(ctx: &egui::Context, d: &mut Dialog, lang: Lang) -> Option<Outcom
     };
     let export_extension = d.export.map(Format::extension);
     let export_extensions: Vec<&str> = export_extension.into_iter().collect();
-    let extensions: &[&str] = if d.suite == Some(SuiteAsk::Import) {
+    let extensions: &[&str] = if matches!(d.suite, Some(SuiteAsk::Import | SuiteAsk::ViewFile)) {
         &suitewin::IMPORT_EXTENSIONS
+    } else if matches!(d.suite, Some(SuiteAsk::SignKey | SuiteAsk::NewKey)) {
+        &SECRET_EXTENSIONS
     } else if d.suite == Some(SuiteAsk::Key) {
         &KEY_EXTENSIONS
     } else if d.suite.is_some() {
@@ -3072,6 +3125,8 @@ impl App {
         self.suite_note_window(ctx);
         self.variants_window(ctx);
         self.texts_window(ctx);
+        self.viewer_window(ctx);
+        self.signing_window(ctx);
         self.dialog_window(ctx);
         self.shot_tick(ctx);
     }
@@ -3130,6 +3185,7 @@ impl App {
     /// list of the branches is read again.
     fn panel_attachments(&mut self, ui: &mut egui::Ui) {
         let file = suitewin::current_file(&self.win);
+        self.attachment_view_button(ui);
         if self
             .attachments
             .show(ui, file.as_deref(), self.win.lang.code())
@@ -3598,6 +3654,8 @@ impl App {
             Cmd::SuiteImport => self.suite_dialog(SuiteAsk::Import),
             Cmd::SuiteBranches => self.branches = Some(self.read_branches()),
             Cmd::SuiteTexts => self.open_texts(),
+            Cmd::SuiteSign => self.open_signing(),
+            Cmd::ViewFile => self.suite_dialog(SuiteAsk::ViewFile),
             Cmd::SuiteBoard => self.suite_board(),
             Cmd::SuiteCheck => self.suite_work(BoardWork::CheckFit, Msg::SuiteMenuCheck),
             Cmd::SuiteOpenings => {
@@ -3947,6 +4005,8 @@ pub struct Start {
     pub window: Option<&'static str>,
     /// The settings file given with `--config`, where the arrangement of the panels is kept.
     pub config: Option<PathBuf>,
+    /// A 3D file or a flat drawing of another program to look at as the window opens.
+    pub viewer: Option<PathBuf>,
 }
 
 fn make_window(start: Start) -> Result<(Window, SketchEditor, StartView), String> {
@@ -3981,6 +4041,7 @@ fn make_window(start: Start) -> Result<(Window, SketchEditor, StartView), String
 pub fn run(start: Start) -> Result<(), String> {
     let (size, minimum) = (start.ui.window_size, start.ui.window_min);
     let (window, config) = (start.window, start.config.clone());
+    let viewer = start.viewer.clone();
     let settings = config
         .as_ref()
         .and_then(|p| std::fs::read_to_string(p).ok())
@@ -4003,7 +4064,11 @@ pub fn run(start: Start) -> Result<(), String> {
         Box::new(move |cc| {
             install_fonts(&cc.egui_ctx);
             apply_theme(&cc.egui_ctx, ShotTheme::Forge);
-            let mut shell = Shell::new(App::new(win, sketch, view), window, &settings, config);
+            let mut app = App::new(win, sketch, view);
+            if let Some(file) = viewer {
+                app.open_viewer(crate::modelview::Origin::File(file));
+            }
+            let mut shell = Shell::new(app, window, &settings, config);
             // the list of recent projects lives in the folder of the user, with or without `--config`
             shell.dock.keep_user_recent(Phoenix::Cad);
             Ok(Box::new(shell))
@@ -4111,11 +4176,13 @@ pub fn run_shot(start: Start, request: ShotRequest) -> Result<(), String> {
         .project
         .iter()
         .chain(start.sketch.iter())
+        .chain(start.viewer.iter())
         .find(|f| !f.is_file());
     if let Some(missing) = missing {
         return Err(format!("{} is not a file", missing.display()));
     }
     let (window, config) = (start.window, start.config.clone());
+    let viewer = start.viewer.clone();
     let settings = config
         .as_ref()
         .and_then(|p| std::fs::read_to_string(p).ok())
@@ -4141,6 +4208,10 @@ pub fn run_shot(start: Start, request: ShotRequest) -> Result<(), String> {
             install_fonts(&cc.egui_ctx);
             apply_theme(&cc.egui_ctx, theme);
             let mut app = App::new(win, sketch, view);
+            if let Some(file) = viewer {
+                app.open_viewer(crate::modelview::Origin::File(file));
+                app.settle_viewer();
+            }
             app.shot = Some(ShotState {
                 request,
                 frame: 0,

@@ -4272,6 +4272,8 @@ impl Window {
             .filter(|from| eh3dfile::is_eh3d(from) && eh3dfile::is_eh3d(path))
             .filter(|from| from.is_file() && !path.exists())
             .map(Path::to_path_buf);
+        // saving what a signature covers removes it: the person is told
+        let signed = crate::signing::standing(source.as_deref().unwrap_or(path));
         let written = document
             .set_mechanical(&self.mech, &self.settings.mechanical)
             .and_then(|()| document.set_sketches(&self.mech.sketches, &self.sketch_settings))
@@ -4302,7 +4304,12 @@ impl Window {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                self.status = Status::Done(Msg::Saved, vec![name]);
+                let said = if signed.lost(crate::signing::standing(path)) {
+                    Msg::SignatureRemoved
+                } else {
+                    Msg::Saved
+                };
+                self.status = Status::Done(said, vec![name]);
                 true
             }
             Err(e) => {

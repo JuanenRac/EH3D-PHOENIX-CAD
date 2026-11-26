@@ -36,6 +36,7 @@ use crate::profile::ProfileLimits;
 use crate::project::{Document, PARAMETERS_DOMAIN};
 use crate::scad::mm_text;
 use crate::select;
+use crate::signing;
 use crate::sketch::settings::SketchSettings;
 use crate::suitewin;
 use crate::tools_cli::Args;
@@ -45,7 +46,7 @@ use crate::window::{error_text, Window};
 use crate::{CadError, Length};
 
 /// The commands of this module, for the program to know which words are theirs.
-pub const COMMANDS: [&str; 13] = [
+pub const COMMANDS: [&str; 15] = [
     "eh3d-info",
     "eh3d-save",
     "eh3d-open",
@@ -56,6 +57,8 @@ pub const COMMANDS: [&str; 13] = [
     "eh3d-publish",
     "eh3d-import",
     "eh3d-meta",
+    "eh3d-sign",
+    "eh3d-keygen",
     "select",
     "params",
     "panels",
@@ -67,8 +70,86 @@ const MAX_BYTES: u64 = 256 << 20;
 /// What a command answers: the text it prints and whether the check passed.
 type Answer = Result<(String, bool), String>;
 
-/// Runs one of the commands of [`COMMANDS`].
+/// Runs one of the commands of [`COMMANDS`]. A command that wrote over what a signature of a
+/// project of the suite covered says that the signature was removed.
 pub fn run(command: &str, args: &[String]) -> Answer {
+    let file = args
+        .iter()
+        .map(Path::new)
+        .find(|p| eh3dfile::is_eh3d(p))
+        .filter(|_| command != "eh3d-sign");
+    let signed = file.map(signing::standing).unwrap_or_default();
+    let (mut out, ok) = dispatch(command, args)?;
+    if let Some(file) = file.filter(|f| signed.lost(signing::standing(f))) {
+        let name = file.display().to_string();
+        line(&mut out, Msg::SignatureRemoved, language_of(args), &[&name]);
+    }
+    Ok((out, ok))
+}
+
+/// The language of `--lang`, English without it, as the other commands.
+fn language_of(args: &[String]) -> Lang {
+    args.iter()
+        .position(|a| a == "--lang")
+        .and_then(|at| args.get(at + 1))
+        .and_then(|code| Lang::from_code(code))
+        .unwrap_or(Lang::En)
+}
+
+fn sign(args: &[String]) -> Answer {
+    let a = parse(args, &["--key", "--branch"], &["--project"])?;
+    let file = suite_file(&a)?;
+    let key = a
+        .value("--key")
+        .ok_or("eh3d-sign needs --key SECRET_KEY_FILE")?;
+    let whole = a.has("--project");
+    let branches: Vec<String> = match a.value("--branch") {
+        Some(list) => list
+            .split(',')
+            .map(str::trim)
+            .filter(|b| !b.is_empty())
+            .map(str::to_owned)
+            .collect(),
+        // the project alone, or the branch of this program
+        None if whole => Vec::new(),
+        None => signing::Request::own().branches,
+    };
+    let request = signing::Request { branches, whole };
+    let done = signing::sign(file, Path::new(key), &request).map_err(say(a.lang))?;
+    let mut out = String::new();
+    for branch in &done.branches {
+        line(
+            &mut out,
+            Msg::SignedBranchWith,
+            a.lang,
+            &[branch, &done.key_id],
+        );
+    }
+    if done.whole {
+        line(&mut out, Msg::SignedProjectWith, a.lang, &[&done.key_id]);
+    }
+    Ok((out, true))
+}
+
+fn keygen(args: &[String]) -> Answer {
+    let a = parse(args, &["--out"], &[])?;
+    let secret = a.value("--out").ok_or("eh3d-keygen needs --out FILE")?;
+    let pair = signing::new_key(Path::new(secret)).map_err(say(a.lang))?;
+    let mut out = String::new();
+    line(
+        &mut out,
+        Msg::SignKeyMade,
+        a.lang,
+        &[
+            &pair.key_id,
+            &pair.secret_path.display().to_string(),
+            &pair.public_path.display().to_string(),
+        ],
+    );
+    Ok((out, true))
+}
+
+fn dispatch(command: &str, args: &[String]) -> Answer {
     match command {
         "eh3d-info" => info(args),
         "eh3d-save" => save(args),
@@ -80,6 +161,8 @@ pub fn run(command: &str, args: &[String]) -> Answer {
         "eh3d-publish" => publish(args),
         "eh3d-import" => import(args),
         "eh3d-meta" => metadata(args),
+        "eh3d-sign" => sign(args),
+        "eh3d-keygen" => keygen(args),
         "select" => selector(args),
         "params" => parameters(args),
         "panels" => panels(args),

@@ -4,6 +4,28 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **3D attachments are seen inside the program:** a STL, OBJ, 3MF, STEP, PLY, OFF or DXF attachment of the suite project has a button over the panel *Attachments* that shows it as a shaded solid with its sharp edges, to turn, move and zoom, without taking it out of the project. The window has not been seen on a screen.
+
+- **What the part measures, and whether it goes in the box:** the view tells the solids and triangles, the size, the volume of a closed surface (or how many edges are open), what the reader warned about and whether it fits inside the box as it is, only when turned, or not at all.
+
+- **Straight views, edges and a distance between two corners:** front, back, left, right, top and bottom views, the sharp edges on or off, and the distance between two corners clicked on the solid, with its parts along the three axes.
+
+- **Flat DXF drawings are shown too:** a DXF without faces is drawn with its lines, arcs and circles, its size, what was not read and where the unit came from.
+
+- **Any 3D or DXF file can be looked at:** *File > View a 3D or DXF file* and the option `--viewer FILE` of the window open one without importing it; it is read on its own thread, so a large file does not stop the window.
+
+- **The original that an import kept can be seen again:** the window of the branches has a button that shows the file kept in `cad/origin/`.
+
+- **The limits of the view are settings:** the new section `[model_view]` (`max_mb`, `max_triangles`, `edge_angle`); a file with more triangles than can be drawn is still measured and told.
+
+- **This program signs the suite project:** *Suite project > Sign the suite project* signs the branch `cad`, the whole project or both with an Ed25519 secret key file chosen each time; the key is only read, nothing is kept, and signing is refused while there are changes that are not saved.
+
+- **Keys can be made here:** a button of the same window and the command `eh3d-keygen` write a new secret key file (never over one that exists) and the public one beside it.
+
+- **Signing from the command line:** `eh3d-sign FILE.eh3d --key SECRET` signs the branch `cad`, the branches named with `--branch` and, with `--project`, the whole project; everything is checked first, so a refusal leaves the file as it was.
+
+- **Saving over a signature says so:** a save of the window or a command that writes what a signature covered now says that the signature was removed, instead of dropping it in silence.
+
 - **The attachments of the project in the window:** the panel «Attachments» of the suite (View, or *File > Suite project*) lists, attaches, links to a part, extracts and removes the data sheets, manuals and other files of the `.eh3d` project, with the viewer beside the list; dangerous and unknown files ask first, and a file dropped on the panel is attached. Its limits are the sections `[attachments]` and `[viewer]` of the settings, and the packages carry the PDF library (PDFium) with its licences. Not seen on a screen.
 
 ## [0.1.5] - Variants, reference dimensions and the shared project of the suite

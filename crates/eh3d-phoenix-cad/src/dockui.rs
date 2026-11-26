@@ -249,6 +249,10 @@ pub enum Cmd {
     SuiteBranches,
     /// Edit the title and the description of the project of the suite.
     SuiteTexts,
+    /// Sign the project of the suite.
+    SuiteSign,
+    /// Look at a 3D file or a flat drawing of another program.
+    ViewFile,
     /// Take the board of the branch `pcb` into the box.
     SuiteBoard,
     /// Check the box against the board and the room of its parts.
@@ -293,7 +297,7 @@ fn own(id: &str, m: Msg, cmd: Cmd) -> Entry<Cmd> {
 
 /// The entries of the submenu of the project file of the suite, in order: their ids, their words
 /// and what they do.
-pub const SUITE_ENTRIES: [(&str, Msg, Cmd); 10] = [
+pub const SUITE_ENTRIES: [(&str, Msg, Cmd); 11] = [
     ("file.suite.open", Msg::SuiteMenuOpen, Cmd::SuiteOpen),
     ("file.suite.save", Msg::SuiteMenuSave, Cmd::SuiteSave),
     ("file.suite.save_as", Msg::SuiteMenuSaveAs, Cmd::SuiteSaveAs),
@@ -304,6 +308,7 @@ pub const SUITE_ENTRIES: [(&str, Msg, Cmd); 10] = [
         Cmd::SuiteBranches,
     ),
     ("file.suite.texts", Msg::SuiteTextsMenu, Cmd::SuiteTexts),
+    ("file.suite.sign", Msg::SignMenu, Cmd::SuiteSign),
     ("file.suite.board", Msg::SuiteMenuBoard, Cmd::SuiteBoard),
     ("file.suite.check", Msg::SuiteMenuCheck, Cmd::SuiteCheck),
     (
@@ -386,6 +391,7 @@ pub fn menu_bar() -> MenuBar<Cmd> {
         .sep()
         .entry(own("file.open_library", Msg::OpenLibrary, Cmd::OpenLibrary))
         .entry(own("file.import_dxf", Msg::PanelImportDxf, Cmd::ImportDxf))
+        .entry(own("file.view_file", Msg::MvMenu, Cmd::ViewFile))
         .entry(own("file.fit_report", Msg::ReportShow, Cmd::FitReport));
     view = view
         .sep()
