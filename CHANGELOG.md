@@ -4,6 +4,10 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **STEP files with round holes, pins and cones are read:** faces on cylinders and cones and edges that are arcs of circles are read besides the flat ones, so the STEP file of a box with round holes and posts that this program writes reads back closed, with its size and volume; a curve becomes straight pieces (`mesh.step_segments_per_turn`, 72 for a whole turn). The viewer, `mesh-info` and the import take such files; spheres, tori, free surfaces, ellipses and a hole through a curved wall are still refused by name.
+
+- **STEP edges that go against their curve are read:** a loop with an edge whose curve runs the other way was refused as not meeting end to end; the way of an edge now comes from its two vertices and its oriented use only.
+
 - **The window asks before it removes a signature:** saving, the import that keeps an original, the title and the description and the work with the board show what would be removed from the suite project and write nothing unless it is agreed; Enter and Escape do not write, and the commands of the suite file do not ask.
 
 - **Cut the view to see inside:** the view of a 3D file can be cut along x, y or z with a slider, showing the inside of an enclosure or a connector in a colour of its own; corners that are cut away are not measured.

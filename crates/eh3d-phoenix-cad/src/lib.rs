@@ -187,6 +187,7 @@ pub mod sketchinfo;
 pub mod solid;
 pub mod solidquery;
 pub mod step;
+mod step_curved;
 pub mod step_faceted;
 pub mod step_import;
 pub mod stlread;

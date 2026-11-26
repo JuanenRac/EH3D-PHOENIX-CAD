@@ -2,27 +2,34 @@
 //!
 //! The reader takes the solids a file names (`MANIFOLD_SOLID_BREP`, `BREP_WITH_VOIDS` and
 //! `FACETED_BREP`) and gives the triangles of each one, as the readers of the other interchange
-//! formats do. It reads what a prismatic part is made of: planes (`PLANE`) bounded by loops of
-//! straight edges (`LINE`) or by a `POLY_LOOP`, with holes as further bounds and with the voids of
-//! a `BREP_WITH_VOIDS`. The unit of the file (millimetre, centimetre, metre, micron or inch) is
-//! read from its length unit and every coordinate is rounded to a whole nanometre.
+//! formats do. It reads what a turned or milled part is mostly made of: planes (`PLANE`),
+//! cylinders (`CYLINDRICAL_SURFACE`) and cones (`CONICAL_SURFACE`) bounded by loops of straight
+//! edges (`LINE`) and arcs of circles (`CIRCLE`) or by a `POLY_LOOP`, with holes in the planes as
+//! further bounds and with the voids of a `BREP_WITH_VOIDS`. The unit of the file (millimetre,
+//! centimetre, metre, micron or inch) is read from its length unit and every coordinate is rounded
+//! to a whole nanometre. A curve becomes straight pieces (`mesh.step_segments_per_turn` for each
+//! whole turn), so a curved face is flat pieces and its volume is that of the pieces; which shapes
+//! of a curved face are read is told in the module `step_curved`.
 //!
 //! Everything else is refused, in order, with the number and the name of the first entity that
-//! cannot be read: a face on a cylinder, a cone, a sphere, a torus, a surface of revolution or of
-//! linear extrusion or a B-spline surface, an edge on a circle, an ellipse or a B-spline curve, an
-//! open shell, and the solids that are not a boundary representation. Nothing is guessed and
-//! nothing is left out, so a file that is read is the whole of what it holds.
+//! cannot be read: a face on a sphere, a torus, a surface of revolution or of linear extrusion or
+//! a B-spline surface, an edge on an ellipse or a B-spline curve, an open shell, and the solids
+//! that are not a boundary representation. Nothing is guessed and nothing is left out, so a file
+//! that is read is the whole of what it holds.
 //!
 //! The size of the file, the number of its entities, the number of its faces and the number of
 //! triangles are limited by the settings (`mesh.step_max_kib`, `mesh.step_max_entities`,
 //! `mesh.step_max_faces` and `mesh.max_triangles`), and a file that goes over a limit is refused
 //! before the rest of it is looked at.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
+use std::f64::consts::TAU;
 
 use crate::config::MeshSettings;
 use crate::interchange::Body;
 use crate::mesh::{Builder, Loop, Mesh, Role, P3};
+use crate::step_curved::{self, Corner, Frame, ON_NM};
 
 /// The limits of a STEP file that is read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +42,8 @@ pub struct StepLimits {
     pub max_faces: usize,
     /// The most triangles of all its solids.
     pub max_triangles: usize,
+    /// The straight pieces that stand for a whole turn of a circle.
+    pub segments_per_turn: u32,
 }
 
 impl StepLimits {
@@ -45,6 +54,7 @@ impl StepLimits {
             max_entities: s.step_max_entities as usize,
             max_faces: s.step_max_faces as usize,
             max_triangles: s.max_triangles as usize,
+            segments_per_turn: s.step_segments_per_turn,
         }
     }
 }
@@ -416,9 +426,36 @@ fn length_unit(map: &BTreeMap<usize, Entity>) -> Result<f64, String> {
     Ok(1.0e6)
 }
 
+/// The radians of one unit of the angles of the file: degrees when it names them.
+fn angle_unit(map: &BTreeMap<usize, Entity>) -> f64 {
+    let degrees = map.values().any(|e| {
+        let plane = e
+            .args
+            .iter()
+            .any(|a| matches!(a, Arg::Typed(n, _) if n == "PLANE_ANGLE_UNIT"));
+        plane
+            && e.args.iter().any(|a| {
+                matches!(a, Arg::Typed(n, v) if n == "CONVERSION_BASED_UNIT"
+                    && matches!(v.first(), Some(Arg::Text(t)) if t.eq_ignore_ascii_case("DEGREE")))
+            })
+    });
+    if degrees {
+        TAU / 360.0
+    } else {
+        1.0
+    }
+}
+
 struct Reader<'a> {
     map: &'a BTreeMap<usize, Entity>,
     unit_nm: f64,
+    /// The radians of one unit of angle.
+    angle: f64,
+    /// The straight pieces of a whole turn of a circle.
+    segments: u32,
+    /// The corners that the edges may still give: a file cannot ask for more than its triangles
+    /// could use, however often it names an edge.
+    corners_left: Cell<usize>,
 }
 
 /// The names of the surfaces, curves and solids that are known and are not read, for the messages.
@@ -554,25 +591,12 @@ impl Reader<'_> {
                     let oe = self.typed(o, &["ORIENTED_EDGE"])?;
                     let edge = Self::reference(&oe.args, 3, o, "ORIENTED_EDGE")?;
                     let forward = Self::flag(&oe.args, 4);
-                    let ee = self.typed(edge, &["EDGE_CURVE"])?;
-                    let a = self.vertex(Self::reference(&ee.args, 1, edge, "EDGE_CURVE")?)?;
-                    let b = self.vertex(Self::reference(&ee.args, 2, edge, "EDGE_CURVE")?)?;
-                    let curve = Self::reference(&ee.args, 3, edge, "EDGE_CURVE")?;
-                    let c = self.entity(curve)?;
-                    if c.name != "LINE" {
-                        return Err(format!(
-                            "#{edge}: the edge lies on {}, and only straight edges are read",
-                            if c.name.is_empty() {
-                                "a curve"
-                            } else {
-                                &c.name
-                            }
-                        ));
+                    let mut along = self.edge_points(edge)?;
+                    if !forward {
+                        along.reverse();
                     }
-                    let (start, end) = if Self::flag(&ee.args, 4) == forward {
-                        (a, b)
-                    } else {
-                        (b, a)
+                    let (Some(&start), Some(end)) = (along.first(), along.pop()) else {
+                        return Err(format!("#{edge}: the edge has no ends"));
                     };
                     if let Some(previous) = last_end {
                         if previous != start {
@@ -581,7 +605,11 @@ impl Reader<'_> {
                             ));
                         }
                     }
-                    corners.push(start);
+                    let left = self.corners_left.get().checked_sub(along.len()).ok_or(
+                        "the file has more corners than the triangles that the settings allow",
+                    )?;
+                    self.corners_left.set(left);
+                    corners.append(&mut along);
                     last_end = Some(end);
                 }
                 if corners.first().copied() != last_end {
@@ -600,6 +628,78 @@ impl Reader<'_> {
         }
     }
 
+    /// The corners of an edge from its first vertex to its second: the two of a straight edge,
+    /// and the pieces of an arc of a circle.
+    fn edge_points(&self, edge: usize) -> Result<Vec<P3>, String> {
+        let ee = self.typed(edge, &["EDGE_CURVE"])?;
+        let a = self.vertex(Self::reference(&ee.args, 1, edge, "EDGE_CURVE")?)?;
+        let b = self.vertex(Self::reference(&ee.args, 2, edge, "EDGE_CURVE")?)?;
+        let mut curve = Self::reference(&ee.args, 3, edge, "EDGE_CURVE")?;
+        let mut c = self.entity(curve)?;
+        // a curve that also says how it runs on its surfaces: the curve in space is its second
+        // argument
+        if matches!(
+            c.name.as_str(),
+            "SURFACE_CURVE" | "SEAM_CURVE" | "INTERSECTION_CURVE"
+        ) {
+            curve = Self::reference(&c.args, 1, curve, &c.name)?;
+            c = self.entity(curve)?;
+        }
+        match c.name.as_str() {
+            "LINE" => Ok(vec![a, b]),
+            "CIRCLE" => {
+                let placement = Self::reference(&c.args, 1, curve, "CIRCLE")?;
+                let radius = self.length(&c.args, 2, curve)?;
+                let frame = self.frame(placement)?;
+                // whether the edge goes the way its curve does
+                let with_axis = Self::flag(&ee.args, 4);
+                step_curved::arc_points(&frame, radius, a, b, with_axis, self.segments)
+                    .map_err(|e| format!("#{edge}: {e}"))
+            }
+            other => Err(format!(
+                "#{edge}: the edge lies on {}, and only straight and circular edges are read",
+                if other.is_empty() { "a curve" } else { other }
+            )),
+        }
+    }
+
+    /// A length that is an argument of an entity, in nanometres.
+    fn length(&self, args: &[Arg], at: usize, id: usize) -> Result<f64, String> {
+        match args.get(at) {
+            Some(Arg::Num(n)) if (n * self.unit_nm).abs() <= FAR_NM => Ok(n * self.unit_nm),
+            _ => Err(format!("#{id}: argument {} is not a length", at + 1)),
+        }
+    }
+
+    /// The place and the directions of an `AXIS2_PLACEMENT_3D`.
+    fn frame(&self, id: usize) -> Result<Frame, String> {
+        let p = self.typed(id, &["AXIS2_PLACEMENT_3D"])?;
+        let origin = self.point_nm(Self::reference(&p.args, 1, id, "AXIS2_PLACEMENT_3D")?)?;
+        let direction = |at: usize| match p.args.get(at) {
+            Some(Arg::Ref(r)) => self.direction(*r).map(Some),
+            _ => Ok(None),
+        };
+        Frame::new(origin, direction(2)?, direction(3)?)
+            .ok_or_else(|| format!("#{id}: the two directions of the placement are one"))
+    }
+
+    /// The axis of a cylinder or a cone, its radius at the origin of the axis and how much the
+    /// radius grows for each unit of height.
+    fn curved_surface(&self, surface: usize) -> Result<(Frame, f64, f64), String> {
+        let e = self.entity(surface)?;
+        let placement = Self::reference(&e.args, 1, surface, &e.name)?;
+        let radius = self.length(&e.args, 2, surface)?;
+        let slope = if e.name == "CONICAL_SURFACE" {
+            match e.args.get(3) {
+                Some(Arg::Num(a)) if (a * self.angle).abs() < TAU / 4.0 => (a * self.angle).tan(),
+                _ => return Err(format!("#{surface}: the angle of the cone is not one")),
+            }
+        } else {
+            0.0
+        };
+        Ok((self.frame(placement)?, radius, slope))
+    }
+
     /// The normal of the plane of a face, or an error naming what the surface is.
     fn plane_normal(&self, surface: usize, face: usize) -> Result<P3, String> {
         let e = self.entity(surface)?;
@@ -612,7 +712,8 @@ impl Reader<'_> {
                 e.name.as_str()
             };
             return Err(format!(
-                "#{face}: the face lies on {kind} (#{surface}), and only planes are read"
+                "#{face}: the face lies on {kind} (#{surface}), and only planes, cylinders and \
+                 cones are read"
             ));
         }
         let placement = Self::reference(&e.args, 1, surface, "PLANE")?;
@@ -664,6 +765,13 @@ fn add_face(
     } else {
         Some(Reader::reference(&e.args, 2, id, &e.name)?)
     };
+    if let Some(s) = surface {
+        let kind = r.entity(s)?.name.clone();
+        if kind == "CYLINDRICAL_SURFACE" || kind == "CONICAL_SURFACE" {
+            return add_curved_face(r, b, id, s, &bounds, sense)
+                .map_err(|e| format!("#{id}: the face on a {kind} (#{s}): {e}"));
+        }
+    }
     let plane = match surface {
         Some(s) => Some(r.plane_normal(s, id)?),
         None => None,
@@ -744,6 +852,47 @@ fn add_face(
     b.plane(&region, normal).map_err(|e| format!("#{id}: {e}"))
 }
 
+/// Adds the triangles of a face on a cylinder or a cone.
+fn add_curved_face(
+    r: &Reader<'_>,
+    b: &mut Builder,
+    id: usize,
+    surface: usize,
+    bounds: &[usize],
+    sense: bool,
+) -> Result<(), String> {
+    let (frame, radius, slope) = r.curved_surface(surface)?;
+    let mut loops: Vec<Vec<Corner>> = Vec::with_capacity(bounds.len());
+    for &bound in bounds {
+        let be = r.typed(bound, &["FACE_OUTER_BOUND", "FACE_BOUND"])?;
+        let l = Reader::reference(&be.args, 1, bound, &be.name)?;
+        let mut points = r.loop_points(l)?;
+        if points.len() > 1 && points.first() == points.last() {
+            points.pop();
+        }
+        let mut corners = Vec::with_capacity(points.len());
+        for p in points {
+            let (angle, radial, height) = frame.coordinates(p);
+            if (radial - (radius + slope * height)).abs() > ON_NM {
+                return Err(format!("a corner of #{id} is not on the surface"));
+            }
+            corners.push(Corner {
+                id: b.vertex(p),
+                angle: (radial > ON_NM).then_some(angle),
+                height,
+            });
+        }
+        loops.push(corners);
+    }
+    let widest = 2.5 * TAU / f64::from(r.segments.max(3));
+    for [one, two, three] in step_curved::band(&loops, widest)? {
+        // the pieces face away from the axis; a face of the other sense faces towards it
+        let (two, three) = if sense { (two, three) } else { (three, two) };
+        b.triangle(one, two, three).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// The triangles of one shell, turned so that its normals point out of the material (`outward`)
 /// or into a void (`!outward`).
 fn shell_mesh(
@@ -821,6 +970,9 @@ pub fn read_step(text: &str, limits: &StepLimits) -> Result<Vec<Body>, String> {
     let reader = Reader {
         map: &map,
         unit_nm: length_unit(&map)?,
+        angle: angle_unit(&map),
+        segments: limits.segments_per_turn,
+        corners_left: Cell::new(limits.max_triangles.saturating_mul(6).saturating_add(64)),
     };
     let solids: Vec<usize> = map
         .iter()
@@ -887,6 +1039,7 @@ pub fn read_step(text: &str, limits: &StepLimits) -> Result<Vec<Body>, String> {
 
 #[cfg(test)]
 mod tests {
+    use super::round_trip_tests::{polygon_area, volume_mm3};
     use super::*;
 
     fn limits() -> StepLimits {
@@ -1036,7 +1189,7 @@ mod tests {
                 "#11=DIRECTION('',(0.,0.,1.));",
                 "#12=DIRECTION('',(1.,0.,0.));",
                 "#13=AXIS2_PLACEMENT_3D('',#10,#11,#12);",
-                "#14=CYLINDRICAL_SURFACE('',#13,5.);",
+                "#14=SPHERICAL_SURFACE('',#13,5.);",
                 "#15=POLY_LOOP('',(#10,#10,#10));",
                 "#16=FACE_OUTER_BOUND('',#15,.T.);",
                 "#17=ADVANCED_FACE('',(#16),#14,.T.);",
@@ -1046,7 +1199,7 @@ mod tests {
         );
         let error = read_step(&cylinder, &limits()).unwrap_err();
         assert!(
-            error.contains("#17") && error.contains("CYLINDRICAL_SURFACE"),
+            error.contains("#17") && error.contains("SPHERICAL_SURFACE"),
             "{error}"
         );
         for kind in [
@@ -1055,7 +1208,7 @@ mod tests {
             "TOROIDAL_SURFACE",
             "B_SPLINE_SURFACE_WITH_KNOTS",
         ] {
-            let text = cylinder.replace("CYLINDRICAL_SURFACE", kind);
+            let text = cylinder.replace("SPHERICAL_SURFACE", kind);
             let error = read_step(&text, &limits()).unwrap_err();
             assert!(error.contains(kind), "{error}");
         }
@@ -1173,6 +1326,128 @@ mod tests {
         assert_eq!(bodies[0].0, "it's; a box");
         assert_eq!(bodies[0].1.volume_nm3(), 1.0e21);
     }
+
+    /// A solid of a circle of radius 5 at `z = 0` and what closes it above, written by hand: a
+    /// cylinder of height 10 (a seam edge and two caps), or a cone with its point.
+    fn turned(top_radius: f64, semi_angle: &str, unit: &str) -> String {
+        let mut data = vec![
+            "#1=CARTESIAN_POINT('',(0.,0.,0.));".to_owned(),
+            "#2=CARTESIAN_POINT('',(0.,0.,10.));".to_owned(),
+            "#3=DIRECTION('',(0.,0.,1.));".to_owned(),
+            "#4=DIRECTION('',(1.,0.,0.));".to_owned(),
+            "#5=AXIS2_PLACEMENT_3D('',#1,#3,#4);".to_owned(),
+            "#6=AXIS2_PLACEMENT_3D('',#2,#3,#4);".to_owned(),
+            "#7=CIRCLE('',#5,5.);".to_owned(),
+            "#10=CARTESIAN_POINT('',(5.,0.,0.));".to_owned(),
+            "#11=VERTEX_POINT('',#10);".to_owned(),
+            "#12=EDGE_CURVE('',#11,#11,#7,.T.);".to_owned(),
+            "#13=PLANE('',#5);".to_owned(),
+            // the floor, seen from below
+            "#20=ORIENTED_EDGE('',*,*,#12,.F.);".to_owned(),
+            "#21=EDGE_LOOP('',(#20));".to_owned(),
+            "#22=FACE_OUTER_BOUND('',#21,.T.);".to_owned(),
+            "#23=ADVANCED_FACE('',(#22),#13,.F.);".to_owned(),
+            "#30=LINE('',#10,#31);".to_owned(),
+            "#31=VECTOR('',#3,1.);".to_owned(),
+        ];
+        let mut faces = vec!["#23"];
+        if top_radius > 0.0 {
+            data.extend([
+                format!("#40=CARTESIAN_POINT('',({top_radius:?},0.,10.));"),
+                "#41=VERTEX_POINT('',#40);".to_owned(),
+                format!("#42=CIRCLE('',#6,{top_radius:?});"),
+                "#43=EDGE_CURVE('',#41,#41,#42,.T.);".to_owned(),
+                "#44=EDGE_CURVE('',#11,#41,#30,.T.);".to_owned(),
+                "#45=PLANE('',#6);".to_owned(),
+                "#46=ORIENTED_EDGE('',*,*,#43,.T.);".to_owned(),
+                "#47=EDGE_LOOP('',(#46));".to_owned(),
+                "#48=FACE_OUTER_BOUND('',#47,.T.);".to_owned(),
+                "#49=ADVANCED_FACE('',(#48),#45,.T.);".to_owned(),
+                "#50=ORIENTED_EDGE('',*,*,#12,.T.);".to_owned(),
+                "#51=ORIENTED_EDGE('',*,*,#44,.T.);".to_owned(),
+                "#52=ORIENTED_EDGE('',*,*,#43,.F.);".to_owned(),
+                "#53=ORIENTED_EDGE('',*,*,#44,.F.);".to_owned(),
+                "#54=EDGE_LOOP('',(#50,#51,#52,#53));".to_owned(),
+            ]);
+            faces.push("#49");
+        } else {
+            data.extend([
+                "#41=VERTEX_POINT('',#2);".to_owned(),
+                "#44=EDGE_CURVE('',#11,#41,#30,.T.);".to_owned(),
+                "#50=ORIENTED_EDGE('',*,*,#12,.T.);".to_owned(),
+                "#51=ORIENTED_EDGE('',*,*,#44,.T.);".to_owned(),
+                "#53=ORIENTED_EDGE('',*,*,#44,.F.);".to_owned(),
+                "#54=EDGE_LOOP('',(#50,#51,#53));".to_owned(),
+            ]);
+        }
+        data.push(if semi_angle.is_empty() {
+            "#55=CYLINDRICAL_SURFACE('',#5,5.);".to_owned()
+        } else {
+            format!("#55=CONICAL_SURFACE('',#5,5.,{semi_angle});")
+        });
+        data.push("#56=FACE_OUTER_BOUND('',#54,.T.);".to_owned());
+        data.push("#57=ADVANCED_FACE('',(#56),#55,.T.);".to_owned());
+        faces.push("#57");
+        data.push(format!("#60=CLOSED_SHELL('',({}));", faces.join(",")));
+        data.push("#61=MANIFOLD_SOLID_BREP('turned',#60);".to_owned());
+        let refs: Vec<&str> = data.iter().map(String::as_str).collect();
+        file(unit, &refs)
+    }
+
+    #[test]
+    fn a_cylinder_with_a_seam_a_cut_off_cone_and_a_point_are_read_closed() {
+        let read = |text: &str| {
+            let bodies = read_step(text, &limits()).unwrap();
+            assert!(
+                bodies[0].1.check_closed().is_ok(),
+                "{:?}",
+                bodies[0].1.check_closed()
+            );
+            volume_mm3(&bodies)
+        };
+        let disc = polygon_area(10.0, 72);
+        let cylinder = read(&turned(5.0, "", MM));
+        assert!((cylinder - disc * 10.0).abs() < 0.01, "{cylinder}");
+        // radius 5 to 2 over 10 mm: the angle of the side is atan(-3 / 10)
+        let slope = (-0.3f64).atan();
+        let frustum = read(&turned(2.0, &format!("{slope:.12}"), MM));
+        let small = polygon_area(4.0, 72);
+        let expected = 10.0 / 3.0 * (disc + small + (disc * small).sqrt());
+        assert!((frustum - expected).abs() < 0.01, "{frustum} {expected}");
+        // the point: atan(-5 / 10), here in degrees
+        let degrees = format!(
+            "{MM}\n#901=(CONVERSION_BASED_UNIT('DEGREE',#902)NAMED_UNIT(*)PLANE_ANGLE_UNIT());"
+        );
+        let angle = format!("{:.12}", (-0.5f64).atan().to_degrees());
+        let cone = read(&turned(0.0, &angle, &degrees));
+        assert!((cone - disc * 10.0 / 3.0).abs() < 0.01, "{cone}");
+        // a circle that is not on the cylinder is refused with the face
+        let off = turned(5.0, "", MM).replace(
+            "#55=CYLINDRICAL_SURFACE('',#5,5.);",
+            "#55=CYLINDRICAL_SURFACE('',#5,6.);",
+        );
+        let error = read_step(&off, &limits()).unwrap_err();
+        assert!(
+            error.contains("#57") && error.contains("not on the surface"),
+            "{error}"
+        );
+        // an edge on a curve that is not read is refused by its name
+        let ellipse =
+            turned(5.0, "", MM).replace("#7=CIRCLE('',#5,5.);", "#7=ELLIPSE('',#5,5.,4.);");
+        let error = read_step(&ellipse, &limits()).unwrap_err();
+        assert!(error.contains("ELLIPSE"), "{error}");
+        // a curve wrapped with how it runs on its surfaces is the curve inside
+        let wrapped = turned(5.0, "", MM)
+            .replace(
+                "#12=EDGE_CURVE('',#11,#11,#7,.T.);",
+                "#12=EDGE_CURVE('',#11,#11,#8,.T.);",
+            )
+            .replace(
+                "#7=CIRCLE('',#5,5.);",
+                "#7=CIRCLE('',#5,5.);\n#8=SURFACE_CURVE('',#7,(),.CURVE_3D.);",
+            );
+        assert!((read(&wrapped) - disc * 10.0).abs() < 0.01);
+    }
 }
 
 #[cfg(test)]
@@ -1283,11 +1558,9 @@ mod round_trip_tests {
             .contains("('prism',"));
     }
 
-    #[test]
-    fn the_enclosure_file_of_the_program_is_read_when_it_has_no_hole_and_refused_when_it_has_one() {
-        use crate::enclosure::{Enclosure, EnclosureParams, Hole, HoleStyle, Operation};
-        use eh3d_container::ObjectId;
-        let mut e = Enclosure::new(EnclosureParams {
+    fn small_box() -> crate::enclosure::Enclosure {
+        use crate::enclosure::{Enclosure, EnclosureParams};
+        Enclosure::new(EnclosureParams {
             inner_length: mm(100),
             inner_width: mm(60),
             inner_height: mm(30),
@@ -1297,7 +1570,25 @@ mod round_trip_tests {
             edge_margin: mm(3),
             min_web: mm(2),
         })
-        .unwrap();
+        .unwrap()
+    }
+
+    // the outer box less the inner space: 104 x 64 x 35 less 100 x 60 x 30
+    const WALLS_MM3: f64 = 104.0 * 64.0 * 35.0 - 100.0 * 60.0 * 30.0;
+
+    /// The area of a circle of `segments` straight pieces, in square millimetres.
+    pub(super) fn polygon_area(diameter: f64, segments: u32) -> f64 {
+        let step = std::f64::consts::TAU / f64::from(segments);
+        0.5 * f64::from(segments) * (diameter / 2.0).powi(2) * step.sin()
+    }
+
+    pub(super) fn volume_mm3(bodies: &[Body]) -> f64 {
+        bodies[0].1.volume_nm3() / 1.0e18
+    }
+
+    #[test]
+    fn the_enclosure_file_of_the_program_is_read_back_with_its_walls() {
+        let e = small_box();
         let text = crate::step::export_step(&e).unwrap();
         let bodies = read_step(&text, &limits()).unwrap();
         assert_eq!(bodies.len(), 1);
@@ -1307,31 +1598,110 @@ mod round_trip_tests {
             "{:?}",
             bodies[0].1.check_closed()
         );
-        // the outer box less the inner space: 104 x 64 x 35 less 100 x 60 x 30
-        let expected = (104.0 * 64.0 * 35.0 - 100.0 * 60.0 * 30.0) * 1.0e18;
-        assert!(
-            (bodies[0].1.volume_nm3() / expected - 1.0).abs() < 1e-12,
-            "{}",
-            bodies[0].1.volume_nm3()
-        );
-        e.apply(Operation::AddHole {
-            id: ObjectId::from_parts(1_700_000_000_000, 1, 7).unwrap(),
-            hole: Hole {
-                name: "h".into(),
-                face: Face::Front,
-                u: mm(30),
-                v: mm(15),
-                diameter: mm(6),
-                style: HoleStyle::Plain,
+        assert!((volume_mm3(&bodies) / WALLS_MM3 - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn the_round_holes_and_posts_of_the_export_are_read_back_closed_with_their_volume() {
+        use crate::enclosure::{Face, Hole, HoleStyle, Operation, Post};
+        use eh3d_container::ObjectId;
+        let id = |n: u64| ObjectId::from_parts(1_700_000_000_000, 1, n).unwrap();
+        let mut e = small_box();
+        let faces = [
+            Face::Front,
+            Face::Back,
+            Face::Left,
+            Face::Right,
+            Face::Top,
+            Face::Bottom,
+        ];
+        let mut removed = 0.0;
+        let walls = [2.0, 2.0, 2.0, 2.0, 3.0, 2.0];
+        for (n, (face, wall)) in faces.into_iter().zip(walls).enumerate() {
+            e.apply(Operation::AddHole {
+                id: id(10 + n as u64),
+                hole: Hole {
+                    name: format!("h{n}"),
+                    face,
+                    u: mm(20),
+                    v: mm(15),
+                    diameter: mm(6),
+                    style: HoleStyle::Plain,
+                },
+            })
+            .unwrap();
+            removed += polygon_area(6.0, 72) * wall;
+        }
+        e.apply(Operation::AddPost {
+            id: id(30),
+            post: Post {
+                name: "p".into(),
+                board_hole: None,
+                kind: crate::mount::BoreKind::SelfTapping,
+                x: mm(50),
+                y: mm(30),
+                outer_diameter: mm(8),
+                bore_diameter: mm(3),
+                height: mm(10),
+                bore_depth: mm(8),
+                base: None,
             },
         })
         .unwrap();
-        let with_hole = crate::step::export_step(&e).unwrap();
-        let error = read_step(&with_hole, &limits()).unwrap_err();
+        let added = polygon_area(8.0, 72) * 10.0 - polygon_area(3.0, 72) * 8.0;
+        let text = crate::step::export_step(&e).unwrap();
+        let bodies = read_step(&text, &limits()).unwrap();
+        let mesh = &bodies[0].1;
+        assert!(mesh.check_closed().is_ok(), "{:?}", mesh.check_closed());
+        let expected = WALLS_MM3 - removed + added;
         assert!(
-            error.contains("only straight edges") || error.contains("only planes"),
-            "{error}"
+            (volume_mm3(&bodies) - expected).abs() < 0.01,
+            "{} against {expected}",
+            volume_mm3(&bodies)
         );
+        // the outer size is the one of the box
+        for k in 0..3 {
+            let high = mesh.vertices.iter().map(|v| v[k]).fold(f64::MIN, f64::max);
+            let low = mesh.vertices.iter().map(|v| v[k]).fold(f64::MAX, f64::min);
+            assert_eq!((low, high), (0.0, [104.0e6, 64.0e6, 35.0e6][k]));
+        }
+        // fewer pieces for a turn give a smaller file of triangles
+        let coarse = StepLimits {
+            segments_per_turn: 12,
+            ..limits()
+        };
+        let rough = read_step(&text, &coarse).unwrap();
+        assert!(rough[0].1.check_closed().is_ok());
+        assert!(rough[0].1.triangles.len() < mesh.triangles.len());
+        // and a file cannot ask for more triangles than are allowed
+        let few = StepLimits {
+            max_triangles: 100,
+            ..limits()
+        };
+        assert!(read_step(&text, &few)
+            .unwrap_err()
+            .contains("triangles that the settings allow"));
+    }
+
+    #[test]
+    fn an_edge_that_goes_against_its_curve_is_walked_from_its_first_vertex() {
+        // the sense of the curve says nothing about which vertex an edge starts at
+        let text = crate::step::export_step(&small_box()).unwrap();
+        let flipped: Vec<String> = text
+            .lines()
+            .map(|line| {
+                if line.contains("=EDGE_CURVE(") {
+                    line.replace(",.T.);", ",.F.);")
+                } else {
+                    line.to_owned()
+                }
+            })
+            .collect();
+        let flipped = flipped.join("\n");
+        assert_ne!(flipped, text);
+        let bodies = read_step(&flipped, &limits()).unwrap();
+        assert!(bodies[0].1.check_closed().is_ok());
+        assert!((volume_mm3(&bodies) / WALLS_MM3 - 1.0).abs() < 1e-12);
     }
 }
 
