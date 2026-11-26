@@ -595,7 +595,7 @@ impl Reader<'_> {
                     if !forward {
                         along.reverse();
                     }
-                    let (Some(&start), Some(end)) = (along.first(), along.pop()) else {
+                    let (Some(start), Some(end)) = (along.first().copied(), along.pop()) else {
                         return Err(format!("#{edge}: the edge has no ends"));
                     };
                     if let Some(previous) = last_end {
@@ -1603,7 +1603,8 @@ mod round_trip_tests {
 
     #[test]
     fn the_round_holes_and_posts_of_the_export_are_read_back_closed_with_their_volume() {
-        use crate::enclosure::{Face, Hole, HoleStyle, Operation, Post};
+        use crate::enclosure::{Face, Hole, HoleStyle, Operation};
+        use crate::mount::Post;
         use eh3d_container::ObjectId;
         let id = |n: u64| ObjectId::from_parts(1_700_000_000_000, 1, n).unwrap();
         let mut e = small_box();
