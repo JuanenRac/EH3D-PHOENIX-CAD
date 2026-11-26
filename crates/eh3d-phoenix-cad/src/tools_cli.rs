@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! The command line of the small tools that read a file or a few numbers and print an answer:
 //! `mesh-check`, `convert`, `bolt-circle`, `bom-costs`, `templates`, `new`, `measure`,
-//! `config-diff` and `sketch-info`. Each one answers with a text that the program prints and with
+//! `config-diff`, `sketch-info` and `variants` ([`crate::variants_cli`]). Each one answers with a text that the program prints and with
 //! whether everything was in order (the exit code of the program: 0 for yes, 1 for no).
 //!
 //! The reports that have words use the language of `--lang` (English without it, so a report is the
@@ -33,7 +33,7 @@ use crate::units::parse_angle;
 use crate::window::{error_text, Window};
 
 /// The commands of this module, for the program to know which words are theirs.
-pub const COMMANDS: [&str; 9] = [
+pub const COMMANDS: [&str; 10] = [
     "mesh-check",
     "convert",
     "bolt-circle",
@@ -43,6 +43,7 @@ pub const COMMANDS: [&str; 9] = [
     "measure",
     "config-diff",
     "sketch-info",
+    "variants",
 ];
 
 /// The arguments of a command: the words that are not options, the options with a value and the
@@ -143,6 +144,7 @@ pub fn run(command: &str, args: &[String]) -> Result<(String, bool), String> {
         "measure" => measure(args),
         "config-diff" => config_diff(args),
         "sketch-info" => sketch_info(args),
+        "variants" => crate::variants_cli::run(args),
         other => Err(format!("{other}: unknown command (see help)")),
     }
 }

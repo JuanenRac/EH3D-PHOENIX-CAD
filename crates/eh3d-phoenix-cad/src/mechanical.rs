@@ -57,6 +57,7 @@ use crate::sketch::{check_sketch_name, Sketch};
 use crate::swept::SweptSpec;
 use crate::turned::TurnedSpec;
 use crate::units::{Angle, Count};
+use crate::variants::VariantSet;
 use crate::vars::{Param, Variables};
 use crate::{CadError, Length};
 
@@ -86,6 +87,10 @@ pub struct Mechanical {
     /// part of the text of this domain: the domain `sketch` keeps them. They are here so that one
     /// history goes back and forward over the steps and the sketches together.
     pub sketches: Vec<Sketch>,
+    /// The variants of the project: named values of its variables. Like the sketches they are not
+    /// part of the text of this domain (the domain `variants` keeps them) and they are here so that
+    /// one history goes back and forward over them too.
+    pub variants: VariantSet,
 }
 
 fn bad(why: &str) -> CadError {
@@ -996,6 +1001,7 @@ impl Mechanical {
             tip: 0,
             board: None,
             sketches: Vec::new(),
+            variants: VariantSet::default(),
         }
     }
 
@@ -1170,6 +1176,7 @@ impl Mechanical {
             tip,
             board,
             sketches: Vec::new(),
+            variants: VariantSet::default(),
         })
     }
 }

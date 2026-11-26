@@ -278,6 +278,7 @@ fn the_entries_of_the_suite_file_need_a_file_leave_to_write_and_the_model() {
             "save_as",
             "import",
             "branches",
+            "texts",
             "board",
             "check",
             "openings",

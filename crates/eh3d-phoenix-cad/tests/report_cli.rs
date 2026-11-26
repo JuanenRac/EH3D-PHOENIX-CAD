@@ -976,6 +976,41 @@ fn a_sketch_file_is_edited_from_the_command_line_like_in_the_window() {
 }
 
 #[test]
+fn a_dimension_is_made_a_reference_and_driving_again_from_the_command_line() {
+    let dir = Scratch::new("sketch-edit-reference");
+    let sketch = dir.file("reference.phoenixsketch");
+    let held =
+        format!("{}c1 on length e5 40000000\n", EDIT_SKETCH).replace("next 13 1", "next 13 2");
+    fs::write(&sketch, held).unwrap();
+    let edit = |op: &str, constraint: &str| {
+        run(&[
+            "sketch-edit",
+            sketch.as_str(),
+            "--op",
+            op,
+            "--constraint",
+            constraint,
+            "--overwrite",
+        ])
+    };
+    let (code, _, err) = edit("reference", "c1");
+    assert_eq!(code, 0, "{err}");
+    let text = fs::read_to_string(&sketch).unwrap();
+    assert!(text.starts_with("phoenix-sketch 3\n"), "{text}");
+    assert!(text.contains("c1 ref length e5 40000000\n"), "{text}");
+    let (code, _, err) = edit("driving", "c1");
+    assert_eq!(code, 0, "{err}");
+    let text = fs::read_to_string(&sketch).unwrap();
+    assert!(text.starts_with("phoenix-sketch 1\n"), "{text}");
+    assert!(text.contains("c1 on length e5 40000000\n"), "{text}");
+    for (constraint, why) in [("c9", "PHOENIX-CAD-014"), ("e5", "not a constraint")] {
+        let (code, _, err) = edit("reference", constraint);
+        assert_ne!(code, 0);
+        assert!(err.contains(why), "{err}");
+    }
+}
+
+#[test]
 fn a_refused_edit_writes_nothing_and_a_file_is_only_written_over_when_ordered() {
     let dir = Scratch::new("sketch-edit-refused");
     let plate = dir.file("plate.phoenixsketch");

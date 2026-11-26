@@ -11,7 +11,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use eh3d_project::meta::ConversionReport;
+use eh3d_project::meta::{ConversionReport, LocalText};
+use eh3d_project::SignatureStatus;
 
 use crate::config::MeshSettings;
 use crate::eh3dfile::{self, BranchLine, SaveSettings, Summary, EXTENSION};
@@ -260,16 +261,82 @@ pub struct Branches {
     pub summary: Summary,
     /// The report of the original that the branch `cad` keeps.
     pub original: Option<ConversionReport>,
+    /// The public key files that could not be used, and why.
+    pub key_problems: Vec<String>,
 }
 
 /// Reads the branches of a file of the suite.
 pub fn branches(file: &Path) -> Result<Branches, CadError> {
+    branches_with(file, &[])
+}
+
+/// [`branches`], with the signatures checked with the public key files named (those of
+/// `suite.trusted_keys` and the ones chosen in the window).
+pub fn branches_with(file: &Path, key_files: &[String]) -> Result<Branches, CadError> {
+    let (keys, key_problems) = eh3dfile::keyring(key_files);
     Ok(Branches {
         file: file.to_path_buf(),
-        summary: eh3dfile::summary(file)?,
+        summary: eh3dfile::summary_with(file, Some(&keys))?,
         // a report that cannot be read leaves the list of branches whole
         original: eh3dfile::origin_report(file).unwrap_or(None),
+        key_problems,
     })
+}
+
+/// What is known about a signature, in words; `None` when there is none.
+pub fn signature_text(signature: &SignatureStatus, lang: Lang) -> Option<String> {
+    Some(match signature {
+        SignatureStatus::Unsigned => return None,
+        SignatureStatus::Unchecked => Msg::SuiteStateSigned.tr(lang).to_owned(),
+        SignatureStatus::Valid(key) => fill(Msg::SuiteSigValid.tr(lang), &[key]),
+        SignatureStatus::Invalid => Msg::SuiteSigInvalid.tr(lang).to_owned(),
+        SignatureStatus::UnknownKey => Msg::SuiteSigUnknown.tr(lang).to_owned(),
+    })
+}
+
+/// The title and the description of the project of the suite in a language, empty where it has
+/// none.
+pub fn read_texts(file: &Path, lang: Lang) -> Result<(String, String), CadError> {
+    let metadata = eh3dfile::read_metadata(file)?;
+    let key = eh3dfile::language_key(lang.code());
+    let of = |texts: &LocalText| texts.get(key).cloned().unwrap_or_default();
+    Ok((of(&metadata.title), of(&metadata.description)))
+}
+
+/// Writes the title and the description of one language into the file of the suite of the window;
+/// an empty text takes that language away. Only the shared branch `common` is written, so the
+/// changes of the box that are not saved stay as they are. The answer is what to say, or why
+/// nothing was written (a read-only project, no file yet, or a language other than English before
+/// the project has the text in English).
+pub fn write_texts(
+    win: &Window,
+    lang_of_texts: Lang,
+    title: &str,
+    description: &str,
+) -> Result<String, String> {
+    let lang = win.lang;
+    if win.read_only {
+        return Err(Msg::ReadOnlyBadge.tr(lang).to_owned());
+    }
+    let file = current_file(win)
+        .filter(|f| f.is_file())
+        .ok_or_else(|| Msg::SuiteNeedFile.tr(lang).to_owned())?;
+    let how = eh3dfile::SaveSettings {
+        keep_backup: win.settings.backups > 0,
+        ..eh3dfile::SaveSettings::default()
+    };
+    eh3dfile::set_metadata(
+        &file,
+        lang_of_texts.code(),
+        Some(title.trim()),
+        Some(description.trim()),
+        &how,
+    )
+    .map_err(|e| error_text(&e, lang))?;
+    Ok(fill(
+        Msg::SuiteMetaSet.tr(lang),
+        &[&file.display().to_string()],
+    ))
 }
 
 /// The state of a branch in words: current, or out of date with the branches that changed, and
@@ -280,9 +347,7 @@ pub fn state_text(line: &BranchLine, lang: Lang) -> String {
     } else {
         fill(Msg::SuiteStateStale.tr(lang), &[&line.stale.join(", ")])
     }];
-    if line.signed {
-        words.push(Msg::SuiteStateSigned.tr(lang).to_owned());
-    }
+    words.extend(signature_text(&line.signature, lang));
     if line.sealed {
         words.push(Msg::SuiteStateSealed.tr(lang).to_owned());
     }
@@ -572,12 +637,12 @@ mod tests {
             bytes: 10,
             sealed: false,
             encrypted: false,
-            signed: false,
+            signature: SignatureStatus::Unsigned,
             stale: Vec::new(),
         };
         assert_eq!(state_text(&line, Lang::En), "current");
         line.stale = vec!["pcb".to_owned()];
-        line.signed = true;
+        line.signature = SignatureStatus::Unchecked;
         line.sealed = true;
         line.encrypted = true;
         assert_eq!(
@@ -587,6 +652,120 @@ mod tests {
         for l in Lang::ALL {
             assert_eq!(state_text(&line, l).matches("; ").count(), 3, "{l:?}");
         }
+    }
+
+    #[test]
+    fn the_title_and_the_description_are_written_and_read_in_each_language() {
+        let dir = crate::eh3dfile::tests::Scratch::new("texts");
+        let file = dir.path("box.eh3d");
+        let mut win = Window::new(
+            Lang::En,
+            crate::config::Settings::defaults(),
+            crate::uiconfig::UiSettings::defaults(),
+        )
+        .unwrap();
+        // there is no file of the suite yet
+        let why = write_texts(&win, Lang::En, "Box", "").unwrap_err();
+        assert_eq!(why, Msg::SuiteNeedFile.tr(Lang::En));
+        assert!(win.save_to(&file), "{:?}", win.status);
+        assert_eq!(read_texts(&file, Lang::En).unwrap(), Default::default());
+        // another language needs the English text first, and the refusal writes nothing
+        let before = std::fs::read(&file).unwrap();
+        assert!(write_texts(&win, Lang::Es, "Caja", "").is_err());
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+        write_texts(&win, Lang::En, " Box ", "Two lines:\nlid and body").unwrap();
+        write_texts(&win, Lang::Pt, "Caixa", "").unwrap();
+        assert_eq!(
+            read_texts(&file, Lang::En).unwrap(),
+            ("Box".to_owned(), "Two lines:\nlid and body".to_owned())
+        );
+        assert_eq!(
+            read_texts(&file, Lang::Pt).unwrap(),
+            ("Caixa".to_owned(), String::new())
+        );
+        // an empty field takes the text of that language away
+        write_texts(&win, Lang::Pt, "", "").unwrap();
+        assert_eq!(read_texts(&file, Lang::Pt).unwrap(), Default::default());
+        write_texts(&win, Lang::En, "Box", "").unwrap();
+        assert_eq!(read_texts(&file, Lang::En).unwrap().1, "");
+        // the box itself is still there and opens
+        assert!(win.open(&file), "{:?}", win.status);
+        win.read_only = true;
+        assert!(write_texts(&win, Lang::En, "Other", "").is_err());
+        assert_eq!(read_texts(&file, Lang::En).unwrap().0, "Box");
+    }
+
+    #[test]
+    fn a_signature_is_checked_only_with_a_public_key() {
+        use eh3d_project::ed25519::generate_key_files;
+        use eh3d_project::{Ed25519Signer, SaveOptions};
+
+        let dir = crate::eh3dfile::tests::Scratch::new("signatures");
+        let file = dir.path("box.eh3d");
+        eh3dfile::save_cad_project(&file, b"project", &SaveSettings::default()).unwrap();
+        let mine = generate_key_files(&dir.path("mine.key")).unwrap();
+        let other = generate_key_files(&dir.path("other.key")).unwrap();
+        let text = |p: &Path| p.display().to_string();
+        let cad = |found: &Branches| {
+            found
+                .summary
+                .branches
+                .iter()
+                .find(|b| b.id == "cad")
+                .unwrap()
+                .signature
+                .clone()
+        };
+        assert_eq!(cad(&branches(&file).unwrap()), SignatureStatus::Unsigned);
+        assert_eq!(signature_text(&SignatureStatus::Unsigned, Lang::En), None);
+
+        let signer = Ed25519Signer::read(&mine.secret_path).unwrap();
+        eh3dfile::open_project(&file)
+            .unwrap()
+            .sign_branch("cad", &signer, &SaveOptions::default())
+            .unwrap();
+        // without a key it is only seen
+        let seen = branches(&file).unwrap();
+        assert_eq!(cad(&seen), SignatureStatus::Unchecked);
+        assert!(!seen.summary.any_wrong_signature());
+        // with its public key it is valid, with another one the key is not trusted
+        let checked = branches_with(&file, &[text(&mine.public_path)]).unwrap();
+        assert_eq!(cad(&checked), SignatureStatus::Valid(mine.key_id.clone()));
+        assert!(checked.key_problems.is_empty());
+        let words = signature_text(&cad(&checked), Lang::En).unwrap();
+        assert!(words.contains(&mine.key_id), "{words}");
+        let stranger = branches_with(&file, &[text(&other.public_path)]).unwrap();
+        assert_eq!(cad(&stranger), SignatureStatus::UnknownKey);
+        // a secret key and a file that is not there are told and not used
+        let bad =
+            branches_with(&file, &[text(&mine.secret_path), "no-such.pub".to_owned()]).unwrap();
+        assert_eq!(bad.key_problems.len(), 2, "{:?}", bad.key_problems);
+        assert_eq!(cad(&bad), SignatureStatus::Unchecked);
+        for lang in Lang::ALL {
+            for status in [
+                SignatureStatus::Unchecked,
+                SignatureStatus::Invalid,
+                SignatureStatus::UnknownKey,
+            ] {
+                assert!(!signature_text(&status, lang).unwrap().is_empty());
+            }
+        }
+
+        // the command line says the same and takes the key
+        let f = text(&file);
+        let run = |extra: &[&str]| {
+            let mut args = vec![f.clone()];
+            args.extend(extra.iter().map(|w| (*w).to_owned()));
+            suite_cli::run("eh3d-info", &args)
+        };
+        let (out, ok) = run(&[]).unwrap();
+        assert!(ok && out.contains(",unchecked\n"), "{out}");
+        let key = text(&mine.public_path);
+        let (out, ok) = run(&["--key", &key]).unwrap();
+        assert!(ok && out.contains(",valid\n"), "{out}");
+        let (out, _) = run(&["--key", &key, "--text"]).unwrap();
+        assert!(out.contains(&mine.key_id), "{out}");
+        assert!(run(&["--key", "no-such.pub"]).is_err());
     }
 
     #[test]

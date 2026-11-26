@@ -76,6 +76,7 @@ impl Window {
                     FieldKind::Tip => Msg::ChangeTip,
                     FieldKind::Board => Msg::ChangeBoard,
                     FieldKind::Sketch => Msg::ChangeSketch,
+                    FieldKind::Variant => Msg::ChangeVariant,
                 };
                 let verb = match c.how {
                     How::Added => Msg::ChangeAdded,

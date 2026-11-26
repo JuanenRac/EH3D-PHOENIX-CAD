@@ -34,9 +34,13 @@ A project can live in the branch `cad` of a `.eh3d` file (`docs/BOARD_INTERCHANG
 
 The File menu of the window has the submenu of the project file of the suite (open, save, save as with every branch, import keeping the original, the list of branches with their state and the board of `pcb`), decided in `suitewin` and tested without a screen, and `sketch-check` reports what is wrong or almost right in a sketch file (`docs/BOARD_INTERCHANGE.md`, `docs/SKETCH.md`). Neither has been seen on a screen.
 
+## Variants, reference dimensions, texts and signatures
+
+A project keeps variants, named values of its variables (`docs/PROJECT_DOMAIN.md`), which are applied, checked and exported one file each from the command `variants` and from a window of the Tools menu. A dimension of a sketch can be a reference that reads the drawing and holds nothing (`docs/SKETCH.md`). The title and the description of a `.eh3d` project are edited from the window, and the signatures of its branches are checked with public keys the person trusts (`docs/BOARD_INTERCHANGE.md`); the program does not sign. The logic is tested without a screen and none of the windows has been seen on one.
+
 ## Capabilities
 
-The official state of each capability is in REQUIREMENTS.md: 31 requirements: 30 `prototype` (FCAD-001 and FCAD-003 to FCAD-031) and 1 `planned` (FCAD-002). This page never states a state that REQUIREMENTS.md does not.
+The official state of each capability is in REQUIREMENTS.md: 35 requirements: 34 `prototype` (FCAD-001 and FCAD-003 to FCAD-035) and 1 `planned` (FCAD-002). This page never states a state that REQUIREMENTS.md does not.
 
 ## Open questions
 

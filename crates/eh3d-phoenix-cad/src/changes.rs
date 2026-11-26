@@ -28,6 +28,8 @@ pub enum FieldKind {
     Board,
     /// A sketch of the project.
     Sketch,
+    /// A variant of the project.
+    Variant,
 }
 
 /// What happened to the field.
@@ -148,6 +150,14 @@ fn fields_of(m: &Mechanical, limits: &MechanicalLimits) -> Option<Fields> {
             (FieldKind::Sketch, sketch.name().to_string(), String::new()),
             text,
         );
+    }
+    for name in m.variants.names() {
+        if let Ok(values) = m.variants.values(name) {
+            out.insert(
+                (FieldKind::Variant, name.to_string(), String::new()),
+                format!("{values:?}"),
+            );
+        }
     }
     Some(out)
 }

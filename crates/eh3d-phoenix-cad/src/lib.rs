@@ -201,6 +201,8 @@ pub mod triangulate;
 pub mod turned;
 pub mod uiconfig;
 pub mod units;
+pub mod variants;
+pub mod variants_cli;
 pub mod vars;
 pub mod window;
 pub mod zipread;

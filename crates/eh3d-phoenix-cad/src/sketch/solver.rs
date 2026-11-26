@@ -162,7 +162,7 @@ impl<'a> Model<'a> {
             }
         }
         let active: Vec<&ConstraintEntry> =
-            sketch.constraints().iter().filter(|c| c.enabled).collect();
+            sketch.constraints().iter().filter(|c| c.drives()).collect();
         let mut model = Model {
             sketch,
             pidx,

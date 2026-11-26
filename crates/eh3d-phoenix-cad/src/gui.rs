@@ -43,6 +43,12 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
+mod texts;
+mod variants;
+
+/// The extensions of the public key files that check signatures.
+const KEY_EXTENSIONS: [&str; 1] = ["pub"];
+
 // the colours of the theme Forge, the one the other programs of the suite start with: amber on charcoal
 const BACKGROUND: Color32 = Color32::from_rgb(0x0f, 0x0d, 0x0b);
 const PANEL: Color32 = Color32::from_rgb(0x17, 0x13, 0x10);
@@ -82,6 +88,8 @@ enum SuiteAsk {
     SaveAs,
     /// The file of another program whose original is kept.
     Import,
+    /// A public key file that checks the signatures.
+    Key,
 }
 
 /// The window that opens a project or asks for the name of the file to write.
@@ -143,6 +151,12 @@ struct App {
     branches: Option<Result<Branches, String>>,
     /// The window that tells what an import or the board did.
     suite_note: Option<(Msg, Vec<String>)>,
+    /// The window of the variants, while it is open.
+    variants: Option<variants::VariantsForm>,
+    /// The window of the title and the description of the suite project, while it is open.
+    texts: Option<texts::TextsForm>,
+    /// The public key files chosen while the program runs, besides those of the settings.
+    chosen_keys: Vec<String>,
     /// The settings file given with `--config`, where the arrangement of the panels is kept.
     config_path: Option<PathBuf>,
     /// Whether the 3D view and the sketch were drawn in this frame.
@@ -182,6 +196,9 @@ impl App {
             recent_suite: Vec::new(),
             branches: None,
             suite_note: None,
+            variants: None,
+            texts: None,
+            chosen_keys: Vec::new(),
             config_path: None,
             drew_view3d: false,
             drew_sketch: false,
@@ -218,6 +235,7 @@ impl App {
         let extensions: &[&'static str] = match ask {
             SuiteAsk::Import => &suitewin::IMPORT_EXTENSIONS,
             SuiteAsk::Open | SuiteAsk::SaveAs => &suitewin::SUITE_EXTENSIONS,
+            SuiteAsk::Key => &KEY_EXTENSIONS,
         };
         let save = (ask == SuiteAsk::SaveAs).then(|| suitewin::suggested_name(&self.win));
         self.dialog = Some(Dialog {
@@ -238,6 +256,13 @@ impl App {
             SuiteAsk::Open => suitewin::open(&mut self.win, path) != suitewin::Opened::Refused,
             SuiteAsk::SaveAs => suitewin::save_as(&mut self.win, path, overwrite),
             SuiteAsk::Import => self.suite_import(path),
+            SuiteAsk::Key => {
+                let key = path.display().to_string();
+                if !self.chosen_keys.contains(&key) {
+                    self.chosen_keys.push(key);
+                }
+                true
+            }
         };
         self.refresh_branches();
         done
@@ -313,7 +338,9 @@ impl App {
         let lang = self.win.lang;
         let file = suitewin::current_file(&self.win)
             .ok_or_else(|| Msg::SuiteNeedFile.tr(lang).to_owned())?;
-        suitewin::branches(&file).map_err(|e| error_text(&e, lang))
+        let mut keys = self.win.ui.suite.trusted_keys.clone();
+        keys.extend(self.chosen_keys.iter().cloned());
+        suitewin::branches_with(&file, &keys).map_err(|e| error_text(&e, lang))
     }
 
     /// Reads the branches again when their window is open.
@@ -333,6 +360,7 @@ impl App {
         let mut open = true;
         let mut again = false;
         let mut board = false;
+        let mut trust = false;
         let mut pick: Option<PathBuf> = None;
         egui::Window::new(Msg::SuiteBranchesTitle.tr(lang))
             .open(&mut open)
@@ -365,6 +393,17 @@ impl App {
                                     ui.end_row();
                                 }
                             });
+                        let signature =
+                            suitewin::signature_text(&found.summary.project_signature, lang);
+                        if let Some(words) = signature {
+                            ui.label(fill(Msg::SuiteProjectSignature.tr(lang), &[&words]));
+                        }
+                        if found.summary.any_wrong_signature() {
+                            ui.colored_label(DANGER, Msg::SuiteSigInvalid.tr(lang));
+                        }
+                        for problem in &found.key_problems {
+                            ui.colored_label(DANGER, problem.as_str());
+                        }
                         if !found.summary.findings.is_empty() {
                             let count = found.summary.findings.len().to_string();
                             ui.colored_label(DANGER, fill(Msg::SuiteFindings.tr(lang), &[&count]));
@@ -385,6 +424,9 @@ impl App {
                 ui.horizontal(|ui| {
                     if ui.button(Msg::SuiteRefresh.tr(lang)).clicked() {
                         again = true;
+                    }
+                    if ui.button(Msg::SuiteTrustKey.tr(lang)).clicked() {
+                        trust = true;
                     }
                     let take = egui::Button::new(Msg::SuiteMenuBoard.tr(lang));
                     if ui.add_enabled(editable && read.is_ok(), take).clicked() {
@@ -410,6 +452,9 @@ impl App {
                 self.recent_added.push(path.display().to_string());
             }
             again = true;
+        }
+        if trust {
+            self.suite_dialog(SuiteAsk::Key);
         }
         if board {
             self.suite_board();
@@ -1968,7 +2013,8 @@ impl App {
                         }
                     }
                 };
-                let imported = dialog.suite == Some(SuiteAsk::Import);
+                // a file to import and a key are not projects to open again
+                let imported = matches!(dialog.suite, Some(SuiteAsk::Import | SuiteAsk::Key));
                 if done && dialog.export.is_none() && !dialog.dxf && !imported {
                     self.recent_added.push(path.display().to_string());
                 }
@@ -2022,6 +2068,7 @@ fn show_dialog(ctx: &egui::Context, d: &mut Dialog, lang: Lang) -> Option<Outcom
         _ if d.suite == Some(SuiteAsk::Open) => Msg::SuiteOpenTitle,
         _ if d.suite == Some(SuiteAsk::SaveAs) => Msg::SuiteSaveTitle,
         _ if d.suite == Some(SuiteAsk::Import) => Msg::SuiteImportTitle,
+        _ if d.suite == Some(SuiteAsk::Key) => Msg::SuiteTrustKey,
         _ if d.export.is_some() => Msg::ExportTitle,
         _ if d.dxf => Msg::ImportDxfTitle,
         _ if d.library => Msg::OpenLibraryTitle,
@@ -2034,6 +2081,8 @@ fn show_dialog(ctx: &egui::Context, d: &mut Dialog, lang: Lang) -> Option<Outcom
     let export_extensions: Vec<&str> = export_extension.into_iter().collect();
     let extensions: &[&str] = if d.suite == Some(SuiteAsk::Import) {
         &suitewin::IMPORT_EXTENSIONS
+    } else if d.suite == Some(SuiteAsk::Key) {
+        &KEY_EXTENSIONS
     } else if d.suite.is_some() {
         &suitewin::SUITE_EXTENSIONS
     } else if d.export.is_some() {
@@ -2598,6 +2647,7 @@ impl App {
             .collect();
         let mut edited = None;
         let mut toggled = None;
+        let mut referred = None;
         let mut picked = None;
         let mut removed = None;
         egui::ScrollArea::vertical()
@@ -2641,7 +2691,7 @@ impl App {
                         .unwrap_or_else(|| shown.clone());
                     ui.horizontal(|ui| {
                         let edit = egui::TextEdit::singleline(&mut text).desired_width(170.0);
-                        let response = ui.add_enabled(row.enabled, edit);
+                        let response = ui.add_enabled(row.enabled && !row.reference, edit);
                         if response.lost_focus() && text != shown {
                             edited = Some((row.id, text.clone()));
                         }
@@ -2651,11 +2701,22 @@ impl App {
                         let value = row.value.clone().unwrap_or_default();
                         ui.label(egui::RichText::new(format!("= {value}")).color(DIM));
                     });
+                    let mut reference = row.reference;
+                    if ui
+                        .checkbox(&mut reference, Msg::ReferenceDimension.tr(lang))
+                        .changed()
+                    {
+                        referred = Some((row.id, reference));
+                    }
                     self.dim_edits.insert(row.id.0, text);
                 }
             });
         if let Some((id, on)) = toggled {
             self.sketch.set_enabled(id, on);
+        }
+        if let Some((id, reference)) = referred {
+            self.dim_edits.remove(&id.0);
+            self.sketch.set_reference(id, reference);
         }
         if let Some(id) = picked {
             self.sketch.select_constraint(id, extend);
@@ -2936,6 +2997,8 @@ impl App {
         self.panel_window(ctx);
         self.branches_window(ctx);
         self.suite_note_window(ctx);
+        self.variants_window(ctx);
+        self.texts_window(ctx);
         self.dialog_window(ctx);
         self.shot_tick(ctx);
     }
@@ -3447,6 +3510,7 @@ impl App {
             Cmd::SuiteSaveAs => self.suite_dialog(SuiteAsk::SaveAs),
             Cmd::SuiteImport => self.suite_dialog(SuiteAsk::Import),
             Cmd::SuiteBranches => self.branches = Some(self.read_branches()),
+            Cmd::SuiteTexts => self.open_texts(),
             Cmd::SuiteBoard => self.suite_board(),
             Cmd::SuiteCheck => self.suite_work(BoardWork::CheckFit, Msg::SuiteMenuCheck),
             Cmd::SuiteOpenings => {
@@ -3456,6 +3520,7 @@ impl App {
                 self.suite_work(BoardWork::HandBack, Msg::SuiteMenuHandBack);
             }
             Cmd::CheckSketch => self.check_sketch(),
+            Cmd::Variants => self.open_variants(),
             Cmd::Export(format) => self.export_dialog(format),
             Cmd::FitReport => self.report_open = true,
             Cmd::EditModel => {

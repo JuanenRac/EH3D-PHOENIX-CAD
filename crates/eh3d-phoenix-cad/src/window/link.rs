@@ -196,6 +196,7 @@ impl Window {
         let bytes = match document
             .set_mechanical(&self.mech, &self.settings.mechanical)
             .and_then(|()| document.set_sketches(&self.mech.sketches, &self.sketch_settings))
+            .and_then(|()| document.set_variants(&self.mech.variants, &self.settings.variants))
         {
             Ok(()) => document.to_bytes(),
             Err(e) => {
@@ -247,6 +248,7 @@ impl Window {
         let mut document = self.document.clone();
         document.set_mechanical(&self.mech, &self.settings.mechanical)?;
         document.set_sketches(&self.mech.sketches, &self.sketch_settings)?;
+        document.set_variants(&self.mech.variants, &self.settings.variants)?;
         let options = crate::servercad::ContractOptions::from_settings(&self.settings);
         crate::servercad::project_json_with(&document, name, &options)
     }

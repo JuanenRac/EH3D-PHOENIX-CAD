@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use eh3d_project::meta::{LocalText, REPORT_FILE};
-use eh3d_project::{Dependency, Project, Seal};
+use eh3d_project::{Dependency, Project, Seal, SignatureStatus};
 
 use crate::boardart::{
     self, BoardArtifact, Change, ARTIFACT, ARTIFACT_VERSION, MOUNTS_ENTRY, SNAPSHOT_ENTRY,
@@ -93,7 +93,7 @@ pub(crate) struct All {
     pub(crate) sketch: SketchSettings,
 }
 
-fn settings(config: Option<&str>) -> Result<All, String> {
+pub(crate) fn settings(config: Option<&str>) -> Result<All, String> {
     let (lib, ui) = crate::tools_cli::load_settings(config)?;
     let sketch = match config {
         None => SketchSettings::defaults(),
@@ -161,10 +161,28 @@ fn parse(args: &[String], more: &[&str], switches: &[&str]) -> Result<Args, Stri
     Args::parse(args, &with_value, switches)
 }
 
+/// The word of the comma separated values for what is known about a signature.
+fn signature_word(signature: &SignatureStatus) -> &'static str {
+    match signature {
+        SignatureStatus::Unsigned => "unsigned",
+        SignatureStatus::Unchecked => "unchecked",
+        SignatureStatus::Valid(_) => "valid",
+        SignatureStatus::Invalid => "invalid",
+        SignatureStatus::UnknownKey => "unknown-key",
+    }
+}
+
 fn info(args: &[String]) -> Answer {
-    let a = Args::parse(args, &[], &["--text"])?;
+    let a = Args::parse(args, &["--key", "--config"], &["--text"])?;
     let file = suite_file(&a)?;
-    let found = eh3dfile::summary(file).map_err(say(a.lang))?;
+    let mut key_files = settings(a.value("--config"))?.ui.suite.trusted_keys;
+    key_files.extend(a.value("--key").map(str::to_owned));
+    let (keys, problems) = eh3dfile::keyring(&key_files);
+    // a key that was asked for and cannot be used would leave signatures unchecked
+    if !problems.is_empty() {
+        return Err(problems.join("; "));
+    }
+    let found = eh3dfile::summary_with(file, Some(&keys)).map_err(say(a.lang))?;
     let mut out = String::new();
     if a.has("--text") {
         line(
@@ -193,9 +211,15 @@ fn info(args: &[String]) -> Answer {
             for source in &b.stale {
                 line(&mut out, Msg::SuiteStale, a.lang, &[&b.id, source]);
             }
+            if let Some(words) = suitewin::signature_text(&b.signature, a.lang) {
+                out.push_str(&format!("{}: {words}\n", b.id));
+            }
+        }
+        if let Some(words) = suitewin::signature_text(&found.project_signature, a.lang) {
+            line(&mut out, Msg::SuiteProjectSignature, a.lang, &[&words]);
         }
     } else {
-        out.push_str("branch,app,format,files,bytes,state\n");
+        out.push_str("branch,app,format,files,bytes,state,signature\n");
         for b in &found.branches {
             let state = if !b.stale.is_empty() {
                 format!("stale:{}", b.stale.join("+"))
@@ -207,12 +231,19 @@ fn info(args: &[String]) -> Answer {
                 "ok".to_owned()
             };
             out.push_str(&format!(
-                "{},{},{},{},{},{state}\n",
+                "{},{},{},{},{},{state},{}\n",
                 csv(&b.id),
                 csv(&b.app),
                 csv(&b.format),
                 b.files,
-                b.bytes
+                b.bytes,
+                signature_word(&b.signature)
+            ));
+        }
+        if found.project_signature != SignatureStatus::Unsigned {
+            out.push_str(&format!(
+                "project-signature,{}\n",
+                signature_word(&found.project_signature)
             ));
         }
     }
@@ -224,7 +255,10 @@ fn info(args: &[String]) -> Answer {
             csv(&f.detail)
         ));
     }
-    Ok((out, found.findings.is_empty()))
+    Ok((
+        out,
+        found.findings.is_empty() && !found.any_wrong_signature(),
+    ))
 }
 
 fn save(args: &[String]) -> Answer {
@@ -608,7 +642,7 @@ pub(crate) fn cut_openings(
     Ok((out, ok))
 }
 
-fn window(file: &Path, lang: Lang, s: &All) -> Result<Window, String> {
+pub(crate) fn window(file: &Path, lang: Lang, s: &All) -> Result<Window, String> {
     let mut win = Window::new(lang, s.lib.clone(), s.ui.clone()).map_err(say(lang))?;
     win.sketch_settings = s.sketch.clone();
     if !win.open(file) {

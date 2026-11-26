@@ -42,7 +42,10 @@ use crate::units::Angle;
 use crate::{CadError, Length};
 
 /// The newest version of the format that this program reads.
-pub const FILE_VERSION: u32 = 2;
+pub const FILE_VERSION: u32 = 3;
+
+/// The version that came with the second set of kinds of constraint.
+const KINDS_VERSION: u32 = 2;
 
 /// The version of a sketch that has only the kinds of constraint of the first version.
 pub const BASE_VERSION: u32 = 1;
@@ -57,16 +60,19 @@ const VERSION_2_KINDS: [&str; 6] = [
     "symmetric_circles",
 ];
 
-/// The version a sketch is written with: 2 when it has a constraint that came with that version
-/// and 1 otherwise, so that a sketch that does not need the newer kinds can still be read by a
-/// program that reads only the first version.
+/// The version a sketch is written with: 3 when it has a reference dimension (the state `ref`),
+/// else 2 when it has a constraint that came with that version and 1 otherwise, so that a sketch
+/// that does not need what is newer can still be read by a program that reads the older versions.
 pub fn version_of(sketch: &Sketch) -> u32 {
+    if sketch.constraints().iter().any(|c| c.reference) {
+        return FILE_VERSION;
+    }
     let newer = sketch
         .constraints()
         .iter()
         .any(|c| VERSION_2_KINDS.contains(&c.constraint.kind_name()));
     if newer {
-        FILE_VERSION
+        KINDS_VERSION
     } else {
         BASE_VERSION
     }
@@ -172,7 +178,12 @@ pub fn to_text(sketch: &Sketch) -> String {
         let _ = writeln!(out, "{} {body}{tail}", e.id);
     }
     for c in sketch.constraints() {
-        let state = if c.enabled { "on" } else { "off" };
+        let state = match (c.enabled, c.reference) {
+            (true, false) => "on",
+            (false, false) => "off",
+            (true, true) => "ref",
+            (false, true) => "refoff",
+        };
         let _ = writeln!(out, "{} {state} {}", c.id, constraint_text(&c.constraint));
     }
     out
@@ -574,18 +585,26 @@ pub fn from_text(text: &str) -> Result<Sketch, CadError> {
                 let Some((state, rest)) = rest.split_first() else {
                     return Err(bad(line, "a constraint needs on or off"));
                 };
-                let enabled = match *state {
-                    "on" => true,
-                    "off" => false,
+                let (enabled, reference) = match *state {
+                    "on" => (true, false),
+                    "off" => (false, false),
+                    "ref" => (true, true),
+                    "refoff" => (false, true),
                     other => return Err(bad(line, format!("{other:?} is not on or off"))),
                 };
+                if reference && version < FILE_VERSION {
+                    return Err(bad(
+                        line,
+                        format!("a reference dimension needs a file of version {FILE_VERSION}"),
+                    ));
+                }
                 let Some((kind, args)) = rest.split_first() else {
                     return Err(bad(line, "a constraint needs a kind"));
                 };
-                if version < FILE_VERSION && VERSION_2_KINDS.contains(kind) {
+                if version < KINDS_VERSION && VERSION_2_KINDS.contains(kind) {
                     return Err(bad(
                         line,
-                        format!("{kind} needs a file of version {FILE_VERSION}"),
+                        format!("{kind} needs a file of version {KINDS_VERSION}"),
                     ));
                 }
                 let constraint = parse_constraint(line, kind, args, expr)?;
@@ -593,6 +612,7 @@ pub fn from_text(text: &str) -> Result<Sketch, CadError> {
                     id,
                     constraint,
                     enabled,
+                    reference,
                 });
             }
             other => return Err(bad(line, format!("{other:?} is not understood"))),
@@ -729,6 +749,44 @@ mod tests {
     }
 
     #[test]
+    fn a_reference_dimension_is_kept_in_a_file_of_version_three() {
+        let mut k = sketch();
+        let a = k.add_point(mm(0), mm(0)).unwrap();
+        let b = k.add_point(mm(10), mm(0)).unwrap();
+        let held = k
+            .add_constraint(Constraint::Distance {
+                a,
+                b,
+                dim: Dim::fixed(mm(10)),
+            })
+            .unwrap();
+        assert_eq!(version_of(&k), BASE_VERSION);
+        k.set_reference(held, true).unwrap();
+        assert_eq!(version_of(&k), FILE_VERSION);
+        let text = to_text(&k);
+        assert!(text.starts_with("phoenix-sketch 3\n"), "{text}");
+        assert!(text.contains(" ref distance "), "{text}");
+        assert_eq!(from_text(&text).unwrap(), k);
+        k.set_enabled(held, false).unwrap();
+        let off = to_text(&k);
+        assert!(off.contains(" refoff distance "), "{off}");
+        assert_eq!(from_text(&off).unwrap(), k);
+        let old = text.replacen("phoenix-sketch 3", "phoenix-sketch 2", 1);
+        let e = from_text(&old).unwrap_err().to_string();
+        assert!(e.contains("needs a file of version 3"), "{e}");
+        // a reference has no expression and is a dimension
+        let with = text.replace(
+            " ref distance e1 e2 10000000",
+            " ref distance e1 e2 10000000 = width",
+        );
+        assert_ne!(with, text);
+        assert!(from_text(&with).is_err(), "{with}");
+        let line =
+            format!("{text}c2 ref horizontal_points e1 e2\n").replace("next 3 2", "next 3 3");
+        assert!(from_text(&line).is_err(), "{line}");
+    }
+
+    #[test]
     fn comments_and_empty_lines_are_ignored() {
         let text = "# a sketch\n\nphoenix-sketch 1\nname a\n\nplane top 0 0 0\nnext 2 1\n# one point\ne1 point 1 2\n";
         let k = from_text(text).unwrap();
@@ -741,7 +799,7 @@ mod tests {
         let cases: Vec<(String, &str)> = vec![
             ("".into(), "not a sketch file"),
             ("hello 1\n".into(), "not a sketch file"),
-            ("phoenix-sketch 3\n".into(), "version 3"),
+            ("phoenix-sketch 4\n".into(), "version 4"),
             ("phoenix-sketch 0\n".into(), "1 or more"),
             ("phoenix-sketch x\n".into(), "version is missing"),
             ("phoenix-sketch 1\n".into(), "name is missing"),
@@ -1167,7 +1225,7 @@ mod tests {
         let r2 = k.add_circle(c, mm(2)).unwrap();
         k.add_constraint(Constraint::SymmetricCircles { a: r1, b: r2, axis })
             .unwrap();
-        assert_eq!(version_of(&k), FILE_VERSION);
+        assert_eq!(version_of(&k), KINDS_VERSION);
         let text = to_text(&k);
         assert!(
             text.starts_with(
@@ -1225,7 +1283,7 @@ mod tests {
         let r1 = k.add_circle(c1, mm(3)).unwrap();
         let r2 = k.add_circle(c2, mm(5)).unwrap();
         k.add_constraint(Constraint::Concentric(r1, r2)).unwrap();
-        assert_eq!(version_of(&k), FILE_VERSION);
+        assert_eq!(version_of(&k), KINDS_VERSION);
         let text = to_text(&k);
         assert!(
             text.starts_with(
@@ -1249,10 +1307,10 @@ mod tests {
         let old = text.replacen("phoenix-sketch 2", "phoenix-sketch 1", 1);
         let e = from_text(&old).unwrap_err().to_string();
         assert!(e.contains("concentric needs a file of version 2"), "{e}");
-        let newer = text.replacen("phoenix-sketch 2", "phoenix-sketch 3", 1);
+        let newer = text.replacen("phoenix-sketch 2", "phoenix-sketch 4", 1);
         let e = from_text(&newer).unwrap_err().to_string();
         assert!(
-            e.contains("version 3 and this program reads up to 2"),
+            e.contains("version 4 and this program reads up to 3"),
             "{e}"
         );
         // a file of version 1 without the newer kinds is read as it always was, and so is the

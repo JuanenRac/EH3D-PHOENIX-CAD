@@ -274,6 +274,8 @@ pub struct SuiteSettings {
     pub sheet_width: Length,
     /// The room between two flat faces on that sheet.
     pub sheet_gap: Length,
+    /// The public key files that check the signatures of a project of the suite.
+    pub trusted_keys: Vec<String>,
 }
 
 impl SuiteSettings {
@@ -309,6 +311,15 @@ impl SuiteSettings {
             opening_clearance: room("suite.opening_clearance")?,
             sheet_width: room("suite.sheet_width")?,
             sheet_gap: room("suite.sheet_gap")?,
+            trusted_keys: match c.get("suite.trusted_keys") {
+                None | Some("" | "none") => Vec::new(),
+                Some(list) => list
+                    .split(';')
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+            },
             post_kind: BoreKind::from_name(kind).ok_or_else(|| {
                 CadError::Config(format!(
                     "suite.post_kind: {kind} is not insert or self-tapping"
