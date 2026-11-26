@@ -16,7 +16,7 @@ concurrency:
 
 env:
   # The tag of the sibling repository the window is built against.
-  COMMON_REF: "v0.3.3"
+  COMMON_REF: "v0.3.4"
 
 jobs:
   pictures:
@@ -52,7 +52,7 @@ jobs:
           mkdir -p "$XDG_CONFIG_HOME"
           for lang in en es de fr it ja zh pt; do
             mkdir -p "$out/$lang"
-            shot() { xvfb-run -a -s "-screen 0 1920x1080x24" timeout 90 "$exe" gui "$1" --view "$2" --lang "$lang" --size 1800x960 --theme forge --wait 12 --shot "$out/$lang/$3"; }
+            shot() { xvfb-run -a -s "-screen 0 2560x1440x24" timeout 90 "$exe" gui "$1" --view "$2" --lang "$lang" --size 2100x1080 --theme forge --wait 12 --shot "$out/$lang/$3"; }
             shot box.phoenixproj model phoenix-cad-01-box.png
             shot box.phoenixsketch sketch phoenix-cad-02-sketch.png
           done
