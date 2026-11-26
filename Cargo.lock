@@ -102,7 +102,7 @@ dependencies = [
 
 [[package]]
 name = "eh3d-phoenix-cad"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "eh3d-container",
  "eh3d-project",

@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.1.5] - Variants, reference dimensions and the shared project of the suite
+
 - **Tab titles are written whole:** the shared window frame, taken at the tag v0.3.4, no longer replaces a short title that fits with the sign of its panel.
 - **The pictures of the window are renewed** with the colours of the program, in the eight languages, and a workflow run by hand (*Window pictures*) takes them from a build on a virtual screen.
 - **The titles of the window are in the colour of the program:** the titles of the panels, the names in the sheet of variables, the name of the program and the titles of the drawings take the ice blue of the program, in a tone that reads (contrast 4.5:1 or more) on the dark and the light looks; amber is left to what asks for attention, and the colours of the geometry do not change. It has not been seen on a screen.
