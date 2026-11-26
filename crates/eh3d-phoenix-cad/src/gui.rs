@@ -3322,7 +3322,9 @@ impl App {
                 ui.label(egui::RichText::new(&l.text).color(tone(l.tone)));
             }
             if !lines.layers.is_empty() {
-                ui.label(egui::RichText::new(Msg::PlLayers.tr(lang)).color(title_colour(ui.visuals())));
+                ui.label(
+                    egui::RichText::new(Msg::PlLayers.tr(lang)).color(title_colour(ui.visuals())),
+                );
                 for l in &lines.layers {
                     let mut visible = l.visible;
                     ui.horizontal(|ui| {
