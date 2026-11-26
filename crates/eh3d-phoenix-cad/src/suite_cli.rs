@@ -504,35 +504,43 @@ fn check(args: &[String]) -> Answer {
     let a = Args::parse(args, &["--clearance", "--config"], &[])?;
     let file = suite_file(&a)?;
     let s = settings(a.value("--config"))?;
-    let clearance = length(&a, "--clearance", "0 mm")?;
-    let (_, mech) = recipe(file, &s).map_err(say(a.lang))?;
-    let mut project = eh3dfile::open_project(file).map_err(say(a.lang))?;
+    let mut clearance = s.ui.suite.part_clearance;
+    if a.value("--clearance").is_some() {
+        clearance = length(&a, "--clearance", "0 mm")?;
+    }
+    check_fit(file, &s, clearance, a.lang)
+}
+
+/// Says whether the box agrees with the board of `pcb` as it is now and every part has room.
+pub(crate) fn check_fit(file: &Path, s: &All, clearance: Length, lang: Lang) -> Answer {
+    let (_, mech) = recipe(file, s).map_err(say(lang))?;
+    let mut project = eh3dfile::open_project(file).map_err(say(lang))?;
     let mut out = String::new();
-    let Some(taken) = snapshot(&mut project, &s.lib).map_err(say(a.lang))? else {
-        line(&mut out, Msg::SuiteBoardNone, a.lang, &[]);
+    let Some(taken) = snapshot(&mut project, &s.lib).map_err(say(lang))? else {
+        line(&mut out, Msg::SuiteBoardNone, lang, &[]);
         return Ok((out, false));
     };
-    let (mut now, _) = board_now(&mut project, &s.lib).map_err(say(a.lang))?;
+    let (mut now, _) = board_now(&mut project, &s.lib).map_err(say(lang))?;
     let stale = project
         .stale_refs()
         .iter()
         .any(|r| r.branch == BRANCH && r.dependency.branch == SOURCE_BRANCH);
     let changes = boardart::changes(&taken, &now);
     if stale {
-        line(&mut out, Msg::SuiteBoardStale, a.lang, &[]);
+        line(&mut out, Msg::SuiteBoardStale, lang, &[]);
     }
     if changes.is_empty() {
-        line(&mut out, Msg::SuiteBoardSame, a.lang, &[]);
+        line(&mut out, Msg::SuiteBoardSame, lang, &[]);
     }
     for change in &changes {
-        change_line(&mut out, change, a.lang);
+        change_line(&mut out, change, lang);
     }
     // the room is checked for the board as it is now, where the box has it
     now.board.placement = mech.board.as_ref().and_then(|b| b.placement);
-    let made = built(&mech, &s).map_err(say(a.lang))?;
-    let problems = boardfit::check_parts(&made.enclosure, &now, clearance).map_err(say(a.lang))?;
+    let made = built(&mech, s).map_err(say(lang))?;
+    let problems = boardfit::check_parts(&made.enclosure, &now, clearance).map_err(say(lang))?;
     if problems.is_empty() {
-        line(&mut out, Msg::FitAll, a.lang, &[]);
+        line(&mut out, Msg::FitAll, lang, &[]);
     }
     for p in &problems {
         let message = match p.trouble {
@@ -542,7 +550,7 @@ fn check(args: &[String]) -> Answer {
             Trouble::Post => Msg::FitPost,
         };
         // the sentence of a post has one place only: a second value has nowhere to go
-        line(&mut out, message, a.lang, &[&p.part, &mm_text(p.short)]);
+        line(&mut out, message, lang, &[&p.part, &mm_text(p.short)]);
     }
     Ok((out, changes.is_empty() && problems.is_empty()))
 }
@@ -551,37 +559,51 @@ fn openings(args: &[String]) -> Answer {
     let a = parse(args, &["--clearance"], &["--apply", "--backup"])?;
     let file = suite_file(&a)?;
     let s = settings(a.value("--config"))?;
-    let clearance = length(&a, "--clearance", "0.5 mm")?;
-    let (mut document, mut mech) = recipe(file, &s).map_err(say(a.lang))?;
-    let mut project = eh3dfile::open_project(file).map_err(say(a.lang))?;
+    let mut clearance = s.ui.suite.opening_clearance;
+    if a.value("--clearance").is_some() {
+        clearance = length(&a, "--clearance", "0 mm")?;
+    }
+    let how = a.has("--apply").then(|| save_settings(&a));
+    cut_openings(file, &s, clearance, a.lang, how.as_ref())
+}
+
+/// The openings of the connectors in the walls of the box; they are written into the recipe only
+/// when `write` says how.
+pub(crate) fn cut_openings(
+    file: &Path,
+    s: &All,
+    clearance: Length,
+    lang: Lang,
+    write: Option<&SaveSettings>,
+) -> Answer {
+    let (mut document, mut mech) = recipe(file, s).map_err(say(lang))?;
+    let mut project = eh3dfile::open_project(file).map_err(say(lang))?;
     let mut out = String::new();
-    let Some(mut taken) = snapshot(&mut project, &s.lib).map_err(say(a.lang))? else {
-        line(&mut out, Msg::SuiteBoardNone, a.lang, &[]);
+    let Some(mut taken) = snapshot(&mut project, &s.lib).map_err(say(lang))? else {
+        line(&mut out, Msg::SuiteBoardNone, lang, &[]);
         return Ok((out, false));
     };
     taken.board.placement = mech.board.as_ref().and_then(|b| b.placement);
-    let done =
-        boardfit::apply_openings(&s.lib, &mut mech, &taken, clearance).map_err(say(a.lang))?;
+    let done = boardfit::apply_openings(&s.lib, &mut mech, &taken, clearance).map_err(say(lang))?;
     let mut ok = true;
     for (name, outcome) in &done {
         match outcome {
-            Outcome::Added => line(&mut out, Msg::OpenAdded, a.lang, &[name]),
-            Outcome::Moved => line(&mut out, Msg::OpenMoved, a.lang, &[name]),
-            Outcome::Same => line(&mut out, Msg::OpenSame, a.lang, &[name]),
+            Outcome::Added => line(&mut out, Msg::OpenAdded, lang, &[name]),
+            Outcome::Moved => line(&mut out, Msg::OpenMoved, lang, &[name]),
+            Outcome::Same => line(&mut out, Msg::OpenSame, lang, &[name]),
             Outcome::Refused(e) => {
                 ok = false;
-                let why = error_text(e, a.lang);
-                line(&mut out, Msg::OpenRefused, a.lang, &[name, &why]);
+                let why = error_text(e, lang);
+                line(&mut out, Msg::OpenRefused, lang, &[name, &why]);
             }
         }
     }
-    if a.has("--apply") {
+    if let Some(how) = write {
         document
             .set_mechanical(&mech, &s.lib.mechanical)
-            .map_err(say(a.lang))?;
+            .map_err(say(lang))?;
         let changes = BTreeMap::from([(PROJECT_ENTRY.to_owned(), Some(document.to_bytes()))]);
-        eh3dfile::write_branch(file, BRANCH, changes, None, &save_settings(&a))
-            .map_err(say(a.lang))?;
+        eh3dfile::write_branch(file, BRANCH, changes, None, how).map_err(say(lang))?;
     }
     Ok((out, ok))
 }
@@ -611,22 +633,40 @@ fn publish(args: &[String]) -> Answer {
     let a = parse(args, &["--sheet-width", "--gap"], &["--backup"])?;
     let file = suite_file(&a)?;
     let s = settings(a.value("--config"))?;
-    let width = length(&a, "--sheet-width", "600 mm")?;
-    let gap = length(&a, "--gap", "5 mm")?;
-    let win = window(file, a.lang, &s)?;
+    let mut width = s.ui.suite.sheet_width;
+    if a.value("--sheet-width").is_some() {
+        width = length(&a, "--sheet-width", "0 mm")?;
+    }
+    let mut gap = s.ui.suite.sheet_gap;
+    if a.value("--gap").is_some() {
+        gap = length(&a, "--gap", "0 mm")?;
+    }
+    hand_back(file, &s, (width, gap), a.lang, &save_settings(&a))
+}
+
+/// Writes into the branch `cad` what the other programs take (the STL of the solid, the flat
+/// faces on a sheet of this width and gap, the posts) and the documents of the box.
+pub(crate) fn hand_back(
+    file: &Path,
+    s: &All,
+    (width, gap): (Length, Length),
+    lang: Lang,
+    how: &SaveSettings,
+) -> Answer {
+    let win = window(file, lang, s)?;
     let mut out = String::new();
     let mut ok = true;
     let mut changes: BTreeMap<String, Option<Vec<u8>>> = BTreeMap::new();
     let mut put = |out: &mut String, name: &str, made: Result<Vec<u8>, CadError>| match made {
         Ok(bytes) => {
-            line(out, Msg::SuiteWrote, a.lang, &[&format!("{BRANCH}/{name}")]);
+            line(out, Msg::SuiteWrote, lang, &[&format!("{BRANCH}/{name}")]);
             changes.insert(name.to_owned(), Some(bytes));
             true
         }
         Err(e) => {
             // an older file of this name would no longer be the box: it is taken away
-            let why = error_text(&e, a.lang);
-            line(out, Msg::SuiteSkipped, a.lang, &[name, &why]);
+            let why = error_text(&e, lang);
+            line(out, Msg::SuiteSkipped, lang, &[name, &why]);
             changes.insert(name.to_owned(), None);
             false
         }
@@ -651,23 +691,23 @@ fn publish(args: &[String]) -> Answer {
             boardart::mounts(win.enclosure(), board),
         );
     }
-    eh3dfile::write_branch(file, BRANCH, changes, None, &save_settings(&a)).map_err(say(a.lang))?;
+    eh3dfile::write_branch(file, BRANCH, changes, None, how).map_err(say(lang))?;
     let documents = [
         eh3dfile::DocFile {
             name: "report.txt".to_owned(),
             title: titles(Msg::DocReportTitle),
-            bytes: win.export_bytes(Format::Report).map_err(say(a.lang))?,
+            bytes: win.export_bytes(Format::Report).map_err(say(lang))?,
         },
         eh3dfile::DocFile {
             name: "bill.txt".to_owned(),
             title: titles(Msg::DocBillTitle),
-            bytes: win.export_bytes(Format::Bill).map_err(say(a.lang))?,
+            bytes: win.export_bytes(Format::Bill).map_err(say(lang))?,
         },
     ];
-    eh3dfile::write_documents(file, &documents, &save_settings(&a)).map_err(say(a.lang))?;
+    eh3dfile::write_documents(file, &documents, how).map_err(say(lang))?;
     for d in &documents {
         let name = format!("{}/{}", eh3dfile::DOCS_BRANCH, d.name);
-        line(&mut out, Msg::SuiteWrote, a.lang, &[&name]);
+        line(&mut out, Msg::SuiteWrote, lang, &[&name]);
     }
     Ok((out, ok))
 }

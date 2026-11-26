@@ -357,6 +357,62 @@ pub fn take_board(win: &mut Window) -> Result<BoardTaken, String> {
     Ok(taken)
 }
 
+/// What the window can ask of a box made from a board.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoardWork {
+    /// Does the box agree with the board and does every part have room?
+    CheckFit,
+    /// Cut the openings of the connectors and write them into the recipe.
+    CutOpenings,
+    /// Hand the solid, the flat faces, the posts and the documents back to the other programs.
+    HandBack,
+}
+
+/// What it answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Worked {
+    /// The lines to show.
+    pub text: String,
+    /// False when the verification did not pass.
+    pub passed: bool,
+}
+
+/// Does one of the works of the board on the file of the window, as the commands `eh3d-check`,
+/// `eh3d-openings --apply` and `eh3d-publish` do with the section `[suite]` of the settings. The
+/// file is what is worked on, so changes that are not saved are refused first.
+pub fn board_work(win: &mut Window, work: BoardWork) -> Result<Worked, String> {
+    let lang = win.lang;
+    let file = current_file(win).ok_or_else(|| Msg::SuiteNeedFile.tr(lang).to_owned())?;
+    if win.dirty {
+        return Err(Msg::SuiteSaveFirst.tr(lang).to_owned());
+    }
+    let settings = suite_cli::All {
+        lib: win.settings.clone(),
+        ui: win.ui.clone(),
+        sketch: win.sketch_settings.clone(),
+    };
+    let how = SaveSettings {
+        keep_backup: win.settings.backups > 0,
+        ..SaveSettings::default()
+    };
+    let suite = &settings.ui.suite;
+    let (text, passed) = match work {
+        BoardWork::CheckFit => suite_cli::check_fit(&file, &settings, suite.part_clearance, lang)?,
+        BoardWork::CutOpenings => {
+            suite_cli::cut_openings(&file, &settings, suite.opening_clearance, lang, Some(&how))?
+        }
+        BoardWork::HandBack => {
+            let sheet = (suite.sheet_width, suite.sheet_gap);
+            suite_cli::hand_back(&file, &settings, sheet, lang, &how)?
+        }
+    };
+    // the recipe changed in the file: the window shows what is there
+    if work == BoardWork::CutOpenings && !win.open(&file) {
+        return Err(win.status.text(lang));
+    }
+    Ok(Worked { text, passed })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -583,6 +639,45 @@ mod tests {
             take_board(&mut win).unwrap_err(),
             Msg::SuiteSaveFirst.tr(Lang::En)
         );
+    }
+
+    #[test]
+    fn the_window_checks_the_fit_cuts_the_openings_and_hands_the_box_back() {
+        let dir = Scratch::new("win-work");
+        let file = dir.path("job.eh3d");
+        let mut win = window();
+        let need = board_work(&mut win, BoardWork::CheckFit).unwrap_err();
+        assert_eq!(need, Msg::SuiteNeedFile.tr(Lang::En));
+        board(&file, &sample());
+        assert_eq!(open(&mut win, &file), Opened::NoBox);
+        let first = board_work(&mut win, BoardWork::CheckFit).unwrap_err();
+        assert_eq!(first, Msg::SuiteSaveFirst.tr(Lang::En));
+        take_board(&mut win).unwrap();
+        let pcb = bytes_of(&file, SOURCE_BRANCH);
+        let before = std::fs::read(&file).unwrap();
+        let checked = board_work(&mut win, BoardWork::CheckFit).unwrap();
+        assert!(checked.passed, "{checked:?}");
+        assert!(checked.text.contains("has room"), "{}", checked.text);
+        // a check writes nothing
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+        let cut = board_work(&mut win, BoardWork::CutOpenings).unwrap();
+        assert!(cut.passed, "{cut:?}");
+        assert_eq!(cut.text, "J1: opening added\n");
+        let again = board_work(&mut win, BoardWork::CutOpenings).unwrap();
+        assert!(again.text.contains("already in place"), "{}", again.text);
+        assert!(!win.dirty);
+        let handed = board_work(&mut win, BoardWork::HandBack).unwrap();
+        assert!(handed.text.contains("cad/mounts2d.json"), "{}", handed.text);
+        assert!(handed.text.contains("docs/cad/bill.txt"), "{}", handed.text);
+        assert!(bytes_of(&file, BRANCH).contains_key("export/solid.stl"));
+        assert_eq!(bytes_of(&file, SOURCE_BRANCH), pcb);
+        // a part too tall is found
+        let mut tall = sample();
+        tall.parts[0].height = mm(20);
+        board(&file, &tall);
+        let found = board_work(&mut win, BoardWork::CheckFit).unwrap();
+        assert!(!found.passed, "{found:?}");
+        assert!(found.text.contains("reaches the lid"), "{}", found.text);
     }
 
     #[test]

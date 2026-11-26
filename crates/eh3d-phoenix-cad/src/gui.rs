@@ -23,7 +23,8 @@ use crate::sketch_ui::{
     ConstraintTool, DimTool, Prim, RowMark, SketchEditor, SketchUiSettings, Stroke as SketchStroke,
     Tone, Tool,
 };
-use crate::suitewin::{self, Branches, Saved};
+use crate::sketchcheck;
+use crate::suitewin::{self, BoardWork, Branches, Saved};
 use crate::uiconfig::UiSettings;
 use crate::window::{
     error_text, face_msg, Input, Mark, MeasureTool, NewStep, Selection, Status, ViewKind, Window,
@@ -285,6 +286,26 @@ impl App {
         };
         self.suite_note = Some((Msg::SuiteMenuBoard, lines));
         self.refresh_branches();
+    }
+
+    /// Checks the fit, cuts the openings or hands the box back, and shows the answer.
+    fn suite_work(&mut self, work: BoardWork, title: Msg) {
+        let lines = match suitewin::board_work(&mut self.win, work) {
+            Ok(done) => done.text.lines().map(str::to_owned).collect(),
+            Err(why) => vec![why],
+        };
+        self.suite_note = Some((title, lines));
+        self.refresh_branches();
+    }
+
+    /// Checks the sketch that is being drawn and shows what it found.
+    fn check_sketch(&mut self) {
+        let lang = self.win.lang;
+        let lines = match sketchcheck::check(&self.sketch.sketch, &self.win.sketch_settings) {
+            Ok(report) => report.lines(lang),
+            Err(e) => vec![error_text(&e, lang)],
+        };
+        self.suite_note = Some((Msg::CheckMenu, lines));
     }
 
     /// Reads the branches of the suite file again.
@@ -3427,6 +3448,14 @@ impl App {
             Cmd::SuiteImport => self.suite_dialog(SuiteAsk::Import),
             Cmd::SuiteBranches => self.branches = Some(self.read_branches()),
             Cmd::SuiteBoard => self.suite_board(),
+            Cmd::SuiteCheck => self.suite_work(BoardWork::CheckFit, Msg::SuiteMenuCheck),
+            Cmd::SuiteOpenings => {
+                self.suite_work(BoardWork::CutOpenings, Msg::SuiteMenuOpenings);
+            }
+            Cmd::SuiteHandBack => {
+                self.suite_work(BoardWork::HandBack, Msg::SuiteMenuHandBack);
+            }
+            Cmd::CheckSketch => self.check_sketch(),
             Cmd::Export(format) => self.export_dialog(format),
             Cmd::FitReport => self.report_open = true,
             Cmd::EditModel => {

@@ -70,6 +70,9 @@ The File menu has the submenu *Suite project (.eh3d)*, in the eight languages:
 | Import a file and keep the original | As `eh3d-import`: the original in `cad/origin/` byte for byte with the report; the warnings of the reader are listed as not read. |
 | Branches of the project | Each branch with its program, format, files and state (current, out of date and which branch changed, signed, sealed, encrypted), the findings of the checks, the report of the original and the suite files opened last. |
 | Take the board from the branch pcb | As `eh3d-new` when there is no box and as `eh3d-board` when there is one; refused while there are changes that are not saved. |
+| Check the fit with the board | As `eh3d-check`; it writes nothing. |
+| Cut the openings of the connectors | As `eh3d-openings --apply`. |
+| Hand the box to the other programs | As `eh3d-publish`. |
 
 A signature is only shown, never checked. The plain *Save as* of the File menu keeps every branch too. A file that was opened, saved or picked is added to the recent files only when that worked, and a recent file that is gone is taken out of the list; the list is kept between sessions in the settings file given with `--config`. All of this is decided in `suitewin`, which is tested without a screen; the window has never been opened on a screen.
 
@@ -84,6 +87,9 @@ A signature is only shown, never checked. The plain *Save as* of the File menu k
 | `post_height` | 8 mm | the height of the post under each mounting hole |
 | `post_screw` | M3 | the screw of the posts, from the table of screws |
 | `post_kind` | insert | `insert` or `self-tapping` |
+| `part_clearance` | 0 mm | the room every part must have when the fit is checked |
+| `opening_clearance` | 0.5 mm | the room round a connector in its opening |
+| `sheet_width`, `sheet_gap` | 600 mm, 5 mm | the sheet of the flat faces that are handed back |
 
 ## Selectors, parameters and flat faces
 

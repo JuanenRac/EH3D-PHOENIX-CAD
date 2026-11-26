@@ -9,9 +9,11 @@
 //! the one of every check of the suite: 0 when there is nothing to report, 2 when there is, 1 when
 //! the command could not run.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use crate::eh3dfile;
 use crate::lang::{fill, Lang, Msg};
+use crate::project::Document;
 use crate::sketch::file as sketch_file;
 use crate::sketch::settings::SketchSettings;
 use crate::sketch::solver::Outcome;
@@ -167,6 +169,54 @@ pub struct Report {
     pub findings: Vec<Finding>,
     /// The degrees of freedom left, when the solver found a solution.
     pub freedom: Option<usize>,
+}
+
+impl Report {
+    /// The findings as sentences, or the sentence that there is nothing to report.
+    pub fn lines(&self, lang: Lang) -> Vec<String> {
+        if self.findings.is_empty() {
+            let freedom = self.freedom.unwrap_or(0).to_string();
+            vec![fill(Msg::CheckClean.tr(lang), &[&freedom])]
+        } else {
+            self.findings.iter().map(|f| f.text(lang)).collect()
+        }
+    }
+}
+
+/// The largest project that is read to check its sketches.
+const MAX_PROJECT_BYTES: usize = 256 << 20;
+
+/// Whether a file is a project, of this program or of the suite, by its extension.
+fn is_project(path: &Path) -> bool {
+    eh3dfile::is_eh3d(path)
+        || path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("phoenixproj"))
+}
+
+/// The sketches a command works on: the one of a sketch file, or the ones kept in a project (all
+/// of them, or the one with the name given).
+fn sketches(
+    path: &Path,
+    name: Option<&str>,
+    settings: &SketchSettings,
+    lang: Lang,
+) -> Result<Vec<Sketch>, String> {
+    let say = |e: CadError| format!("{}: {}", path.display(), error_text(&e, lang));
+    let mut found = if is_project(path) {
+        let bytes = eh3dfile::load_project_bytes(path, MAX_PROJECT_BYTES as u64).map_err(say)?;
+        let document = Document::from_bytes(&bytes, MAX_PROJECT_BYTES).map_err(say)?;
+        document.sketches(settings).map_err(say)?
+    } else {
+        vec![sketch_file::read_file(path, settings).map_err(say)?]
+    };
+    if let Some(name) = name {
+        found.retain(|s| s.name() == name);
+    }
+    if found.is_empty() {
+        return Err(format!("{}: there is no such sketch", path.display()));
+    }
+    Ok(found)
 }
 
 /// The point that stands for the group of points joined to `id`.
@@ -343,8 +393,8 @@ pub fn run(command: &str, args: &[String]) -> Result<(String, bool), String> {
     if !COMMANDS.contains(&command) {
         return Err(format!("{command}: unknown command (see help)"));
     }
-    let a = Args::parse(args, &["--config"], &["--text"])?;
-    let path = PathBuf::from(a.only_word("sketch file")?);
+    let a = Args::parse(args, &["--config", "--sketch"], &["--text"])?;
+    let path = PathBuf::from(a.only_word("sketch file or project")?);
     let settings = match a.value("--config") {
         Some(c) => {
             let text = std::fs::read_to_string(c).map_err(|e| format!("{c}: {e}"))?;
@@ -353,28 +403,36 @@ pub fn run(command: &str, args: &[String]) -> Result<(String, bool), String> {
         None => SketchSettings::defaults(),
     };
     let say = |e: CadError| format!("{}: {}", path.display(), error_text(&e, a.lang));
-    let sketch = sketch_file::read_file(&path, &settings).map_err(say)?;
-    let report = check(&sketch, &settings).map_err(say)?;
-    let clean = report.findings.is_empty();
+    let of_project = is_project(&path);
+    let list = sketches(&path, a.value("--sketch"), &settings, a.lang)?;
+    let mut clean = true;
     let mut out = String::new();
-    if a.has("--text") {
-        for finding in &report.findings {
-            out.push_str(&finding.text(a.lang));
-            out.push('\n');
+    if !a.has("--text") {
+        // a project has several sketches: each line starts with the name of its own
+        let first = if of_project { "sketch," } else { "" };
+        out.push_str(&format!("{first}kind,subject,other,value,code\n"));
+    }
+    for sketch in &list {
+        let report = check(sketch, &settings).map_err(say)?;
+        clean &= report.findings.is_empty();
+        let before = if of_project {
+            let mark = if a.has("--text") { ": " } else { "," };
+            format!("{}{mark}", sketch.name())
+        } else {
+            String::new()
+        };
+        let mut lines = if a.has("--text") {
+            report.lines(a.lang)
+        } else {
+            report.findings.iter().map(Finding::row).collect()
+        };
+        if let (false, Some(freedom)) = (a.has("--text"), report.freedom) {
+            lines.push(format!("freedom,,,{freedom},"));
         }
-        if clean {
-            let freedom = report.freedom.unwrap_or(0).to_string();
-            out.push_str(&fill(Msg::CheckClean.tr(a.lang), &[&freedom]));
+        for line in lines {
+            out.push_str(&before);
+            out.push_str(&line);
             out.push('\n');
-        }
-    } else {
-        out.push_str("kind,subject,other,value,code\n");
-        for finding in &report.findings {
-            out.push_str(&finding.row());
-            out.push('\n');
-        }
-        if let Some(freedom) = report.freedom {
-            out.push_str(&format!("freedom,,,{freedom},\n"));
         }
     }
     Ok((out, clean))
@@ -513,6 +571,40 @@ mod tests {
         ])
         .unwrap();
         assert!(out.contains("horizontal,"), "{out}");
+    }
+
+    #[test]
+    fn the_sketches_of_a_project_and_of_a_suite_file_are_checked_by_name() {
+        let dir = Scratch::new("sketch-project");
+        let mut open = Sketch::new("loose", SketchPlane::on_face(Face::Top)).unwrap();
+        let a = open.add_point(mm(0), mm(0)).unwrap();
+        let b = open.add_point(mm(9), mm(5)).unwrap();
+        open.add_line(a, b).unwrap();
+        let mut document = Document::new();
+        document
+            .set_sketches(&[plate(), open], &SketchSettings::defaults())
+            .unwrap();
+        let project = dir.path("p.phoenixproj");
+        std::fs::write(&project, document.to_bytes()).unwrap();
+        let suite = dir.path("p.eh3d");
+        let how = eh3dfile::SaveSettings::default();
+        eh3dfile::save_cad_project(&suite, &document.to_bytes(), &how).unwrap();
+        for path in [&project, &suite] {
+            let path = path.to_str().unwrap().to_owned();
+            let call = |more: &[&str]| {
+                let mut args = vec![path.clone()];
+                args.extend(more.iter().map(|w| (*w).to_owned()));
+                run("sketch-check", &args)
+            };
+            let (out, ok) = call(&[]).unwrap();
+            assert!(!ok, "{out}");
+            assert!(out.starts_with("sketch,kind,"), "{out}");
+            assert!(out.contains("\nplate,freedom,,,"), "{out}");
+            assert_eq!(out.matches("\nloose,open-end,").count(), 2, "{out}");
+            let (out, ok) = call(&["--sketch", "plate", "--text", "--lang", "en"]).unwrap();
+            assert!(ok && out.starts_with("plate: Nothing to report"), "{out}");
+            assert!(call(&["--sketch", "none"]).is_err());
+        }
     }
 
     #[test]

@@ -266,6 +266,14 @@ pub struct SuiteSettings {
     pub post_screw: String,
     /// What the bore of a post is made for.
     pub post_kind: BoreKind,
+    /// The room every part of the board must have when the fit is checked.
+    pub part_clearance: Length,
+    /// The room round a connector in its opening.
+    pub opening_clearance: Length,
+    /// The width of the sheet of the flat faces that are handed back.
+    pub sheet_width: Length,
+    /// The room between two flat faces on that sheet.
+    pub sheet_gap: Length,
 }
 
 impl SuiteSettings {
@@ -297,6 +305,10 @@ impl SuiteSettings {
             board_headroom: room("suite.board_headroom")?,
             post_height,
             post_screw,
+            part_clearance: room("suite.part_clearance")?,
+            opening_clearance: room("suite.opening_clearance")?,
+            sheet_width: room("suite.sheet_width")?,
+            sheet_gap: room("suite.sheet_gap")?,
             post_kind: BoreKind::from_name(kind).ok_or_else(|| {
                 CadError::Config(format!(
                     "suite.post_kind: {kind} is not insert or self-tapping"

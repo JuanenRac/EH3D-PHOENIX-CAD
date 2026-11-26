@@ -236,7 +236,7 @@ The STEP export and the model for fabrication **refuse** a box with an extrusion
 
 ## Checking a sketch
 
-`eh3d-phoenix-cad sketch-check SKETCH.phoenixsketch [--text] [--lang CODE] [--config FILE]` reads a sketch file and says, without changing it:
+`eh3d-phoenix-cad sketch-check SKETCH.phoenixsketch|PROJECT [--sketch NAME] [--text] [--lang CODE] [--config FILE]` reads a sketch file, or the sketches kept in a project (`.phoenixproj` or `.eh3d`), and says, without changing anything:
 
 | `kind` | What | Code |
 |---|---|---|
@@ -246,7 +246,7 @@ The STEP export and the model for fabrication **refuse** a box with an extrusion
 | `near` | two points within `check_near` that no coincidence or concentricity joins | none |
 | `horizontal`, `vertical` | a line of the profile within `check_angle` of an axis, not on it and not held by a horizontal, vertical or line angle constraint | none |
 
-The output is `kind,subject,other,value,code` (and a line `freedom,,,N,` when the solver found a solution), or with `--text` a sentence for each in the eight languages. Construction geometry is not part of the profile and is not looked at for straight lines or open ends. The exit code is 0 when there is nothing to report, 2 when there is and 1 when the command could not run. An open sketch can be meant, for example the path of a sweep: the check reports what it sees. The command reads sketch files, not the sketches kept in a project, and the window does not show it.
+The output is `kind,subject,other,value,code` (and a line `freedom,,,N,` when the solver found a solution), or with `--text` a sentence for each in the eight languages. Construction geometry is not part of the profile and is not looked at for straight lines or open ends. The exit code is 0 when there is nothing to report, 2 when there is and 1 when the command could not run. An open sketch can be meant, for example the path of a sweep: the check reports what it sees. For a project every line starts with the name of its sketch. In the window the entry *Check the sketch* of the Tools menu shows the same sentences for the sketch being drawn; it has not been seen on a screen.
 
 ## Codes
 

@@ -243,6 +243,14 @@ pub enum Cmd {
     SuiteBranches,
     /// Take the board of the branch `pcb` into the box.
     SuiteBoard,
+    /// Check the box against the board and the room of its parts.
+    SuiteCheck,
+    /// Cut the openings of the connectors.
+    SuiteOpenings,
+    /// Hand the box back to the other programs.
+    SuiteHandBack,
+    /// Check the sketch.
+    CheckSketch,
     /// Write the model in a format.
     Export(Format),
     /// Open the window with the fit report.
@@ -275,7 +283,7 @@ fn own(id: &str, m: Msg, cmd: Cmd) -> Entry<Cmd> {
 
 /// The entries of the submenu of the project file of the suite, in order: their ids, their words
 /// and what they do.
-pub const SUITE_ENTRIES: [(&str, Msg, Cmd); 6] = [
+pub const SUITE_ENTRIES: [(&str, Msg, Cmd); 9] = [
     ("file.suite.open", Msg::SuiteMenuOpen, Cmd::SuiteOpen),
     ("file.suite.save", Msg::SuiteMenuSave, Cmd::SuiteSave),
     ("file.suite.save_as", Msg::SuiteMenuSaveAs, Cmd::SuiteSaveAs),
@@ -286,6 +294,17 @@ pub const SUITE_ENTRIES: [(&str, Msg, Cmd); 6] = [
         Cmd::SuiteBranches,
     ),
     ("file.suite.board", Msg::SuiteMenuBoard, Cmd::SuiteBoard),
+    ("file.suite.check", Msg::SuiteMenuCheck, Cmd::SuiteCheck),
+    (
+        "file.suite.openings",
+        Msg::SuiteMenuOpenings,
+        Cmd::SuiteOpenings,
+    ),
+    (
+        "file.suite.hand_back",
+        Msg::SuiteMenuHandBack,
+        Cmd::SuiteHandBack,
+    ),
 ];
 
 /// The id of the entry that exports a format.
@@ -375,6 +394,7 @@ pub fn menu_bar() -> MenuBar<Cmd> {
         ))
         .entry(own("tools.keep_sketch", Msg::KeepSketch, Cmd::KeepSketch))
         .entry(own("tools.drawings", Msg::PlTitle, Cmd::ShowDrawings))
+        .entry(own("tools.check_sketch", Msg::CheckMenu, Cmd::CheckSketch))
         .sep()
         .submenu(reports)
         .sep()
@@ -423,11 +443,14 @@ pub fn disabled_entries(f: &MenuFacts) -> Vec<String> {
     }
     for (id, _, cmd) in SUITE_ENTRIES {
         // the suite file is the model's; some entries need one, and writing needs leave to write
-        let needs_file = matches!(cmd, Cmd::SuiteImport | Cmd::SuiteBranches | Cmd::SuiteBoard);
-        let writes = !matches!(cmd, Cmd::SuiteOpen | Cmd::SuiteBranches);
+        let needs_file = !matches!(cmd, Cmd::SuiteOpen | Cmd::SuiteSave | Cmd::SuiteSaveAs);
+        let writes = !matches!(cmd, Cmd::SuiteOpen | Cmd::SuiteBranches | Cmd::SuiteCheck);
         if f.sketch_mode || (needs_file && !f.suite_file) || (writes && !f.can_save) {
             off.push(id.to_string());
         }
+    }
+    if !f.sketch_mode {
+        off.push("tools.check_sketch".to_string());
     }
     // the sketch is kept in the project from the sketch, and only when the project may be written
     if !f.sketch_mode || !f.can_save {

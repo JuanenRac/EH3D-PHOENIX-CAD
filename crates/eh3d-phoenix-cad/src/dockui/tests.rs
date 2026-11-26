@@ -272,10 +272,27 @@ fn the_entries_of_the_suite_file_need_a_file_leave_to_write_and_the_model() {
     assert_eq!(on(&facts(false, true, false)), ["open", "save", "save_as"]);
     assert_eq!(
         on(&facts(false, true, true)),
-        ["open", "save", "save_as", "import", "branches", "board"]
+        [
+            "open",
+            "save",
+            "save_as",
+            "import",
+            "branches",
+            "board",
+            "check",
+            "openings",
+            "hand_back"
+        ]
     );
-    assert_eq!(on(&facts(false, false, true)), ["open", "branches"]);
+    assert_eq!(
+        on(&facts(false, false, true)),
+        ["open", "branches", "check"]
+    );
     assert!(on(&facts(true, true, true)).is_empty());
+    // the sketch is checked from the sketch
+    let check = "tools.check_sketch".to_string();
+    assert!(disabled_entries(&facts(false, true, true)).contains(&check));
+    assert!(!disabled_entries(&facts(true, false, false)).contains(&check));
 }
 
 #[test]

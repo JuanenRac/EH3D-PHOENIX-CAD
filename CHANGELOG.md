@@ -24,7 +24,19 @@ All notable changes to this project are documented here.
 
 - **`sketch-check` says what the solver rejects:** constraints that repeat or contradict others (`PHOENIX-CAD-033`) and a solver that does not converge (`PHOENIX-CAD-034`) of a sketch file, each constraint by its name, as comma separated values or in the eight languages, with exit code 2 when there is something.
 
-- **`sketch-check` finds what a drawing hides:** two points that look like one and are not joined, lines almost horizontal or vertical and ends of the profile that meet no other end (`PHOENIX-CAD-036`); the limits are the new settings `sketch.check_near` and `sketch.check_angle`, the sketch is never changed and the window does not show the check yet.
+- **`sketch-check` finds what a drawing hides:** two points that look like one and are not joined, lines almost horizontal or vertical and ends of the profile that meet no other end (`PHOENIX-CAD-036`); the limits are the new settings `sketch.check_near` and `sketch.check_angle` and the sketch is never changed.
+
+- **The fit with the board, checked from the window:** *Check the fit with the board* says whether the box is out of date and which parts have no room, as `eh3d-check` does, and writes nothing.
+
+- **The openings of the connectors, cut from the window:** *Cut the openings of the connectors* adds or moves them in the recipe, names each one and the refusals, and the window shows the new box.
+
+- **The box handed back from the window:** *Hand the box to the other programs* writes the STL, the flat faces, the posts and the documents into the branch `cad`, as `eh3d-publish` does.
+
+- **The clearances and the sheet of the board commands are settings:** `suite.part_clearance`, `suite.opening_clearance`, `suite.sheet_width` and `suite.sheet_gap` give what `eh3d-check`, `eh3d-openings` and `eh3d-publish` are not told and what the window uses; the shipped values are the ones the commands had.
+
+- **The sketches of a project are checked:** `sketch-check` also reads a `.phoenixproj` or `.eh3d` file, checks every sketch kept in it (or the one of `--sketch NAME`) and starts each line with its name.
+
+- **Check the sketch from the window:** a new entry of the Tools menu shows what the check finds in the sketch being drawn, in the eight languages; it has not been seen on a screen.
 
 - **A new window «About»:** the picture of the program inside a ring of its colour (blue), the name in large letters, one sentence about the program in the eight languages, the version, the author and the e-mail, links to the page of the author and to the repository and the licence. It is the window of the docking frame of the suite (`eh3d-dock`), so the workflows build against `EH3D-COMMON` at `main` until a release of it carries the window.
 
