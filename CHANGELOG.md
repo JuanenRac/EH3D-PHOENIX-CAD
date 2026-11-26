@@ -42,6 +42,8 @@ All notable changes to this project are documented here.
 
 - **The figure of tests is checked:** the CI also runs the examples of the documentation (`cargo test --doc`), which `cargo test --all-targets` leaves out and which made the figure of the README files differ from the one of the CI, adds them up and fails when the eight README files do not state that number (`tools/check_test_count.py`).
 
+- **The workflows build against EH3D-COMMON v0.3.1:** the release that carries the project container of the suite (`eh3d-project`) and its eight languages.
+
 - **More tests:** the suite file against damaged copies and the other branches, boards moved, damaged and made at random through all the commands, openings seen from each side, templates of random boxes that never overlap, random selector texts and random limits, all with fixed seeds.
 
 - **Entry line for typed points in the sketch window:** below the hint of the drawing tool there is a box (in the eight languages, with the four forms in its hint) where `10,5`, `@3,-2`, `20<45` or `@20<45` is placed when Enter is pressed, exactly as a click of the active tool would place it (a first point of a line or a rectangle waits for the second, a polyline goes on from the last point). `@` is measured from the last point placed by a click or by typing, a typed point does not snap, the box is emptied when the point was placed, and a text that is not a point, a point out of range or the Select tool leave the text in the box and say why in the status line (`SketchEditor::type_point`, the same logic as `sketch-points`). The line has been tested without a screen and has not been seen in a window.

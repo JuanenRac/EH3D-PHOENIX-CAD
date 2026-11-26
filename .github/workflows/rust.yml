@@ -21,7 +21,7 @@ concurrency:
 
 env:
   # The tag of each sibling repository this one is built against (name=tag, separated by spaces).
-  SIBLING_REFS: "EH3D-COMMON=0164933"
+  SIBLING_REFS: "EH3D-COMMON=v0.3.1"
 
 jobs:
   rust:
@@ -43,8 +43,7 @@ jobs:
           for pair in $SIBLING_REFS; do
             name="${pair%%=*}"
             ref="${pair#*=}"
-            git -c advice.detachedHead=false clone --quiet "https://github.com/${GITHUB_REPOSITORY_OWNER}/${name}.git" "$name"
-            git -C "$name" -c advice.detachedHead=false checkout --quiet "$ref"
+            git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$ref" "https://github.com/${GITHUB_REPOSITORY_OWNER}/${name}.git" "$name"
             echo "$name at $ref"
           done
       - name: Rust toolchain
