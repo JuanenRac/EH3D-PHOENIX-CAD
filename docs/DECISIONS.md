@@ -72,13 +72,19 @@ The project is kept byte for byte in the branch `cad` of a `.eh3d` file; only `c
 
 State: **accepted** (record 0022).
 
-A variant holds values of variables, kept in an optional domain of its own; a reference dimension is a state of a dimension and takes version 3 of the sketch file; signatures of a suite project are checked only with public keys the person gives, and this program does not sign.
+A variant holds values of variables, kept in an optional domain of its own; a reference dimension is a state of a dimension and takes version 3 of the sketch file; signatures of a suite project are checked only with public keys the person gives (signing from this program came later, record 0024).
 
 ## Variants that switch steps and variables that follow a drawing
 
 State: **accepted** (record 0023).
 
 A variant names a step by its operation and the id it works on, never by its place; a link from a variable to a reference dimension is read when it is made and when the sketch is kept, and a broken link leaves the value as it is.
+
+## Seeing the files of other programs and signing
+
+State: **accepted** (record 0024).
+
+3D files and flat drawings are shown by this program without importing them; the suite project is signed with a secret key file given each time, which is only read; a save that removes a signature says so instead of being stopped.
 
 ## The lid is fixed with screws into posts
 

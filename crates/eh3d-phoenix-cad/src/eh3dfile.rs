@@ -312,6 +312,17 @@ pub fn origin_report(path: &Path) -> Result<Option<ConversionReport>, CadError> 
         .transpose()
 }
 
+/// The original of the last import that the branch `cad` keeps, with its name, to look at it.
+/// `None` when the branch keeps none; one larger than `max_bytes` is refused.
+pub fn kept_original(path: &Path, max_bytes: u64) -> Result<Option<(String, Vec<u8>)>, CadError> {
+    let Some(entry) = origin_report(path)?.and_then(|report| report.original) else {
+        return Ok(None);
+    };
+    let mut project = open_project(path)?;
+    let name = entry.rsplit('/').next().unwrap_or(&entry).to_owned();
+    Ok(read_file(&mut project, BRANCH, &entry, max_bytes)?.map(|bytes| (name, bytes)))
+}
+
 /// Saves the project file of this program in the branch `cad`, making the file of the suite when
 /// it is not there. The other branches keep their bytes, and so do the other files of `cad`.
 pub fn save_cad_project(

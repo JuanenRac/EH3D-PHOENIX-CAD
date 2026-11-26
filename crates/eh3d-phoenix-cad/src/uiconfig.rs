@@ -372,6 +372,29 @@ pub struct UiSettings {
     pub panels: PanelSettings,
     /// The limits of the panel «Attachments» (`[attachments] max_mb`, `[viewer] max_*_mb`).
     pub attachments: eh3d_attachpanel::PanelLimits,
+    /// The limits of the view of a file of another program (`[model_view]`).
+    pub model_view: ModelViewSettings,
+}
+
+/// The settings of the view of a file of another program.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModelViewSettings {
+    /// The largest file that is read, in megabytes.
+    pub max_mb: u32,
+    /// The most triangles that are drawn.
+    pub max_triangles: u32,
+    /// An edge is drawn when its two triangles turn by more than this many degrees.
+    pub edge_angle: f64,
+}
+
+impl ModelViewSettings {
+    fn from_config(c: &Config) -> Result<ModelViewSettings, CadError> {
+        Ok(ModelViewSettings {
+            max_mb: count(c, "model_view.max_mb", 1, 1024)?,
+            max_triangles: count(c, "model_view.max_triangles", 100, 2_000_000)?,
+            edge_angle: real(c, "model_view.edge_angle", 0.0, 180.0)?,
+        })
+    }
 }
 
 /// The limits of the panel of the attachments: the keys of the sections `[attachments]` and
@@ -728,6 +751,7 @@ impl UiSettings {
             export: ExportSettings::from_config(c)?,
             panels: PanelSettings::from_config(c)?,
             attachments: attachment_limits(c)?,
+            model_view: ModelViewSettings::from_config(c)?,
         })
     }
 }

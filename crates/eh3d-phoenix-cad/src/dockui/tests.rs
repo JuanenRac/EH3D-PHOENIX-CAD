@@ -281,6 +281,7 @@ fn the_entries_of_the_suite_file_need_a_file_leave_to_write_and_the_model() {
             "import",
             "branches",
             "texts",
+            "sign",
             "board",
             "check",
             "openings",

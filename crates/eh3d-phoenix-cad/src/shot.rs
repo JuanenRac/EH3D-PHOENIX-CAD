@@ -115,6 +115,8 @@ pub struct WindowArgs {
     /// The workspace of the frame the window opens in (`--window model|review|compact`); none
     /// takes the one of the settings file.
     pub window: Option<&'static str>,
+    /// A file of another program to look at as soon as the window opens (`--viewer FILE`).
+    pub viewer: Option<PathBuf>,
     /// The picture mode: the window opens, saves a PNG file and closes by itself.
     pub shot: Option<ShotRequest>,
 }
@@ -142,7 +144,7 @@ struct PictureOptions {
     replace: bool,
 }
 
-/// Reads the arguments of the window (after an optional leading `gui`): `--shot FILE.png`, `--size WxH`, `--theme`, `--wait N`, `--replace`, `--lang CODE`, `--view model|sketch`, `--window model|review|compact`, `--config FILE`, `--open FILE` and bare
+/// Reads the arguments of the window (after an optional leading `gui`): `--shot FILE.png`, `--size WxH`, `--theme`, `--wait N`, `--replace`, `--lang CODE`, `--view model|sketch`, `--window model|review|compact`, `--config FILE`, `--open FILE`, `--viewer FILE` and bare
 /// file names, of which at most `max_files` are accepted. The answer for a mistake is the reason.
 pub fn parse_window_args(args: &[String], max_files: usize) -> Result<WindowArgs, String> {
     let args = if args.first().is_some_and(|a| a == "gui") {
@@ -205,6 +207,12 @@ pub fn parse_window_args(args: &[String], max_files: usize) -> Result<WindowArgs
                 let path = iter.next().ok_or("--config needs a settings file")?;
                 parsed.config = Some(PathBuf::from(path));
             }
+            "--viewer" => {
+                let path = iter
+                    .next()
+                    .ok_or("--viewer needs a 3D file or a DXF drawing")?;
+                parsed.viewer = Some(PathBuf::from(path));
+            }
             "--open" => {
                 let path = iter.next().ok_or("--open needs a file")?;
                 add_file(&mut parsed, path, max_files)?;
@@ -253,6 +261,16 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_file_to_look_at_is_asked_for_with_viewer() {
+        let parsed = parse_window_args(&args(&["--viewer", "part.step"]), 1).unwrap();
+        assert_eq!(parsed.viewer, Some(PathBuf::from("part.step")));
+        // it is not one of the files that are opened as the project
+        assert!(parsed.files.is_empty());
+        let said = parse_window_args(&args(&["--viewer"]), 1).unwrap_err();
+        assert!(said.contains("--viewer needs"), "{said}");
     }
 
     #[test]

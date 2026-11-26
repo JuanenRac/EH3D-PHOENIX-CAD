@@ -20,8 +20,8 @@ use std::process::ExitCode;
 
 const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the properties, a 3D view and a plan, and the fit check of a board
 
-  eh3d-phoenix-cad [gui] [PROJECT.phoenixproj | SKETCH.phoenixsketch] [--view model|sketch] [--window model|review|compact] [--lang CODE] [--config FILE]   the window (a build with --features gui): with no arguments it opens with a new project; the sketches of a project are kept in the project file, and a .phoenixsketch file is opened to edit it and put in the project, or written from the sketch as a copy
-  eh3d-phoenix-cad gui [PROJECT | SKETCH] [--view model|sketch] [--window model|review|compact] --shot OUT.png [--size WxH] [--theme forge|dark|light] [--wait N] [--lang CODE] [--config FILE] [--replace]   a picture of the window (a build with --features gui)
+  eh3d-phoenix-cad [gui] [PROJECT.phoenixproj | SKETCH.phoenixsketch] [--view model|sketch] [--window model|review|compact] [--viewer FILE] [--lang CODE] [--config FILE]   the window (a build with --features gui): with no arguments it opens with a new project; the sketches of a project are kept in the project file, and a .phoenixsketch file is opened to edit it and put in the project, or written from the sketch as a copy
+  eh3d-phoenix-cad gui [PROJECT | SKETCH] [--view model|sketch] [--window model|review|compact] --shot OUT.png [--size WxH] [--theme forge|dark|light] [--wait N] [--viewer FILE] [--lang CODE] [--config FILE] [--replace]   a picture of the window (a build with --features gui)
   eh3d-phoenix-cad check PROJECT.phoenixproj [--lang CODE] [--config FILE]       reads a project, builds the box (with the extrusions and pockets of its sketches) and prints its measures, the fit of the board and the state of every step
   eh3d-phoenix-cad interference PROJECT.phoenixproj [--lang CODE] [--config FILE]  reads a project, puts the parts where their mates place them and lists the pairs of parts that share volume (touching is not sharing; a screw through the hole of a bracket is allowed)
   eh3d-phoenix-cad bill PROJECT.phoenixproj [--config FILE]                       the bill of materials of the parts placed in a project (profiles cut to a length, screws and brackets) as comma separated values, with the volume and the mass for the density of each material
@@ -85,6 +85,8 @@ const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the
   eh3d-phoenix-cad eh3d-publish FILE.eh3d [--sheet-width L] [--gap L] [--time T] [--lang CODE] [--config FILE]   hands the box to the other programs: the STL, the flat faces and the posts in cad, the report and the bill in docs/cad
   eh3d-phoenix-cad eh3d-import FILE.eh3d OTHER.stl|obj|3mf|step|ply|off|dxf [--time T] [--lang CODE]   keeps a file of another program in cad/origin with the report of what was read
   eh3d-phoenix-cad eh3d-meta FILE.eh3d [--title TEXT] [--description TEXT] [--time T] --lang CODE   the title and the description of the project in a language
+  eh3d-phoenix-cad eh3d-sign FILE.eh3d --key SECRET_KEY [--branch NAMES] [--project] [--lang CODE]   signs with Ed25519 the branch cad (or the branches named, comma separated) and with --project the whole project as it is now; with --project and no --branch only the project; nothing is written when something cannot be signed; the key is only read
+  eh3d-phoenix-cad eh3d-keygen --out SECRET_KEY [--lang CODE]   makes a new signing key: the secret file (never over a file that exists, readable by its owner only) and SECRET_KEY.pub, which is what those who check need
   eh3d-phoenix-cad select PROJECT SELECTOR [--lang CODE]   the stable names that a selector picks (>Z, |X, #Y, edges|Z, holes@>Z[d<3mm]); exit 2 when it picks nothing
   eh3d-phoenix-cad params PROJECT [--limits FILE] [--text] [--lang CODE]   the parameters of the box, their definitions and the ones outside their limits; exit 2 when there are any
   eh3d-phoenix-cad panels PROJECT OUT.dxf|OUT.svg [--sheet-width L] [--gap L] [--overwrite] [--lang CODE]   the six faces as flat templates with their holes, packed on a sheet
@@ -1802,6 +1804,7 @@ fn start_of(parsed: &shot::WindowArgs) -> Result<eh3d_phoenix_cad::gui::Start, S
         view,
         window: parsed.window,
         config: parsed.config.clone(),
+        viewer: parsed.viewer.clone(),
     })
 }
 
