@@ -71,3 +71,9 @@ The table repeats the `REGISTRY` of the crate `eh3d-phoenix-cad` (`src/lib.rs`);
 | PHOENIX-CAD-061 | Broken view not valid | a range that ends before it starts or is not longer than the gap of the break marks (`sheet.break.gap`), a range that is not inside the picture of the view, a break of a section, a detail, a sketch view or the isometric view, a detail of a broken view, a broken view that does not fit the frame of the sheet even after the break |
 | PHOENIX-CAD-062 | Note not valid | a note that is empty, has more than one line or more characters than `sheet.note.max_chars`, points into a view that is not there or at a face in a view that shows none, is beyond a hundred metres of the origin, or is above `sheet.max_notes`; a note whose face is gone is `PHOENIX-CAD-055` |
 | PHOENIX-CAD-063 | Attribute not valid | an attribute of a part with a key that is empty, too long or made of characters that `sheet.attr.key_charset` does not allow, a value that is empty, of more than one line, with a space at either end, too long or not in `sheet.attr.value_charset`, a key twice in a part, or more attributes than `sheet.attr.max_per_node` |
+| PHOENIX-CAD-064 | Project file of the suite refused | A `.eh3d` file that is not valid, is sealed read-only, or refuses a write; the text carries the `EH3D-PKG` code of the shared format |
+| PHOENIX-CAD-065 | Branch of the suite file not usable | a branch that is needed and is not there, is encrypted or has a newer format |
+| PHOENIX-CAD-066 | Board data not valid | an artifact `outline2d` that is not JSON, of another version or units, or with a value out of its range |
+| PHOENIX-CAD-067 | Selector not valid | a text that is not a selector of faces, edges or holes |
+| PHOENIX-CAD-068 | Board does not fit the box | sizes that cannot make a box round a board |
+| PHOENIX-CAD-069 | Flat layout not possible | a sheet narrower than a face of the box, or a negative gap |

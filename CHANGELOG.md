@@ -4,6 +4,46 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **The branch `cad` of a project of the suite (`.eh3d`, `eh3d-save`):** a project is kept in one `.eh3d` file with a branch for each program, through the shared crate `eh3d-project`; this program writes only `cad`, `docs/cad` and the metadata of `common`, keeps every file of its branch that it did not write again and leaves every other branch as it is, byte for byte, which a test with a fixed seed checks over twelve saves among the branches of three other programs. The same content makes the same file, the clock is never read (`--time` gives the time), and a file the shared format refuses is `PHOENIX-CAD-064` with its `EH3D-PKG` code, a branch that cannot be used `PHOENIX-CAD-065`.
+
+- **`eh3d-open` takes the project back out of the branch:** the file written is byte for byte the project that was saved, nothing is written over a file that exists unless `--overwrite` is given, and a branch of a newer format or an encrypted one is refused instead of being read halfway.
+
+- **Every command and the window open a `.eh3d` file:** `check`, `bom`, `export`, `history-check`, `history-measure`, `drawing-check` and the others read the project of the branch `cad` when they are given a `.eh3d` file, and the window lists such files, opens them and saves into the branch only (with the `.bak` copy when the settings keep copies). The window has been tested without a screen and has not been seen with such a file.
+
+- **`eh3d-info` lists the branches:** who wrote each one, its format, files and bytes, whether it is sealed or encrypted and whether it was derived from a branch that has changed since, as comma separated values or in the eight languages; it exits with 2 when the checks of the format find anything.
+
+- **Sealing, the audit log and a copy of the replaced file:** `eh3d-save --seal NAME --time T` closes the branch `cad` for delivery (nothing writes it again), `--audit T` adds a line to the audit log of the file and `--backup` keeps the replaced file as `.bak`; all three are off unless asked.
+
+- **The board of the branch `pcb` (`outline2d`, `docs/BOARD_INTERCHANGE.md`):** the outline, the mounting holes, the thickness and the tallest part, and optionally the footprints of the parts and the connectors, in whole nanometres in JSON with a version; a value out of its range, another version or other units are `PHOENIX-CAD-066`, unknown fields are ignored, and six hundred damaged copies made with a fixed seed never panic the reader. The board program of the suite does not write this file yet.
+
+- **A box designed round the board (`eh3d-new`):** the inner space holds the board with a gap on every side and room above its tallest part, a post for the screw of the settings stands under every mounting hole, and the branch `cad` keeps the reference to the state of `pcb` it was made from, with a copy of the board.
+
+- **The box follows the board (`eh3d-board`):** each change is named (outline, thickness, tallest part, holes added, gone, moved or resized, parts, connectors), the posts made for a hole move with it and keep their steps and identities, and a post whose hole is gone, a hole without a post or a step that no longer applies are told and make the exit code 2; nothing is guessed.
+
+- **Out of date is noticed (`eh3d-check`):** the command says when `pcb` changed since the box took the board and what changed, and exits with 2 until the box has taken it again.
+
+- **The room of every part of the board:** `eh3d-check` places the footprints of the parts where the board lies in the box and names the ones that leave the inner space, reach the lid or the floor under the board, or meet a post, with how much is missing and an optional `--clearance`; a part is its rectangle and its height, so a pass is not a promise that the real parts fit. Forty boards made with a fixed seed are checked against the same arithmetic by hand.
+
+- **Openings for the connectors (`eh3d-openings`):** a rectangular hole in the wall of each side where a connector looks out, measured on the face as seen from outside, added once, moved when the connector moves, and refused with the reason when the box does not take it; written into the recipe only with `--apply`.
+
+- **The box is handed back to the other programs (`eh3d-publish`):** the STL of the solid, the flat faces as DXF and SVG and the posts in the frame of the board (`mounts2d.json`, for the board program to read, which this one never writes into its branch) go into `cad`; an export that the model refuses is told and the older file of that name is taken away.
+
+- **Documents in `docs/cad`:** the report of the box and its fit and the bill of materials, listed in the index of documents of the project with their titles in the eight languages.
+
+- **Originals of other programs are kept (`eh3d-import`):** an STL, OBJ, 3MF, STEP, PLY, OFF or DXF file of triangles goes into `cad/origin/` byte for byte with the report of the shared format (hash, size, converter and how many solids and triangles were read); a newer import replaces the older original.
+
+- **Title and description of the project (`eh3d-meta`):** written in the metadata of the shared branch in the language of `--lang`, keeping the other languages and fields; as the format asks, the English text comes first.
+
+- **The faces of the box as flat templates (`panels`):** the six faces at their outer size with their round, rectangular and slotted holes and the ones of the lid, packed in rows on a sheet of a given width without overlapping, written as DXF (a layer for each face) or SVG; a sheet narrower than a face is `PHOENIX-CAD-069`. They are templates for marking, drilling and engraving: no finger joints and no kerf allowance, and nothing has been cut.
+
+- **Selectors over the stable names (`select`):** `>Z`, `<X`, `#Y`, `|Z`, `faces`, `edges|Z` and `holes@>Z[d<3mm]` answer with the stable names of faces, edges and holes, so a script never refers to a position in a list; a text that is not a selector is `PHOENIX-CAD-067`, and three thousand random texts only give names that exist.
+
+- **The table of the parameters against their limits (`params`):** the value and the definition (fixed, variable or expression) of each parameter of the box, and with `--limits FILE` (`wall.min = 1.2 mm`, `.max`, `.step`) the values below, above or off their step, with exit code 2 when there are any.
+
+- **The figure of tests is checked:** the CI also runs the examples of the documentation (`cargo test --doc`), which `cargo test --all-targets` leaves out and which made the figure of the README files differ from the one of the CI, adds them up and fails when the eight README files do not state that number (`tools/check_test_count.py`).
+
+- **More tests:** the suite file against damaged copies and the other branches, boards moved, damaged and made at random through all the commands, openings seen from each side, templates of random boxes that never overlap, random selector texts and random limits, all with fixed seeds.
+
 - **Entry line for typed points in the sketch window:** below the hint of the drawing tool there is a box (in the eight languages, with the four forms in its hint) where `10,5`, `@3,-2`, `20<45` or `@20<45` is placed when Enter is pressed, exactly as a click of the active tool would place it (a first point of a line or a rectangle waits for the second, a polyline goes on from the last point). `@` is measured from the last point placed by a click or by typing, a typed point does not snap, the box is emptied when the point was placed, and a text that is not a point, a point out of range or the Select tool leave the text in the box and say why in the status line (`SketchEditor::type_point`, the same logic as `sketch-points`). The line has been tested without a screen and has not been seen in a window.
 
 - **Sections and shadows of a solid (`solidquery`):** `section_area_nm2` is the area of the cut of the solid by the plane across an axis at a coordinate and `shadow_area_nm2` the area of its shadow along an axis, both exact whole square nanometres on the grid of the prisms and limited by `history.max_cells`; the lower face of a prism belongs to it, a cavity that is closed along the axis does not show in the shadow, and the sections of all the slabs of the grid, each times its thickness, add up to the volume, which a seeded family of random solids checks, together with the shadow and the section counted rectangle by rectangle with no code of the library.

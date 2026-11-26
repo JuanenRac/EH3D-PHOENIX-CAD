@@ -52,6 +52,9 @@
 //! * [`sketch`]: the 2D sketch on a face of the box: points, lines, circles, arcs, polylines and rectangles, geometric and dimensional constraints (a dimension may be an expression over the variables), a numeric solver that reports the degrees of freedom left, the constraints that repeat or contradict each other, or that it did not converge, its settings file, the sketch file (the way in and out of a sketch) and the domain `sketch` of the project file, where the sketches of a project are kept;
 //! * [`profile`]: the closed outlines of a sketch (chains of lines and arcs and circles, with the holes found by containment), checked for being closed, simple and large enough, with their area; the extrusions and pockets of the enclosure are made from them;
 //! * [`projection`], [`drag`] and [`measure`]: the lines of the drawing put on a pane and the way back from a point of the pane to a point of a plane of the model, the picking and the snapping of what is dragged with the mouse, and the distances and angles between points and edges of the model;
+//! * [`eh3dfile`] and [`suite_cli`]: the branch `cad` of a `.eh3d` project file of the suite (only this program's branches are written, the others keep their bytes) and the commands that work with it;
+//! * [`boardart`] and [`boardfit`]: the board that the branch `pcb` tells (`docs/BOARD_INTERCHANGE.md`), a box made round it, the posts that follow it, the room of its parts and the openings of its connectors, and the posts handed back;
+//! * [`flatpanels`], [`select`] and [`paramreport`]: the faces as flat templates in DXF or SVG, selectors over the stable names, and the table of the parameters against their limits;
 //! * [`server`] and [`serverfake`]: the way to the EH3D server, a project saved on it as a new version of its file and read back, and the reports of a project sent to it, over the client of the suite (`eh3d-serverclient`), with the keys `server_address`, `server_token`, `server_machine`, `server_timeout_s`, `server_retries`, `server_mdns` and `server_max_answer_mib` in the section `[server]` of the settings and a store in memory for the tests;
 //! * [`export`]: writing the script, the STEP file and the text of the fit report to a file chosen from the window, with the checks that nothing is written over a file unless it was ordered, nor over the project that is open;
 //! * [`window`], [`scene`], [`history`], [`uiconfig`], [`lang`], [`shot`] and [`browse`]: the state of the window (the tree of the model, the properties, the
@@ -88,6 +91,8 @@
 
 pub mod assembly;
 pub mod balance;
+pub mod boardart;
+pub mod boardfit;
 pub mod body;
 pub mod bolt;
 pub mod bom;
@@ -107,12 +112,14 @@ pub mod drag;
 pub mod drawing;
 pub mod dxf_import;
 pub mod dxf_mesh;
+pub mod eh3dfile;
 pub mod enclosure;
 pub mod export;
 pub mod expr;
 pub mod featuredag;
 pub mod fins;
 pub mod fit;
+pub mod flatpanels;
 pub mod glb;
 pub mod graph;
 #[cfg(feature = "gui")]
@@ -141,6 +148,7 @@ pub mod off;
 pub mod ordersheet;
 pub mod panels;
 pub mod parametric;
+pub mod paramreport;
 pub mod partlist;
 pub mod partpattern;
 pub mod pattern;
@@ -161,6 +169,7 @@ pub mod scad;
 pub mod scene;
 pub mod schedule;
 pub mod section;
+pub mod select;
 pub mod server;
 pub mod server_cli;
 pub mod servercad;
@@ -178,6 +187,7 @@ pub mod step_import;
 pub mod stlread;
 pub mod stlsolid;
 pub mod store;
+pub mod suite_cli;
 pub mod svg_import;
 pub mod sweep;
 pub mod swept;
@@ -437,6 +447,18 @@ pub enum CadError {
     /// An attribute of an object that is not valid: a key or a value with a character the settings
     /// do not allow, one that is too long, a key twice, or more attributes than the settings allow.
     PlanAttr(String),
+    /// A `.eh3d` file the shared format refuses: damaged, of a newer version, sealed or written by another program; the text carries the `EH3D-PKG` code.
+    SuiteFile(String),
+    /// A branch that is needed and is not there, is encrypted or has a newer format.
+    SuiteBranch(String),
+    /// An artifact `outline2d` that is not JSON, of another version or units, or with a value out of its range.
+    BoardArtifact(String),
+    /// A text that is not a selector of faces, edges or holes.
+    Selector(String),
+    /// Sizes that cannot make a box round a board.
+    BoardFit(String),
+    /// A sheet narrower than a face of the box, or a negative gap.
+    FlatLayout(String),
 }
 
 impl CadError {
@@ -506,6 +528,12 @@ impl CadError {
             CadError::PlanBreak(_) => "PHOENIX-CAD-061",
             CadError::PlanNote(_) => "PHOENIX-CAD-062",
             CadError::PlanAttr(_) => "PHOENIX-CAD-063",
+            CadError::SuiteFile(_) => "PHOENIX-CAD-064",
+            CadError::SuiteBranch(_) => "PHOENIX-CAD-065",
+            CadError::BoardArtifact(_) => "PHOENIX-CAD-066",
+            CadError::Selector(_) => "PHOENIX-CAD-067",
+            CadError::BoardFit(_) => "PHOENIX-CAD-068",
+            CadError::FlatLayout(_) => "PHOENIX-CAD-069",
         }
     }
 }
@@ -582,7 +610,13 @@ impl fmt::Display for CadError {
             | CadError::PlanRevision(why)
             | CadError::PlanBreak(why)
             | CadError::PlanNote(why)
-            | CadError::PlanAttr(why) => write!(f, "{title}: {why}"),
+            | CadError::PlanAttr(why)
+            | CadError::SuiteFile(why)
+            | CadError::SuiteBranch(why)
+            | CadError::BoardArtifact(why)
+            | CadError::Selector(why)
+            | CadError::BoardFit(why)
+            | CadError::FlatLayout(why) => write!(f, "{title}: {why}"),
         }
     }
 }
@@ -657,6 +691,12 @@ pub const REGISTRY: &[(&str, &str)] = &[
     ("PHOENIX-CAD-061", "Broken view not valid"),
     ("PHOENIX-CAD-062", "Note not valid"),
     ("PHOENIX-CAD-063", "Attribute not valid"),
+    ("PHOENIX-CAD-064", "Project file of the suite refused"),
+    ("PHOENIX-CAD-065", "Branch of the suite file not usable"),
+    ("PHOENIX-CAD-066", "Board data not valid"),
+    ("PHOENIX-CAD-067", "Selector not valid"),
+    ("PHOENIX-CAD-068", "Board does not fit the box"),
+    ("PHOENIX-CAD-069", "Flat layout not possible"),
 ];
 
 #[cfg(test)]
@@ -873,6 +913,12 @@ mod tests {
             CadError::PlanBreak("range".into()),
             CadError::PlanNote("text".into()),
             CadError::PlanAttr("key".into()),
+            CadError::SuiteFile("x".into()),
+            CadError::SuiteBranch("x".into()),
+            CadError::BoardArtifact("x".into()),
+            CadError::Selector("x".into()),
+            CadError::BoardFit("x".into()),
+            CadError::FlatLayout("x".into()),
         ];
         for e in errors {
             assert!(REGISTRY.iter().any(|(c, _)| *c == e.code()));
