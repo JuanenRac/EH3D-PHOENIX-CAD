@@ -107,6 +107,14 @@ impl App {
         });
     }
 
+    /// Cuts the file that is looked at along an axis, at its middle.
+    pub(super) fn cut_viewer(&mut self, axis: usize) {
+        if let Some(view) = &mut self.viewer {
+            view.cutting = true;
+            view.cut_axis = axis.min(2);
+        }
+    }
+
     /// Waits for the file that is being read, for a picture of the window.
     pub(super) fn settle_viewer(&mut self) {
         let Some(view) = &mut self.viewer else {

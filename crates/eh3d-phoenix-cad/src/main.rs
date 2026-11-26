@@ -20,8 +20,8 @@ use std::process::ExitCode;
 
 const HELP: &str = "eh3d-phoenix-cad: parametric enclosures: the model tree, the properties, a 3D view and a plan, and the fit check of a board
 
-  eh3d-phoenix-cad [gui] [PROJECT.phoenixproj | SKETCH.phoenixsketch] [--view model|sketch] [--window model|review|compact] [--viewer FILE] [--lang CODE] [--config FILE]   the window (a build with --features gui): with no arguments it opens with a new project; the sketches of a project are kept in the project file, and a .phoenixsketch file is opened to edit it and put in the project, or written from the sketch as a copy
-  eh3d-phoenix-cad gui [PROJECT | SKETCH] [--view model|sketch] [--window model|review|compact] --shot OUT.png [--size WxH] [--theme forge|dark|light] [--wait N] [--viewer FILE] [--lang CODE] [--config FILE] [--replace]   a picture of the window (a build with --features gui)
+  eh3d-phoenix-cad [gui] [PROJECT.phoenixproj | SKETCH.phoenixsketch] [--view model|sketch] [--window model|review|compact] [--viewer FILE [--viewer-cut x|y|z]] [--sign-window] [--lang CODE] [--config FILE]   the window (a build with --features gui): with no arguments it opens with a new project; the sketches of a project are kept in the project file, and a .phoenixsketch file is opened to edit it and put in the project, or written from the sketch as a copy
+  eh3d-phoenix-cad gui [PROJECT | SKETCH] [--view model|sketch] [--window model|review|compact] --shot OUT.png [--size WxH] [--theme forge|dark|light] [--wait N] [--viewer FILE [--viewer-cut x|y|z]] [--sign-window] [--lang CODE] [--config FILE] [--replace]   a picture of the window (a build with --features gui)
   eh3d-phoenix-cad check PROJECT.phoenixproj [--lang CODE] [--config FILE]       reads a project, builds the box (with the extrusions and pockets of its sketches) and prints its measures, the fit of the board and the state of every step
   eh3d-phoenix-cad interference PROJECT.phoenixproj [--lang CODE] [--config FILE]  reads a project, puts the parts where their mates place them and lists the pairs of parts that share volume (touching is not sharing; a screw through the hole of a bracket is allowed)
   eh3d-phoenix-cad bill PROJECT.phoenixproj [--config FILE]                       the bill of materials of the parts placed in a project (profiles cut to a length, screws and brackets) as comma separated values, with the volume and the mass for the density of each material
@@ -1805,6 +1805,8 @@ fn start_of(parsed: &shot::WindowArgs) -> Result<eh3d_phoenix_cad::gui::Start, S
         window: parsed.window,
         config: parsed.config.clone(),
         viewer: parsed.viewer.clone(),
+        viewer_cut: parsed.viewer_cut,
+        sign_window: parsed.sign_window,
     })
 }
 
