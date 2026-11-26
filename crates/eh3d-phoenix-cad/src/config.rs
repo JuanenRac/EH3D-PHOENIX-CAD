@@ -302,6 +302,8 @@ pub struct MeshSettings {
     pub step_max_entities: u32,
     /// The most faces of a STEP file that is read.
     pub step_max_faces: u32,
+    /// The straight pieces that stand for a whole turn of a circle of a STEP file that is read.
+    pub step_segments_per_turn: u32,
     /// The largest file of triangles that is read (STL, OBJ, 3MF, PLY, OFF or DXF), in kibibytes;
     /// it is also the most that one entry of a 3MF package may hold once unpacked.
     pub read_max_kib: u32,
@@ -389,6 +391,12 @@ impl MeshSettings {
                 Self::STEP_FACES_CAP
             )));
         }
+        let step_segments_per_turn = c.number("mesh.step_segments_per_turn")?;
+        if !(8..=720).contains(&step_segments_per_turn) {
+            return Err(CadError::Config(
+                "mesh.step_segments_per_turn must be from 8 to 720".into(),
+            ));
+        }
         let read_max_kib = c.number("mesh.read_max_kib")?;
         if !(1..=Self::READ_KIB_CAP).contains(&read_max_kib) {
             return Err(CadError::Config(format!(
@@ -419,6 +427,7 @@ impl MeshSettings {
             step_max_kib,
             step_max_entities,
             step_max_faces,
+            step_segments_per_turn,
             read_max_kib,
             read_max_triangles,
             zip_max_entries,
@@ -1872,6 +1881,7 @@ markup_percent = 1000
                 step_max_kib: 65_536,
                 step_max_entities: 1_000_000,
                 step_max_faces: 100_000,
+                step_segments_per_turn: 72,
                 read_max_kib: 524_288,
                 read_max_triangles: 5_000_000,
                 zip_max_entries: 1000,

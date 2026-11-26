@@ -169,6 +169,28 @@ impl Builder {
             .collect();
         self.add(format!("EDGE_LOOP('',({}))", oriented.join(",")))
     }
+
+    /// Turns a face of the cavity round: its normal and the way of each of its bounds. A void
+    /// shell is written with its faces as those of a solid; in the one shell of a box with holes
+    /// they look the other way.
+    fn turn_face(&mut self, face: usize) {
+        let turned = |line: &str| match line.strip_suffix(".T.)") {
+            Some(rest) => format!("{rest}.F.)"),
+            None => format!("{}.T.)", line.strip_suffix(".F.)").unwrap_or(line)),
+        };
+        let line = self.lines[face - 1].clone();
+        let bounds = line
+            .split_once('(')
+            .and_then(|(_, rest)| rest.split_once("(#"))
+            .and_then(|(_, rest)| rest.split_once(')'))
+            .map_or("", |(list, _)| list);
+        for id in bounds.split(",#") {
+            if let Ok(id) = id.parse::<usize>() {
+                self.lines[id - 1] = turned(&self.lines[id - 1]);
+            }
+        }
+        self.lines[face - 1] = turned(&line);
+    }
 }
 
 /// The unit direction and the position of a hole: the point on the outer face, the outward normal
@@ -219,9 +241,13 @@ const FACES: [FaceSpec; 6] = [
     (Face::Right, [1, 3, 7, 5], (1, 0, 0)),
 ];
 
-/// The twelve edges, the eight corners and the six faces of a box. `circles` gives, per face, the
-/// closed circular edges of its holes. Returns the ids of the faces in the order of [`FACES`].
-fn box_faces(b: &mut Builder, min: P, max: P, circles: &BTreeMap<Face, Vec<usize>>) -> Vec<usize> {
+/// The closed circular edges that are further bounds of the faces of a box, each with the way its
+/// loop goes round (`true` is the way of the circle).
+type Circles = BTreeMap<Face, Vec<(usize, bool)>>;
+
+/// The twelve edges, the eight corners and the six faces of a box. Returns the ids of the faces in
+/// the order of [`FACES`].
+fn box_faces(b: &mut Builder, min: P, max: P, circles: &Circles) -> Vec<usize> {
     let corner = |i: usize| -> P {
         (
             if i & 1 != 0 { max.0 } else { min.0 },
@@ -262,7 +288,7 @@ fn box_faces(b: &mut Builder, min: P, max: P, circles: &BTreeMap<Face, Vec<usize
         let outer_loop = b.loop_of(&sides);
         let mut bounds = vec![b.add(format!("FACE_OUTER_BOUND('',#{outer_loop},.T.)"))];
         for circle in circles.get(&face).map(Vec::as_slice).unwrap_or(&[]) {
-            let hole_loop = b.loop_of(&[(*circle, false)]);
+            let hole_loop = b.loop_of(&[*circle]);
             bounds.push(b.add(format!("FACE_BOUND('',#{hole_loop},.T.)")));
         }
         let (p0, p1) = (corner(cycle[0]), corner(cycle[1]));
@@ -301,8 +327,8 @@ pub fn to_step(enclosure: &Enclosure) -> String {
     let mut b = Builder::default();
 
     // the circles of the holes: one on the outer face, one on the face of the inner space
-    let mut outer_circles: BTreeMap<Face, Vec<usize>> = BTreeMap::new();
-    let mut inner_circles: BTreeMap<Face, Vec<usize>> = BTreeMap::new();
+    let mut outer_circles = Circles::new();
+    let mut inner_circles = Circles::new();
     let mut hole_ends = Vec::new();
     let all_holes = enclosure.all_holes();
     for hole in &all_holes {
@@ -315,8 +341,14 @@ pub fn to_step(enclosure: &Enclosure) -> String {
         );
         let outer = circle_edge(&mut b, centre, normal, radius2);
         let inner = circle_edge(&mut b, inner_centre, normal, radius2);
-        outer_circles.entry(hole.face).or_default().push(outer);
-        inner_circles.entry(hole.face).or_default().push(inner);
+        outer_circles
+            .entry(hole.face)
+            .or_default()
+            .push((outer, false));
+        inner_circles
+            .entry(hole.face)
+            .or_default()
+            .push((inner, false));
         hole_ends.push((centre, normal, radius2, outer, inner));
     }
     // the circles of the posts: the foot is a bound of the floor of the inner space
@@ -339,7 +371,7 @@ pub fn to_step(enclosure: &Enclosure) -> String {
         inner_circles
             .entry(Face::Bottom)
             .or_default()
-            .push(foot_edge);
+            .push((foot_edge, true));
         rings.push(PostRing {
             top_centre: (cx, cy, top_z),
             bore_centre: (cx, cy, bore_z),
@@ -375,7 +407,8 @@ pub fn to_step(enclosure: &Enclosure) -> String {
             real2(radius2)
         ));
         let l1 = b.loop_of(&[(outer, true)]);
-        let l2 = b.loop_of(&[(inner, true)]);
+        // the far circle goes the other way: it is on a face of the cavity turned round
+        let l2 = b.loop_of(&[(inner, false)]);
         let b1 = b.add(format!("FACE_OUTER_BOUND('',#{l1},.T.)"));
         let b2 = b.add(format!("FACE_BOUND('',#{l2},.T.)"));
         faces.push(b.add(format!("ADVANCED_FACE('',(#{b1},#{b2}),#{cylinder},.F.)")));
@@ -393,7 +426,7 @@ pub fn to_step(enclosure: &Enclosure) -> String {
             real2(ring.outer)
         ));
         let l1 = b.loop_of(&[(ring.top_edge, true)]);
-        let l2 = b.loop_of(&[(ring.foot_edge, true)]);
+        let l2 = b.loop_of(&[(ring.foot_edge, false)]);
         let b1 = b.add(format!("FACE_OUTER_BOUND('',#{l1},.T.)"));
         let b2 = b.add(format!("FACE_BOUND('',#{l2},.T.)"));
         cavity.push(b.add(format!("ADVANCED_FACE('',(#{b1},#{b2}),#{wall},.F.)")));
@@ -401,7 +434,7 @@ pub fn to_step(enclosure: &Enclosure) -> String {
         let ring_axis = b.axis(ring.top_centre, down, across);
         let ring_plane = b.add(format!("PLANE('',#{ring_axis})"));
         let l3 = b.loop_of(&[(ring.top_edge, false)]);
-        let l4 = b.loop_of(&[(ring.bore_top_edge, false)]);
+        let l4 = b.loop_of(&[(ring.bore_top_edge, true)]);
         let b3 = b.add(format!("FACE_OUTER_BOUND('',#{l3},.T.)"));
         let b4 = b.add(format!("FACE_BOUND('',#{l4},.T.)"));
         cavity.push(b.add(format!("ADVANCED_FACE('',(#{b3},#{b4}),#{ring_plane},.T.)")));
@@ -411,7 +444,7 @@ pub fn to_step(enclosure: &Enclosure) -> String {
             "CYLINDRICAL_SURFACE('',#{bore_axis},{})",
             real2(ring.bore)
         ));
-        let l5 = b.loop_of(&[(ring.bore_top_edge, true)]);
+        let l5 = b.loop_of(&[(ring.bore_top_edge, false)]);
         let l6 = b.loop_of(&[(ring.bore_bottom_edge, true)]);
         let b5 = b.add(format!("FACE_OUTER_BOUND('',#{l5},.T.)"));
         let b6 = b.add(format!("FACE_BOUND('',#{l6},.T.)"));
@@ -430,12 +463,22 @@ pub fn to_step(enclosure: &Enclosure) -> String {
             .collect::<Vec<_>>()
             .join(",")
     };
-    let shell = b.add(format!("CLOSED_SHELL('',({}))", list(&faces)));
-    let void_shell = b.add(format!("CLOSED_SHELL('',({}))", list(&cavity)));
-    let oriented_void = b.add(format!("ORIENTED_CLOSED_SHELL('',*,#{void_shell},.F.)"));
-    let brep = b.add(format!(
-        "BREP_WITH_VOIDS('enclosure',#{shell},(#{oriented_void}))"
-    ));
+    let brep = if all_holes.is_empty() {
+        let shell = b.add(format!("CLOSED_SHELL('',({}))", list(&faces)));
+        let void_shell = b.add(format!("CLOSED_SHELL('',({}))", list(&cavity)));
+        let oriented_void = b.add(format!("ORIENTED_CLOSED_SHELL('',*,#{void_shell},.F.)"));
+        b.add(format!(
+            "BREP_WITH_VOIDS('enclosure',#{shell},(#{oriented_void}))"
+        ))
+    } else {
+        // a hole joins the cavity to the outside: the walls are one surface
+        for &face in &cavity {
+            b.turn_face(face);
+        }
+        faces.append(&mut cavity);
+        let shell = b.add(format!("CLOSED_SHELL('',({}))", list(&faces)));
+        b.add(format!("MANIFOLD_SOLID_BREP('enclosure',#{shell})"))
+    };
 
     finish_file(b, &[brep], "enclosure")
 }
@@ -803,6 +846,71 @@ mod tests {
             defined = id;
         }
         assert!(defined > 100);
+    }
+
+    /// The entities of a file by their number.
+    fn by_number(text: &str) -> BTreeMap<usize, &str> {
+        text.lines()
+            .filter_map(|l| l.strip_prefix('#')?.split_once('='))
+            .filter_map(|(id, body)| Some((id.parse().ok()?, body.strip_suffix(';')?)))
+            .collect()
+    }
+
+    /// The numbers an entity refers to, in order.
+    fn references(body: &str) -> Vec<usize> {
+        body.split('#')
+            .skip(1)
+            .filter_map(|part| {
+                let digits: String = part.chars().take_while(char::is_ascii_digit).collect();
+                digits.parse().ok()
+            })
+            .collect()
+    }
+
+    /// Each shell of a file: every edge is walked once each way by the faces of the shell.
+    fn assert_every_edge_once_each_way(text: &str) {
+        let map = by_number(text);
+        let against = |body: &str| body.ends_with(".F.)");
+        let mut shells = 0;
+        for shell in map.values().filter(|b| b.starts_with("CLOSED_SHELL")) {
+            shells += 1;
+            let mut ways: BTreeMap<usize, Vec<bool>> = BTreeMap::new();
+            for face in references(shell) {
+                let named = references(map[&face]);
+                // the last number of a face is its surface
+                for bound in &named[..named.len() - 1] {
+                    let turned = against(map[bound]);
+                    let edges = references(map[&references(map[bound])[0]]);
+                    for oriented in edges {
+                        let edge = references(map[&oriented])[0];
+                        ways.entry(edge)
+                            .or_default()
+                            .push(against(map[&oriented]) != turned);
+                    }
+                }
+            }
+            for (edge, mut seen) in ways {
+                seen.sort_unstable();
+                assert_eq!(seen, vec![false, true], "edge #{edge}");
+            }
+        }
+        assert!(shells > 0);
+    }
+
+    #[test]
+    fn a_hole_joins_the_cavity_and_the_outside_in_one_closed_shell() {
+        let mut e = enclosure(&[(Face::Front, 20, 15, 8), (Face::Top, 30, 30, 10)]);
+        add_post(&mut e, 1, a_post("p", 60, 40));
+        let text = to_step(&e);
+        assert_eq!(count(&text, "CLOSED_SHELL"), 1);
+        assert_eq!(count(&text, "MANIFOLD_SOLID_BREP"), 1);
+        assert_eq!(count(&text, "BREP_WITH_VOIDS"), 0);
+        assert_every_edge_once_each_way(&text);
+        let mut posts_only = enclosure(&[]);
+        add_post(&mut posts_only, 1, a_post("p", 60, 40));
+        let text = to_step(&posts_only);
+        assert_eq!(count(&text, "CLOSED_SHELL"), 2);
+        assert_every_edge_once_each_way(&text);
     }
 
     #[test]

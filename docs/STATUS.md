@@ -52,7 +52,7 @@ The window has the panel «Attachments» of the suite (the shared `eh3d-attachpa
 
 ## Capabilities
 
-The official state of each capability is in REQUIREMENTS.md: 41 requirements: 40 `prototype` (FCAD-001 and FCAD-003 to FCAD-041) and 1 `planned` (FCAD-002). This page never states a state that REQUIREMENTS.md does not.
+The official state of each capability is in REQUIREMENTS.md: 41 requirements, all `prototype` (FCAD-001 to FCAD-041). This page never states a state that REQUIREMENTS.md does not.
 
 ## Open questions
 
