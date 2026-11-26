@@ -9,12 +9,12 @@ The attachments of a suite project (data sheets, and the 3D files of the parts) 
 ## Decision
 
 1. **A view, not an import.** A 3D file or a flat DXF drawing is read with the readers of the import and shown; nothing is written, extracted or added to the model.
-2. **Flat shading painted from far to near,** with the sharp edges. There is no depth buffer and no new dependency; a file with more triangles than `model_view.max_triangles` is measured and not drawn.
+2. **Flat shading with a depth buffer worked out here,** with the sharp edges: sorting the triangles showed the inside of a box through its long walls. The picture is made by the processor and shown as an image, with no new dependency, and only when the view changes; a file with more triangles than `model_view.max_triangles` is measured and not drawn.
 3. **The key is given each time.** The secret key file is read to sign and nothing else: no path is kept in the settings, and it is never written into a project.
 4. **The branch `cad` by default.** The window signs the branch of this program, the whole project or both; the command can name other branches, as the shared format lets any program sign for the holder of a key.
 5. **A save is not stopped by a signature, it tells.** Saving what a signature covers removes it, and the window and the commands of the suite file say so.
 
 ## Consequences
 
-* The view cannot judge what two crossing parts look like where they cross, and curved STEP faces are refused as by the import.
+* The edges are not smoothed, and curved STEP faces are refused as by the import.
 * A key file has no password: protecting it is up to its owner.

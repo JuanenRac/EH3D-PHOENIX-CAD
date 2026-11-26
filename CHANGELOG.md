@@ -4,7 +4,7 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
-- **3D attachments are seen inside the program:** a STL, OBJ, 3MF, STEP, PLY, OFF or DXF attachment of the suite project has a button over the panel *Attachments* that shows it as a shaded solid with its sharp edges, to turn, move and zoom, without taking it out of the project. The window has not been seen on a screen.
+- **3D attachments are seen inside the program:** a STL, OBJ, 3MF, STEP, PLY, OFF or DXF attachment of the suite project has a button over the panel *Attachments* that shows it as a shaded solid with its sharp edges, to turn, move and zoom, without taking it out of the project. What is behind is hidden pixel by pixel, also inside a box with long walls. The window has only been looked at in pictures of a virtual screen.
 
 - **What the part measures, and whether it goes in the box:** the view tells the solids and triangles, the size, the volume of a closed surface (or how many edges are open), what the reader warned about and whether it fits inside the box as it is, only when turned, or not at all.
 

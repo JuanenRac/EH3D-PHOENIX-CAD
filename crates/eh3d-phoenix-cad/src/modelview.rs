@@ -7,7 +7,7 @@
 //! Everything but the painting is here and has no window: reading (with the limits of the
 //! settings, by the readers of the program, which never panic), the facts told about what was read
 //! (solids, triangles, size, volume when the surface is closed, whether it fits inside the box),
-//! the order in which the triangles are painted, the corner under the pointer and the distance
+//! the picture with its hidden surfaces left out, the corner under the pointer and the distance
 //! between two corners.
 
 use std::collections::BTreeMap;
@@ -515,28 +515,138 @@ fn on_pane(solid: &Solid, pose: &Pose, pane: (f64, f64), corner: Point3) -> (f64
     )
 }
 
-/// A triangle as it is painted.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Painted {
-    /// Its corners on the pane, in pixels.
-    pub points: [(f32, f32); 3],
-    /// How lit it is, from 0 to 1.
-    pub shade: f32,
-    /// Its sharp sides, as [`Triangle::edges`].
-    pub edges: u8,
+/// The light colour of a face that is fully lit.
+const FACE: [f64; 3] = [150.0, 196.0, 224.0];
+/// The colour of a sharp edge.
+const EDGE: [u8; 4] = [10, 20, 28, 255];
+
+/// The widest and tallest picture that is worked out.
+pub const PICTURE_MAX: usize = 4096;
+
+/// The picture of a solid: its pixels and how far each one is from the person.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Picture {
+    /// The pixels across.
+    pub width: usize,
+    /// The pixels down.
+    pub height: usize,
+    /// Red, green, blue and alpha of every pixel, row after row; nothing is drawn where alpha
+    /// is 0.
+    pub rgba: Vec<u8>,
+    /// The depth of the nearest surface at every pixel, infinite where there is none.
+    depth: Vec<f64>,
 }
 
-/// The triangles in the order they are painted, the farthest first. A closed solid does not show
-/// the triangles that look away; an open surface is lit from both sides.
-pub fn paint(solid: &Solid, pose: &Pose, pane: (f64, f64)) -> Vec<Painted> {
+impl Picture {
+    /// The colour of a pixel; transparent outside the picture.
+    pub fn pixel(&self, x: usize, y: usize) -> [u8; 4] {
+        let mut out = [0; 4];
+        if x < self.width && y < self.height {
+            let at = (y * self.width + x) * 4;
+            out.copy_from_slice(&self.rgba[at..at + 4]);
+        }
+        out
+    }
+
+    /// Whether a point at this place and depth is not behind a surface, with `slack` of depth,
+    /// looking also at the pixels around it (a corner sits on the rim of its faces).
+    fn sees(&self, x: f64, y: f64, depth: f64, slack: f64) -> bool {
+        if x < 0.0 || y < 0.0 || x >= self.width as f64 || y >= self.height as f64 {
+            return false;
+        }
+        let (x, y) = (x as usize, y as usize);
+        for v in y.saturating_sub(1)..=(y + 1).min(self.height - 1) {
+            for u in x.saturating_sub(1)..=(x + 1).min(self.width - 1) {
+                if depth <= self.depth[v * self.width + u] + slack {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn put(&mut self, at: usize, colour: [u8; 4]) {
+        self.rgba[at * 4..at * 4 + 4].copy_from_slice(&colour);
+    }
+
+    /// Fills a triangle given by its corners (across, down, depth) where it is the nearest.
+    fn fill(&mut self, [a, b, c]: [(f64, f64, f64); 3], colour: [u8; 4]) {
+        let area = (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
+        if area.abs() < 1e-12 {
+            return;
+        }
+        let low_x = a.0.min(b.0).min(c.0).floor().max(0.0) as usize;
+        let low_y = a.1.min(b.1).min(c.1).floor().max(0.0) as usize;
+        let high_x = (a.0.max(b.0).max(c.0).ceil().max(0.0) as usize).min(self.width);
+        let high_y = (a.1.max(b.1).max(c.1).ceil().max(0.0) as usize).min(self.height);
+        for y in low_y..high_y {
+            for x in low_x..high_x {
+                // the middle of the pixel, in the shares of the three corners
+                let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
+                let wa = ((b.0 - px) * (c.1 - py) - (b.1 - py) * (c.0 - px)) / area;
+                let wb = ((c.0 - px) * (a.1 - py) - (c.1 - py) * (a.0 - px)) / area;
+                let wc = 1.0 - wa - wb;
+                if wa < -1e-9 || wb < -1e-9 || wc < -1e-9 {
+                    continue;
+                }
+                let depth = wa * a.2 + wb * b.2 + wc * c.2;
+                let at = y * self.width + x;
+                if depth < self.depth[at] {
+                    self.depth[at] = depth;
+                    self.put(at, colour);
+                }
+            }
+        }
+    }
+
+    /// Draws a side one pixel wide where it is not behind a surface.
+    fn stroke(&mut self, a: (f64, f64, f64), b: (f64, f64, f64), slack: f64) {
+        let longest = (b.0 - a.0).abs().max((b.1 - a.1).abs());
+        // a side far longer than the picture (a very close zoom) is walked in bounded steps
+        let steps = (longest.ceil() as usize).clamp(1, 4 * PICTURE_MAX);
+        for k in 0..=steps {
+            let t = k as f64 / steps as f64;
+            let x = a.0 + (b.0 - a.0) * t;
+            let y = a.1 + (b.1 - a.1) * t;
+            if x < 0.0 || y < 0.0 || x >= self.width as f64 || y >= self.height as f64 {
+                continue;
+            }
+            let depth = a.2 + (b.2 - a.2) * t;
+            let at = y as usize * self.width + x as usize;
+            if depth <= self.depth[at] + slack {
+                self.put(at, EDGE);
+            }
+        }
+    }
+}
+
+/// The depth by which an edge or a corner may be behind the surface it belongs to.
+fn slack(solid: &Solid) -> f64 {
+    solid.radius() * 0.01
+}
+
+/// The picture of a solid, `width` by `height` pixels: every pixel shows the surface that is
+/// nearest to the person, lit by its direction, and with `edges` the sharp edges that are not
+/// hidden. A closed solid leaves out the triangles that look away; an open surface is lit from
+/// both sides.
+pub fn render(solid: &Solid, pose: &Pose, width: usize, height: usize, edges: bool) -> Picture {
+    let width = width.clamp(1, PICTURE_MAX);
+    let height = height.clamp(1, PICTURE_MAX);
+    let mut out = Picture {
+        width,
+        height,
+        rgba: vec![0; width * height * 4],
+        depth: vec![f64::INFINITY; width * height],
+    };
     // the light comes from over the left shoulder of the person
     let light = unit([-0.35, 0.55, -0.75]).unwrap_or([0.0, 0.0, -1.0]);
+    let pane = (width as f64, height as f64);
     let corners: Vec<(f64, f64, f64)> = solid
         .points
         .iter()
         .map(|p| on_pane(solid, pose, pane, *p))
         .collect();
-    let mut out: Vec<(f64, Painted)> = Vec::with_capacity(solid.triangles.len());
+    let mut sides = Vec::new();
     for t in &solid.triangles {
         let (right, up, depth) = rotate(t.normal, [0.0; 3], pose.camera);
         let away = depth > 1e-9;
@@ -545,47 +655,48 @@ pub fn paint(solid: &Solid, pose: &Pose, pane: (f64, f64)) -> Vec<Painted> {
         }
         let side = if away { -1.0 } else { 1.0 };
         let lit = dot([right * side, up * side, depth * side], light).max(0.0);
-        let [a, b, c] = t.corners.map(|v| corners[v as usize]);
-        out.push((
-            a.2 + b.2 + c.2,
-            Painted {
-                points: [a, b, c].map(|p| (p.0 as f32, p.1 as f32)),
-                shade: (0.25 + 0.75 * lit) as f32,
-                edges: t.edges,
-            },
-        ));
+        let shade = 0.25 + 0.75 * lit;
+        let [r, g, b] = FACE.map(|v| (v * shade).clamp(0.0, 255.0) as u8);
+        let at = t.corners.map(|v| corners[v as usize]);
+        out.fill(at, [r, g, b, 255]);
+        for k in 0..3 {
+            if edges && t.edges & (1 << k) != 0 {
+                sides.push((at[k], at[(k + 1) % 3]));
+            }
+        }
     }
-    out.sort_by(|a, b| b.0.total_cmp(&a.0));
-    out.into_iter().map(|(_, painted)| painted).collect()
+    // the edges after every face, so that a face drawn later does not cut them in half
+    let slack = slack(solid);
+    for (a, b) in sides {
+        out.stroke(a, b, slack);
+    }
+    out
 }
 
-/// The corner of the solid drawn within `radius` pixels of a place of the pane: of those, the one
-/// nearest to the person.
+/// The corner of the solid within `radius` pixels of a place of the picture that is not hidden:
+/// of those, the one nearest to the place, and of two on one pixel the one nearer to the person.
 pub fn pick(
     solid: &Solid,
     pose: &Pose,
-    pane: (f64, f64),
+    picture: &Picture,
     at: (f64, f64),
     radius: f64,
 ) -> Option<Point3> {
+    let pane = (picture.width as f64, picture.height as f64);
+    let slack = slack(solid);
     let mut found: Option<(f64, f64, Point3)> = None;
     for t in &solid.triangles {
-        let (_, _, depth) = rotate(t.normal, [0.0; 3], pose.camera);
-        if depth > 1e-9 && solid.closed {
-            continue;
-        }
         for v in t.corners {
             let corner = solid.points[v as usize];
             let (x, y, depth) = on_pane(solid, pose, pane, corner);
             let apart = (x - at.0).hypot(y - at.1);
-            if apart > radius {
+            if apart > radius || !picture.sees(x, y, depth, slack) {
                 continue;
             }
-            let better = found.is_none_or(|(d, a, _)| {
-                depth < d - 1e-9 || ((depth - d).abs() <= 1e-9 && apart < a)
-            });
+            let better = found
+                .is_none_or(|(a, d, _)| apart < a - 0.5 || ((apart - a).abs() <= 0.5 && depth < d));
             if better {
-                found = Some((depth, apart, corner));
+                found = Some((apart, depth, corner));
             }
         }
     }

@@ -131,9 +131,13 @@ fn an_open_surface_has_no_volume_and_says_how_many_edges_are_open() {
     assert_eq!((read.open_edges, read.volume_mm3), (3, None));
     let said = facts(&Content::Solid(read.clone()), None, Lang::En);
     assert!(said[2].ends_with("(open edges: 3)."), "{said:?}");
-    // an open surface is painted from both sides: no triangle is left out
-    let pose = Pose::fitted(Camera::TOP);
-    assert_eq!(paint(&read, &pose, (400.0, 400.0)).len(), 11);
+    // an open surface is drawn from both sides: nothing of its outline is left empty
+    let below = Camera {
+        yaw: 0.0,
+        pitch: -90.0,
+    };
+    let picture = render(&read, &Pose::fitted(below), 400, 400, false);
+    assert_eq!(picture.pixel(200, 200)[3], 255);
 }
 
 #[test]
@@ -188,35 +192,97 @@ fn a_flat_drawing_is_read_with_its_size_and_fits_the_pane() {
 }
 
 #[test]
-fn a_closed_solid_does_not_paint_what_looks_away_and_paints_what_is_near_last() {
+fn the_picture_shows_the_lit_face_that_is_seen_and_nothing_round_it() {
     let cube = cube_solid();
-    // from above: the two triangles of the bottom are left out
-    let top = paint(&cube, &Pose::fitted(Camera::TOP), (400.0, 400.0));
-    assert_eq!(top.len(), 10);
-    for near in &top[8..] {
-        assert!((near.shade - 0.816).abs() < 0.01, "{}", near.shade);
-        for (x, y) in near.points {
-            assert!(x > 0.0 && x < 400.0 && y > 0.0 && y < 400.0, "{x} {y}");
-        }
+    let picture = render(&cube, &Pose::fitted(Camera::TOP), 400, 400, false);
+    assert_eq!((picture.width, picture.height), (400, 400));
+    // from above the top face fills the middle: 150 of red times a shade of about 0.816
+    for (x, y) in [(200, 200), (120, 120), (280, 280)] {
+        let [red, _, _, alpha] = picture.pixel(x, y);
+        assert!((121..=123).contains(&red), "{red}");
+        assert_eq!(alpha, 255);
     }
-    // from a corner three faces are seen
+    // outside the cube nothing is drawn
+    assert_eq!(picture.pixel(2, 2), [0, 0, 0, 0]);
+    assert_eq!(picture.pixel(1000, 1000), [0, 0, 0, 0]);
+    // from a corner three faces of different light are seen
     let corner = Camera {
         yaw: 45.0,
         pitch: 30.0,
     };
-    assert_eq!(paint(&cube, &Pose::fitted(corner), (400.0, 400.0)).len(), 6);
+    let picture = render(&cube, &Pose::fitted(corner), 400, 400, false);
+    let shades: std::collections::BTreeSet<u8> = picture
+        .rgba
+        .chunks(4)
+        .filter(|p| p[3] == 255)
+        .map(|p| p[0])
+        .collect();
+    assert_eq!(shades.len(), 3, "{shades:?}");
 }
 
 #[test]
-fn the_corner_under_the_pointer_is_the_one_nearest_to_the_person() {
+fn what_is_behind_is_hidden_whatever_the_order_and_the_size_of_the_triangles() {
+    // a small flat square near the person and a much larger leaning one under it
+    let square = |half: f64, z: f64, lean: f64| -> Vec<[f64; 9]> {
+        let a = [-half, -half, z];
+        let b = [half, -half, z];
+        let c = [half, half, z + lean];
+        let d = [-half, half, z + lean];
+        [[a, b, c], [a, c, d]]
+            .into_iter()
+            .map(|[p, q, r]| [p[0], p[1], p[2], q[0], q[1], q[2], r[0], r[1], r[2]])
+            .collect()
+    };
+    let near = square(2.0, 5.0, 0.0);
+    // its mean depth says nothing about what it hides, as it leans so much
+    let far = square(20.0, -20.0, 24.0);
+    let picture_of = |triangles: Vec<[f64; 9]>| {
+        let mesh = interchange::mesh_from_triangles(&triangles);
+        let bytes = crate::mesh::stl_binary(&[("two", &mesh)]);
+        let read = solid(load("two.stl", &bytes, &options(), Lang::En).unwrap());
+        render(&read, &Pose::fitted(Camera::TOP), 200, 200, false)
+    };
+    let one = picture_of([near.clone(), far.clone()].concat());
+    let other = picture_of([far, near].concat());
+    assert_eq!(one.rgba, other.rgba);
+    // the near square is flat, so it has the shade of a face seen from above
+    let red = one.pixel(100, 100)[0];
+    assert!((121..=123).contains(&red), "{red}");
+    assert_ne!(one.pixel(100, 130)[0], red);
+}
+
+#[test]
+fn the_sharp_edges_are_drawn_when_asked_and_not_where_they_are_hidden() {
     let cube = cube_solid();
     let pose = Pose::fitted(Camera::TOP);
-    let pane = (400.0, 400.0);
+    let plain = render(&cube, &pose, 400, 400, false);
+    let lined = render(&cube, &pose, 400, 400, true);
+    let dark = |p: &Picture| p.rgba.chunks(4).filter(|c| *c == [10, 20, 28, 255]).count();
+    assert_eq!(dark(&plain), 0);
+    assert!(dark(&lined) > 400, "{}", dark(&lined));
+    // the diagonal of the top face is not an edge, and the bottom is not seen through it
+    assert_eq!(lined.pixel(200, 200), plain.pixel(200, 200));
+}
+
+#[test]
+fn the_corner_under_the_pointer_is_a_corner_that_is_not_hidden() {
+    let cube = cube_solid();
+    let pose = Pose::fitted(Camera::TOP);
+    let picture = render(&cube, &pose, 400, 400, true);
     let top_corner = [10.0, 10.0, 10.0];
-    let at = place_of(&cube, &pose, pane, top_corner);
+    let at = place_of(&cube, &pose, (400.0, 400.0), top_corner);
     // the corner under it is on the same pixel and farther: the near one is picked
-    assert_eq!(pick(&cube, &pose, pane, at, 6.0), Some(top_corner));
-    assert_eq!(pick(&cube, &pose, pane, (2.0, 2.0), 6.0), None);
+    assert_eq!(pick(&cube, &pose, &picture, at, 6.0), Some(top_corner));
+    assert_eq!(pick(&cube, &pose, &picture, (2.0, 2.0), 6.0), None);
+    // from a corner view the far corner of the cube is behind it and cannot be picked
+    let corner = Pose::fitted(Camera {
+        yaw: 45.0,
+        pitch: 30.0,
+    });
+    let picture = render(&cube, &corner, 400, 400, true);
+    let far = [10.0, 10.0, 0.0];
+    let at = place_of(&cube, &corner, (400.0, 400.0), far);
+    assert_ne!(pick(&cube, &corner, &picture, at, 3.0), Some(far));
     assert_eq!(
         distance_text([0.0; 3], [3.0, 4.0, 0.0], Lang::En),
         "Distance 5 mm (x 3, y 4, z 0 mm)"

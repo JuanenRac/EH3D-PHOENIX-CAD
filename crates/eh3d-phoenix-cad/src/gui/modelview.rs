@@ -6,14 +6,9 @@
 
 use super::*;
 use crate::modelview::{
-    self, can_show, Content, Job, Origin, Painted, Pose, ViewOptions, STRAIGHT_VIEWS,
+    self, can_show, Content, Job, Origin, Picture, Pose, Solid, ViewOptions, STRAIGHT_VIEWS,
 };
 use crate::projection::{Camera, Point3};
-
-/// The light colour of a face that is fully lit.
-const FACE: [f32; 3] = [150.0, 196.0, 224.0];
-/// The colour of a sharp edge.
-const EDGE: Color32 = Color32::from_rgb(0x0a, 0x14, 0x1c);
 
 /// The window, while it is open.
 pub(super) struct ViewerState {
@@ -25,49 +20,48 @@ pub(super) struct ViewerState {
     edges: bool,
     measuring: bool,
     picks: Vec<Point3>,
+    drawn: Option<Drawn>,
 }
 
-fn shaded(shade: f32) -> Color32 {
-    let [r, g, b] = FACE.map(|v| (v * shade).clamp(0.0, 255.0) as u8);
-    Color32::from_rgb(r, g, b)
+/// The picture of a solid as it was last worked out, and what it was worked out for.
+struct Drawn {
+    key: (Pose, usize, usize, bool),
+    picture: Picture,
+    texture: egui::TextureHandle,
 }
 
-/// The triangles and their sharp edges as one mesh, in the order given, so that what is near
-/// covers what is far.
-fn mesh_of(painted: &[Painted], corner: Pos2, edges: bool) -> egui::Mesh {
-    let mut mesh = egui::Mesh::default();
-    for face in painted {
-        let at = face
-            .points
-            .map(|p| Pos2::new(corner.x + p.0, corner.y + p.1));
-        let first = mesh.vertices.len() as u32;
-        for p in at {
-            mesh.colored_vertex(p, shaded(face.shade));
-        }
-        mesh.add_triangle(first, first + 1, first + 2);
-        if !edges {
-            continue;
-        }
-        for k in 0..3 {
-            if face.edges & (1 << k) == 0 {
-                continue;
-            }
-            let (a, b) = (at[k], at[(k + 1) % 3]);
-            let along = b - a;
-            if along.length_sq() < 1e-6 {
-                continue;
-            }
-            // a side of one pixel, drawn as a thin quadrilateral
-            let aside = Vec2::new(-along.y, along.x).normalized() * 0.6;
-            let first = mesh.vertices.len() as u32;
-            for p in [a + aside, b + aside, b - aside, a - aside] {
-                mesh.colored_vertex(p, EDGE);
-            }
-            mesh.add_triangle(first, first + 1, first + 2);
-            mesh.add_triangle(first, first + 2, first + 3);
-        }
+/// The picture of the pane, worked out again only when the pose, the size or the edges changed.
+fn picture_of<'a>(
+    drawn: &'a mut Option<Drawn>,
+    ctx: &egui::Context,
+    solid: &Solid,
+    key: (Pose, usize, usize, bool),
+) -> &'a Drawn {
+    if drawn.as_ref().is_some_and(|d| d.key != key) {
+        *drawn = None;
     }
-    mesh
+    drawn.get_or_insert_with(|| {
+        let (pose, width, height, edges) = key;
+        let picture = modelview::render(solid, &pose, width, height, edges);
+        let image = egui::ColorImage::from_rgba_unmultiplied(
+            [picture.width, picture.height],
+            &picture.rgba,
+        );
+        let texture = ctx.load_texture("model-view", image, egui::TextureOptions::LINEAR);
+        Drawn {
+            key,
+            picture,
+            texture,
+        }
+    })
+}
+
+/// The pose for a picture with `sharp` pixels to each point of the window.
+fn scaled(pose: &Pose, sharp: f64) -> Pose {
+    Pose {
+        pan: (pose.pan.0 * sharp, pose.pan.1 * sharp),
+        ..*pose
+    }
 }
 
 impl App {
@@ -93,6 +87,7 @@ impl App {
             edges: true,
             measuring: false,
             picks: Vec::new(),
+            drawn: None,
         });
     }
 
@@ -169,6 +164,7 @@ impl App {
         egui::Window::new(fill(Msg::MvTitle.tr(lang), &[&view.name]))
             .id(egui::Id::unique("model-view"))
             .open(&mut open)
+            .default_pos([60.0, 60.0])
             .default_size([820.0, 600.0])
             .show(ctx, |ui| match &view.content {
                 None => {
@@ -238,15 +234,31 @@ impl App {
                     }
                     match content {
                         Content::Solid(solid) => {
-                            let painted = modelview::paint(solid, &view.pose, pane);
-                            let mesh = mesh_of(&painted, rect.min, view.edges);
-                            painter.add(egui::Shape::mesh(mesh));
+                            // one pixel of the picture for each pixel of the screen
+                            let sharp = f64::from(ui.ctx().pixels_per_point()).clamp(0.5, 4.0);
+                            let key = (
+                                scaled(&view.pose, sharp),
+                                (pane.0 * sharp).round() as usize,
+                                (pane.1 * sharp).round() as usize,
+                                view.edges,
+                            );
+                            let drawn = picture_of(&mut view.drawn, ui.ctx(), solid, key);
+                            let whole = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+                            painter.image(drawn.texture.id(), rect, whole, Color32::WHITE);
                             let clicked = response.clicked() && view.measuring;
                             if let Some(p) = response.interact_pointer_pos().filter(|_| clicked) {
-                                let at = (f64::from(p.x - rect.min.x), f64::from(p.y - rect.min.y));
-                                if let Some(corner) =
-                                    modelview::pick(solid, &view.pose, pane, at, radius)
-                                {
+                                let at = (
+                                    f64::from(p.x - rect.min.x) * sharp,
+                                    f64::from(p.y - rect.min.y) * sharp,
+                                );
+                                let found = modelview::pick(
+                                    solid,
+                                    &drawn.key.0,
+                                    &drawn.picture,
+                                    at,
+                                    radius * sharp,
+                                );
+                                if let Some(corner) = found {
                                     if view.picks.len() >= 2 {
                                         view.picks.clear();
                                     }
