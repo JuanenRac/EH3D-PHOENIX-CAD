@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **Pictures of the view and of the signature:** the README files show a 3D file cut open in the view and the window that signs a signed suite project, in the eight languages; that window now opens clear of the menu.
+
 - **The picture mode shows a cut and the signing window:** `--viewer-cut x|y|z` cuts the file of `--viewer` at its middle and `--sign-window` opens the window that signs the suite project, so their pictures can be taken without a person.
 
 - **A smooth picture of other files:** the light of the view follows the surface between its sharp edges, so a round part looks round, and while the view is still the edges are softened with several points for each pixel (`model_view.smooth`, `model_view.samples`).

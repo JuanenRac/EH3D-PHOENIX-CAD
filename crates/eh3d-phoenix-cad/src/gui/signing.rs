@@ -128,6 +128,7 @@ impl App {
         egui::Window::new(Msg::SignMenu.tr(lang))
             .id(egui::Id::unique("suite-sign"))
             .open(&mut open)
+            .default_pos([420.0, 140.0])
             .default_size([560.0, 300.0])
             .show(ctx, |ui| {
                 ui.label(Msg::SignKeyFile.tr(lang));
