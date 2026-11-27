@@ -4,7 +4,7 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
-- **Ready for the longer minimum of a new key password:** EH3D-COMMON now asks for at least 12 characters in a new password of a signing key; the window already shows the number the library asks, so it says 12 once the build takes a version that has it (the build takes 0.3.7, which asks 8). The tests no longer suppose 8.
+- **A new key password needs at least 12 characters (was 8):** it applies to a new key made by the window or by `eh3d-keygen --password-stdin` and to protecting a key that has none; the message that refuses a shorter one says the number in the eight languages. A key already under a password of 8 to 11 characters opens and signs as before. This comes with EH3D-COMMON 0.4.0, which the build takes now; from it also: a panel asked for is brought to the front, the settings panel of the server keeps to the width of its column and protecting a key through a link protects the file the link points at.
 - **Third-party notices in every package (`docs/THIRD_PARTY_NOTICES`):** the packages of the releases now carry the copyright notices and licence texts of the Rust crates and of the data the program is built with, and the CI fails when a new dependency or licence is not in the file.
 
 - **A DXF drawing in feet is no longer read as millimetres:** with the automatic unit, a header that declared feet, mils, yards, microns or decimetres was taken for millimetres, so the drawing came in at the wrong size; these units are followed now and any other declared unit is refused, so that the unit is given by hand.
@@ -23,7 +23,7 @@ All notable changes to this project are documented here.
 
 - **A signature of another key is replaced only when agreed:** the window asks before it replaces one, and `eh3d-sign` needs `--replace-signature`.
 
-- **The shared repository at v0.3.7:** the panel of the attachments refuses to write over what another program saved, and a preview keeps at most `viewer.max_preview_mb` of text (16 by default).
+- **Attachments of the shared repository:** the panel of the attachments refuses to write over what another program saved, and a preview keeps at most `viewer.max_preview_mb` of text (16 by default).
 
 ## [0.1.6] - STEP with countersinks, slots and rounded edges, a tilted section view and measuring on the section
 
