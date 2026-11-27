@@ -14,10 +14,13 @@
 //! `--time`: the program does not read the clock into a file.
 
 use std::collections::BTreeMap;
+use std::io::{BufRead, Read};
 use std::path::Path;
 
+use eh3d_project::keylock::MAX_PASSWORD_BYTES;
 use eh3d_project::meta::{LocalText, REPORT_FILE};
-use eh3d_project::{Dependency, Project, Seal, SignatureStatus};
+use eh3d_project::suitetext::{fill as suite_fill, S};
+use eh3d_project::{Dependency, KeyProtection, Password, Project, Seal, SignatureStatus};
 
 use crate::boardart::{
     self, BoardArtifact, Change, ARTIFACT, ARTIFACT_VERSION, MOUNTS_ENTRY, SNAPSHOT_ENTRY,
@@ -70,16 +73,57 @@ const MAX_BYTES: u64 = 256 << 20;
 /// What a command answers: the text it prints and whether the check passed.
 type Answer = Result<(String, bool), String>;
 
+/// The switch of `eh3d-sign` and `eh3d-keygen` that says the password of the key is the first line
+/// of the standard input: it is never taken from the command line, where others could read it.
+const PASSWORD_SWITCH: &str = "--password-stdin";
+
+/// Reads a password as one line, without the end of the line.
+fn read_password(input: &mut dyn BufRead) -> Result<Password, String> {
+    // room for the longest password and its end, so that no copy is left behind while it grows
+    let mut line = String::with_capacity(MAX_PASSWORD_BYTES + 3);
+    let read = input
+        .take(MAX_PASSWORD_BYTES as u64 + 3)
+        .read_line(&mut line);
+    while line.ends_with(['\n', '\r']) {
+        line.pop();
+    }
+    let usable = read.is_ok() && !line.is_empty() && line.len() <= MAX_PASSWORD_BYTES;
+    // wiped when dropped, also when it is not used
+    let password = Password::new(line);
+    if usable {
+        Ok(password)
+    } else {
+        Err(format!(
+            "{PASSWORD_SWITCH}: the standard input has no password that can be used"
+        ))
+    }
+}
+
 /// Runs one of the commands of [`COMMANDS`]. A command that wrote over what a signature of a
 /// project of the suite covered says that the signature was removed.
 pub fn run(command: &str, args: &[String]) -> Answer {
+    let asks =
+        matches!(command, "eh3d-sign" | "eh3d-keygen") && args.iter().any(|a| a == PASSWORD_SWITCH);
+    let password = if asks {
+        Some(read_password(&mut std::io::stdin().lock())?)
+    } else {
+        None
+    };
+    run_with(command, args, password.as_ref())
+}
+
+fn run_with(command: &str, args: &[String], password: Option<&Password>) -> Answer {
     let file = args
         .iter()
         .map(Path::new)
         .find(|p| eh3dfile::is_eh3d(p))
         .filter(|_| command != "eh3d-sign");
     let signed = file.map(signing::standing).unwrap_or_default();
-    let (mut out, ok) = dispatch(command, args)?;
+    let (mut out, ok) = match command {
+        "eh3d-sign" => sign(args, password)?,
+        "eh3d-keygen" => keygen(args, password)?,
+        _ => dispatch(command, args)?,
+    };
     if let Some(file) = file.filter(|f| signed.lost(signing::standing(f))) {
         let name = file.display().to_string();
         line(&mut out, Msg::SignatureRemoved, language_of(args), &[&name]);
@@ -96,8 +140,12 @@ fn language_of(args: &[String]) -> Lang {
         .unwrap_or(Lang::En)
 }
 
-fn sign(args: &[String]) -> Answer {
-    let a = parse(args, &["--key", "--branch"], &["--project"])?;
+fn sign(args: &[String], password: Option<&Password>) -> Answer {
+    let a = parse(
+        args,
+        &["--key", "--branch"],
+        &["--project", "--replace-signature", PASSWORD_SWITCH],
+    )?;
     let file = suite_file(&a)?;
     let key = a
         .value("--key")
@@ -115,7 +163,26 @@ fn sign(args: &[String]) -> Answer {
         None => signing::Request::own().branches,
     };
     let request = signing::Request { branches, whole };
-    let done = signing::sign(file, Path::new(key), &request).map_err(say(a.lang))?;
+    let key = Path::new(key);
+    let signer = signing::read_key(key, password).map_err(|e| {
+        let words = signing::key_words(&e, key, a.lang);
+        match password {
+            Some(_) => words,
+            None => format!("{words} ({PASSWORD_SWITCH})"),
+        }
+    })?;
+    let replace = a.has("--replace-signature");
+    if !replace {
+        let held = signing::to_replace(file, &signer, &request).map_err(say(a.lang))?;
+        if !held.is_empty() {
+            let asked: Vec<String> = held.iter().map(|h| h.question(a.lang)).collect();
+            return Err(format!(
+                "EH3D-PKG-026 {} (--replace-signature)",
+                asked.join(" ")
+            ));
+        }
+    }
+    let done = signing::sign_with(file, &signer, &request, replace).map_err(say(a.lang))?;
     let mut out = String::new();
     for branch in &done.branches {
         line(
@@ -128,13 +195,28 @@ fn sign(args: &[String]) -> Answer {
     if done.whole {
         line(&mut out, Msg::SignedProjectWith, a.lang, &[&done.key_id]);
     }
+    warn_unprotected(&mut out, key, a.lang);
     Ok((out, true))
 }
 
-fn keygen(args: &[String]) -> Answer {
-    let a = parse(args, &["--out"], &[])?;
+/// Adds the warning of a secret key file that has no password.
+fn warn_unprotected(out: &mut String, key: &Path, lang: Lang) {
+    if let Some(KeyProtection::Unprotected { .. }) = signing::protection(key) {
+        let name = key.display().to_string();
+        out.push_str(&suite_fill(S::KeyWithoutPassword.tr(lang.code()), &[&name]));
+        out.push('\n');
+    }
+}
+
+fn keygen(args: &[String], password: Option<&Password>) -> Answer {
+    let a = parse(args, &["--out"], &[PASSWORD_SWITCH])?;
     let secret = a.value("--out").ok_or("eh3d-keygen needs --out FILE")?;
-    let pair = signing::new_key(Path::new(secret)).map_err(say(a.lang))?;
+    let path = Path::new(secret);
+    let pair = match password {
+        Some(password) => signing::new_locked_key(path, password)
+            .map_err(|e| signing::key_words(&e, path, a.lang))?,
+        None => signing::new_key(path).map_err(say(a.lang))?,
+    };
     let mut out = String::new();
     line(
         &mut out,
@@ -146,6 +228,7 @@ fn keygen(args: &[String]) -> Answer {
             &pair.public_path.display().to_string(),
         ],
     );
+    warn_unprotected(&mut out, path, a.lang);
     Ok((out, true))
 }
 
@@ -161,8 +244,6 @@ fn dispatch(command: &str, args: &[String]) -> Answer {
         "eh3d-publish" => publish(args),
         "eh3d-import" => import(args),
         "eh3d-meta" => metadata(args),
-        "eh3d-sign" => sign(args),
-        "eh3d-keygen" => keygen(args),
         "select" => selector(args),
         "params" => parameters(args),
         "panels" => panels(args),
@@ -988,6 +1069,22 @@ fn panels(args: &[String]) -> Answer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_password_is_one_line_of_the_input_without_its_end() {
+        let read = |text: &str| read_password(&mut std::io::Cursor::new(text.as_bytes().to_vec()));
+        let typed = Password::new("made up words".to_owned());
+        for text in [
+            "made up words",
+            "made up words\n",
+            "made up words\r\nand a second line\n",
+        ] {
+            assert!(read(text).unwrap().same_as(&typed), "{text:?}");
+        }
+        assert!(read("").is_err());
+        assert!(read("\n").is_err());
+        assert!(read(&"x".repeat(MAX_PASSWORD_BYTES + 1)).is_err());
+    }
     use crate::boardart::tests::{mm, sample};
     use crate::eh3dfile::tests::{other_branch, Scratch, Seeded};
 

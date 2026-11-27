@@ -17,7 +17,7 @@ concurrency:
 
 env:
   # The tag of the sibling repository the window is built against.
-  COMMON_REF: "v0.3.6"
+  COMMON_REF: "v0.3.7"
 
 jobs:
   pictures:

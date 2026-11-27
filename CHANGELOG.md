@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **A suite project saved by another program is not written over:** the window keeps the mark of the `.eh3d` file from the moment it opens or saves it and looks at it before every write and again after a question; when another program wrote it meanwhile, saving, the texts, the import, the board, the openings, handing back and signing write nothing, the window says so in the eight languages and offers to read it again, to save under another name or to close.
+
+- **Signing keys under a password:** the signing window asks for the password of a protected key, makes new keys under a password typed twice and offers to protect a key that has none; a password is wiped after use and is never kept, logged or shown. The commands `eh3d-keygen` and `eh3d-sign` take it as one line with `--password-stdin` and warn about a key without one.
+
+- **The path of the signing key is remembered:** the window offers the key used last; only its path is kept, in the settings folder of the user.
+
+- **A signature of another key is replaced only when agreed:** the window asks before it replaces one, and `eh3d-sign` needs `--replace-signature`.
+
+- **The shared repository at v0.3.7:** the panel of the attachments refuses to write over what another program saved, and a preview keeps at most `viewer.max_preview_mb` of text (16 by default).
+
 ## [0.1.6] - STEP with countersinks, slots and rounded edges, a tilted section view and measuring on the section
 
 - **Countersinks and counterbores in the STEP file:** a countersunk hole is written as a conical face and a counterbored one as two cylinders with the flat ring between them, the holes of the lid fixing included; they were refused before.

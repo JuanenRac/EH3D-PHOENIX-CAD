@@ -142,6 +142,31 @@ fn tell_signatures(win: &mut Window, file: &Path) {
     };
 }
 
+/// Reads again the project that another program saved: what is in it replaces what the window
+/// holds. Refused when no write was refused for that.
+pub fn reopen(win: &mut Window) -> Opened {
+    match win.changed.take() {
+        Some(file) => open(win, &file),
+        None => Opened::Refused,
+    }
+}
+
+/// [`import_original`] into the project of the window, refused when another program saved it since
+/// it was read here.
+pub fn import_into(
+    win: &mut Window,
+    target: &Path,
+    foreign: &Path,
+    how: &SaveSettings,
+) -> Result<Imported, ImportError> {
+    if !win.is_unchanged(target) {
+        return Err(ImportError::Changed(win.status.text(win.lang)));
+    }
+    let done = import_original(target, foreign, &win.settings.mesh, how);
+    win.seen_again();
+    done
+}
+
 /// Opens whatever project file was chosen, dropped or picked from the recent ones: a file of the
 /// suite as [`open`] does, any other as the window does. False when it was not opened.
 pub fn open_any(win: &mut Window, path: &Path) -> bool {
@@ -233,13 +258,15 @@ pub enum ImportError {
     Unreadable(String),
     /// It could not be loaded or kept.
     Suite(CadError),
+    /// Another program saved the project since it was read: nothing was written.
+    Changed(String),
 }
 
 impl ImportError {
     /// The reason as a line of text.
     pub fn text(&self, lang: Lang) -> String {
         match self {
-            ImportError::Unreadable(why) => why.clone(),
+            ImportError::Unreadable(why) | ImportError::Changed(why) => why.clone(),
             ImportError::Suite(e) => error_text(e, lang),
         }
     }
@@ -358,7 +385,7 @@ pub fn read_texts(file: &Path, lang: Lang) -> Result<(String, String), CadError>
 /// nothing was written (a read-only project, no file yet, or a language other than English before
 /// the project has the text in English).
 pub fn write_texts(
-    win: &Window,
+    win: &mut Window,
     lang_of_texts: Lang,
     title: &str,
     description: &str,
@@ -370,6 +397,9 @@ pub fn write_texts(
     let file = current_file(win)
         .filter(|f| f.is_file())
         .ok_or_else(|| Msg::SuiteNeedFile.tr(lang).to_owned())?;
+    if !win.is_unchanged(&file) {
+        return Err(win.status.text(lang));
+    }
     let how = eh3dfile::SaveSettings {
         keep_backup: win.settings.backups > 0,
         ..eh3dfile::SaveSettings::default()
@@ -382,6 +412,7 @@ pub fn write_texts(
         &how,
     )
     .map_err(|e| error_text(&e, lang))?;
+    win.seen_again();
     Ok(fill(
         Msg::SuiteMetaSet.tr(lang),
         &[&file.display().to_string()],
@@ -443,6 +474,9 @@ pub fn take_board(win: &mut Window) -> Result<BoardTaken, String> {
     let lang = win.lang;
     let file = current_file(win).ok_or_else(|| Msg::SuiteNeedFile.tr(lang).to_owned())?;
     let say = |e: CadError| error_text(&e, lang);
+    if !win.is_unchanged(&file) {
+        return Err(win.status.text(lang));
+    }
     let has = eh3dfile::has_project(&file).map_err(say)?;
     // a box that was never saved and never edited has nothing to lose
     if win.dirty && (has || win.can_undo()) {
@@ -517,17 +551,23 @@ pub fn board_work(win: &mut Window, work: BoardWork) -> Result<Worked, String> {
         keep_backup: win.settings.backups > 0,
         ..SaveSettings::default()
     };
+    // the check of the fit only reads
+    if work != BoardWork::CheckFit && !win.is_unchanged(&file) {
+        return Err(win.status.text(lang));
+    }
     let suite = &settings.ui.suite;
-    let (text, passed) = match work {
-        BoardWork::CheckFit => suite_cli::check_fit(&file, &settings, suite.part_clearance, lang)?,
+    let done = match work {
+        BoardWork::CheckFit => suite_cli::check_fit(&file, &settings, suite.part_clearance, lang),
         BoardWork::CutOpenings => {
-            suite_cli::cut_openings(&file, &settings, suite.opening_clearance, lang, Some(&how))?
+            suite_cli::cut_openings(&file, &settings, suite.opening_clearance, lang, Some(&how))
         }
         BoardWork::HandBack => {
             let sheet = (suite.sheet_width, suite.sheet_gap);
-            suite_cli::hand_back(&file, &settings, sheet, lang, &how)?
+            suite_cli::hand_back(&file, &settings, sheet, lang, &how)
         }
     };
+    win.seen_again();
+    let (text, passed) = done?;
     // the recipe changed in the file: the window shows what is there
     if work == BoardWork::CutOpenings && !win.open(&file) {
         return Err(win.status.text(lang));
@@ -840,16 +880,16 @@ mod tests {
         )
         .unwrap();
         // there is no file of the suite yet
-        let why = write_texts(&win, Lang::En, "Box", "").unwrap_err();
+        let why = write_texts(&mut win, Lang::En, "Box", "").unwrap_err();
         assert_eq!(why, Msg::SuiteNeedFile.tr(Lang::En));
         assert!(win.save_to(&file), "{:?}", win.status);
         assert_eq!(read_texts(&file, Lang::En).unwrap(), Default::default());
         // another language needs the English text first, and the refusal writes nothing
         let before = std::fs::read(&file).unwrap();
-        assert!(write_texts(&win, Lang::Es, "Caja", "").is_err());
+        assert!(write_texts(&mut win, Lang::Es, "Caja", "").is_err());
         assert_eq!(std::fs::read(&file).unwrap(), before);
-        write_texts(&win, Lang::En, " Box ", "Two lines:\nlid and body").unwrap();
-        write_texts(&win, Lang::Pt, "Caixa", "").unwrap();
+        write_texts(&mut win, Lang::En, " Box ", "Two lines:\nlid and body").unwrap();
+        write_texts(&mut win, Lang::Pt, "Caixa", "").unwrap();
         assert_eq!(
             read_texts(&file, Lang::En).unwrap(),
             ("Box".to_owned(), "Two lines:\nlid and body".to_owned())
@@ -859,14 +899,14 @@ mod tests {
             ("Caixa".to_owned(), String::new())
         );
         // an empty field takes the text of that language away
-        write_texts(&win, Lang::Pt, "", "").unwrap();
+        write_texts(&mut win, Lang::Pt, "", "").unwrap();
         assert_eq!(read_texts(&file, Lang::Pt).unwrap(), Default::default());
-        write_texts(&win, Lang::En, "Box", "").unwrap();
+        write_texts(&mut win, Lang::En, "Box", "").unwrap();
         assert_eq!(read_texts(&file, Lang::En).unwrap().1, "");
         // the box itself is still there and opens
         assert!(win.open(&file), "{:?}", win.status);
         win.read_only = true;
-        assert!(write_texts(&win, Lang::En, "Other", "").is_err());
+        assert!(write_texts(&mut win, Lang::En, "Other", "").is_err());
         assert_eq!(read_texts(&file, Lang::En).unwrap().0, "Box");
     }
 
@@ -1045,6 +1085,100 @@ mod tests {
         let why = take_board(&mut win).unwrap_err();
         assert!(why.contains("PHOENIX-CAD-065"), "{why}");
         assert_eq!(std::fs::read(&file).unwrap(), before);
+    }
+
+    /// What another program does: its save of a copy takes the place of the file.
+    fn saved_by_another(dir: &Scratch, file: &Path, name: &str) {
+        let copy = dir.path("elsewhere.eh3d");
+        std::fs::copy(file, &copy).unwrap();
+        other_branch(&copy, "pcb", name, name.as_bytes());
+        std::fs::copy(&copy, file).unwrap();
+    }
+
+    fn new_window() -> Window {
+        Window::new(
+            Lang::En,
+            Settings::defaults(),
+            crate::uiconfig::UiSettings::defaults(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_save_over_what_another_program_saved_is_refused_and_a_copy_is_not() {
+        let dir = Scratch::new("changed-save");
+        let file = dir.path("box.eh3d");
+        let mut win = new_window();
+        assert!(save_as(&mut win, &file, false));
+        // its own writes, one after another, are not another program
+        assert!(win.save(), "{:?}", win.status);
+        write_texts(&mut win, Lang::En, "Box", "").unwrap();
+        assert!(win.save(), "{:?}", win.status);
+
+        saved_by_another(&dir, &file, "first");
+        let theirs = std::fs::read(&file).unwrap();
+        assert!(!win.save());
+        assert_eq!(std::fs::read(&file).unwrap(), theirs);
+        assert_eq!(win.changed.as_deref(), Some(file.as_path()));
+        assert!(
+            matches!(&win.status, Status::Problem(Msg::SuiteChanged, _)),
+            "{:?}",
+            win.status
+        );
+        assert!(!save_as(&mut win, &file, true));
+        assert_eq!(std::fs::read(&file).unwrap(), theirs);
+        let why =
+            crate::consent::question(&win, &crate::consent::Write::Save(file.clone())).unwrap_err();
+        assert!(suiteview::is_changed_refusal(&why), "{why}");
+
+        // reading it again makes it writable
+        assert_eq!(reopen(&mut win), Opened::Project);
+        assert!(win.changed.is_none());
+        assert!(win.save(), "{:?}", win.status);
+        assert_eq!(reopen(&mut win), Opened::Refused);
+
+        // and another name is always a way out
+        saved_by_another(&dir, &file, "second");
+        let theirs = std::fs::read(&file).unwrap();
+        let other = dir.path("other.eh3d");
+        let write = crate::consent::Write::SaveAs {
+            target: other.clone(),
+            overwrite: false,
+        };
+        assert!(crate::consent::question(&win, &write).unwrap().is_empty());
+        assert!(save_as(&mut win, &other, false), "{:?}", win.status);
+        assert_eq!(std::fs::read(&file).unwrap(), theirs);
+        assert!(win.save(), "{:?}", win.status);
+    }
+
+    #[test]
+    fn every_other_write_of_the_window_is_refused_too() {
+        let dir = Scratch::new("changed-others");
+        let file = dir.path("box.eh3d");
+        let mut win = new_window();
+        assert!(save_as(&mut win, &file, false));
+        saved_by_another(&dir, &file, "first");
+        let theirs = std::fs::read(&file).unwrap();
+        let refused = |win: &mut Window| {
+            assert_eq!(win.changed.take().as_deref(), Some(file.as_path()));
+            assert_eq!(std::fs::read(&file).unwrap(), theirs);
+        };
+        assert!(write_texts(&mut win, Lang::En, "Box", "").is_err());
+        refused(&mut win);
+        let foreign = dir.path("part.stl");
+        std::fs::write(&foreign, b"solid x\nendsolid x\n").unwrap();
+        let how = SaveSettings::default();
+        assert!(matches!(
+            import_into(&mut win, &file, &foreign, &how),
+            Err(ImportError::Changed(_))
+        ));
+        refused(&mut win);
+        assert!(take_board(&mut win).is_err());
+        refused(&mut win);
+        assert!(board_work(&mut win, BoardWork::CutOpenings).is_err());
+        refused(&mut win);
+        assert!(board_work(&mut win, BoardWork::HandBack).is_err());
+        refused(&mut win);
     }
 }
 

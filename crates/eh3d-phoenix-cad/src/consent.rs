@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! What a person has to agree to before the window writes into a project of the suite (`.eh3d`):
 //! writing a branch removes the signature of that branch and the one of the whole project. The
-//! window asks first and writes nothing unless it is agreed. The commands of the command line do
-//! not ask, and the panel of the attachments has its own question.
+//! window asks first and writes nothing unless it is agreed. A project that another program saved
+//! since the window read it is refused here instead of asked about, and the window looks again
+//! after the answer ([`mark`]). The commands of the command line do not ask, and the panel of the
+//! attachments has its own question.
 //!
 //! What would be removed and the words that tell it are the ones every program of the suite uses;
 //! here it is only decided which branches each entry of the window writes.
@@ -95,14 +97,23 @@ fn written(win: &Window, write: &Write) -> Option<(PathBuf, &'static [&'static s
 }
 
 /// What writing the branches of `file` would take away. A file that is not there loses nothing.
-fn lost(file: &Path, branches: &[&str]) -> Result<Vec<Said>, String> {
+/// `opened` is the mark the window took of the file it writes: another program having saved it
+/// since then is a refusal.
+fn lost(file: &Path, branches: &[&str], opened: Option<&str>) -> Result<Vec<Said>, String> {
     let mut out: Vec<Said> = Vec::new();
+    if let Some(opened) = opened {
+        suiteview::check_unchanged(file, opened)?;
+    }
     if !file.is_file() {
         return Ok(out);
     }
     for branch in branches {
-        // the file as it is now, so that only what is said about its signatures is left to say
-        let seen = suiteview::view(file, branch)?.own_hash;
+        // the mark of the branch of this program is the one of when the file was opened; the
+        // other branches are looked at as they are now
+        let seen = match opened {
+            Some(opened) if *branch == BRANCH => Some(opened.to_owned()),
+            _ => suiteview::view(file, branch)?.own_hash,
+        };
         for said in suiteview::warnings(file, Some(file), seen.as_deref(), branch)? {
             if !out.contains(&said) {
                 out.push(said);
@@ -116,9 +127,28 @@ fn lost(file: &Path, branches: &[&str]) -> Result<Vec<Said>, String> {
 /// error says why the project could not be looked at, and then nothing is to be written.
 pub fn question(win: &Window, write: &Write) -> Result<Vec<Said>, String> {
     match written(win, write) {
-        Some((file, branches)) => lost(&file, branches),
+        Some((file, branches)) => {
+            // a copy under another name only reads the file of the window, so a save of another
+            // program does not stop it: it is the way out that is offered then
+            let copy = match write {
+                Write::Save(target) | Write::SaveAs { target, .. } => {
+                    win.carried_from(target).is_some()
+                }
+                _ => false,
+            };
+            let opened = win.seen_mark(&file).filter(|_| !copy);
+            lost(&file, branches, opened)
+        }
         None => Ok(Vec::new()),
     }
+}
+
+/// The file `write` would write (or copy from) with its mark as it is while the person is asked,
+/// to be looked at again after the answer: another program may have saved it meanwhile.
+pub fn mark(win: &Window, write: &Write) -> Option<(PathBuf, String)> {
+    let (file, _) = written(win, write)?;
+    let mark = suiteview::view(&file, BRANCH).ok()?.own_hash?;
+    Some((file, mark))
 }
 
 #[cfg(test)]

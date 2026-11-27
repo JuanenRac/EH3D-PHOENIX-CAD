@@ -54,7 +54,8 @@ eh3d-save PROJECT FILE.eh3d        eh3d-open FILE.eh3d --out PROJECT     eh3d-in
 eh3d-new FILE.eh3d                 eh3d-board FILE.eh3d                  eh3d-check FILE.eh3d
 eh3d-openings FILE.eh3d [--apply]  eh3d-publish FILE.eh3d                eh3d-import FILE.eh3d OTHER
 eh3d-meta FILE.eh3d --title TEXT --lang CODE
-eh3d-keygen --out SECRET_KEY       eh3d-sign FILE.eh3d --key SECRET_KEY [--branch NAMES] [--project]
+eh3d-keygen --out SECRET_KEY [--password-stdin]
+eh3d-sign FILE.eh3d --key SECRET_KEY [--branch NAMES] [--project] [--password-stdin] [--replace-signature]
 ```
 
 The exit code is 0 when everything agrees, 2 when the verification did not pass (something out of date, a part without room, a post that could not follow, an export refused) and 1 when the command could not run. Run `eh3d-phoenix-cad help` for every option.
@@ -117,9 +118,19 @@ Opening a file of the suite whose branch `cad` or project record is signed adds 
 
 ## Signing from this program
 
-*File, Suite project, Sign the suite project* signs the branch `cad`, the record of the whole project or both, with the Ed25519 code of the suite. The secret key is a file that the person chooses each time: it is read to sign and nothing else, its path is not kept after the window is closed, it is never written into a project and what it holds is never shown. The same window makes a new key (the secret file, which never replaces one and is readable by its owner only, and the public one with `.pub` added), and so does `eh3d-keygen`. Signing is refused while there are changes that are not saved, since the signature is of what is in the file. `eh3d-sign` signs the branch `cad`, or the branches of `--branch`, and with `--project` the whole project (alone when no branch is named); every branch is checked before the first signature, so a refusal (a branch that is not there or is sealed) leaves the file as it was.
+*File, Suite project, Sign the suite project* signs the branch `cad`, the record of the whole project or both, with the Ed25519 code of the suite. The secret key is a file that the person chooses; it is read to sign and nothing else, it is never written into a project and what it holds is never shown. The window remembers the **path** of the key used last, and nothing else, in a file of its own in the settings folder of the user (`eh3d_dock::key_store`), and offers it the next time while the file is there. Signing is refused while there are changes that are not saved, since the signature is of what is in the file. `eh3d-sign` signs the branch `cad`, or the branches of `--branch`, and with `--project` the whole project (alone when no branch is named); every branch is checked before the first signature, so a refusal (a branch that is not there or is sealed) leaves the file as it was.
+
+**Keys under a password.** A new key of the window is always under a password typed twice (at least 8 characters); the secret file never replaces one and is readable by its owner only, and the public one has `.pub` added. The window asks for the password of a protected key, warns about a key without one and offers to protect it (copies made before stay without). A password is taken out of its box and wiped as soon as it is used, and is not written to the status line, a message or a settings file. On the command line `--password-stdin` reads it as the first line of the standard input (never from the arguments, where others could read it); `eh3d-keygen` without that switch still makes a key without a password, and both commands warn about such a key.
+
+**Replacing a signature.** When a branch or the project has a signature of another key (or one that does not verify), the window asks before it replaces it and writes nothing until *Replace the signature* is pressed; `eh3d-sign` refuses with `EH3D-PKG-026` unless `--replace-signature` is given. Signing again with the same key asks nothing.
 
 A signature covers what was there: saving the box removes the signature of the branch `cad` and of the project, and writing any branch removes the one of the project.
+
+## A project saved by another program
+
+The window keeps a mark of the content of the `.eh3d` file from the moment it opens or saves it (not of its date). Before it writes into that file (save, the texts, the import, taking the board, the openings, handing back and signing), and again after a question was answered, it looks at the file: when another program saved it meanwhile, or it is gone, **nothing is written** (`EH3D-PKG-025`), the window says so and offers *Read again* (what is in the file replaces what the window holds, changes that were not saved included), *Save suite project as* (a copy under another name takes every branch as it is now) or *Close*. Its own writes, those of the panel of the attachments included, do not count as another program. Two programs that write at the very same instant are not covered by a lock: the last look is just before the replacement of the file. The commands of the command line read the file when they run and keep no mark.
+
+## Writes and signatures
 
 **The window asks before it removes a signature.** Save and Save as (a copy under a new name takes the signatures along and then writes over them), the import that keeps an original, the title and the description, taking the board, cutting the openings and handing the box back first show what would be removed, with *Write* and *Cancel*; nothing is written unless *Write* is pressed. Escape and a click outside say no, and no button has the keyboard, so Enter does not write. Nothing is asked when nothing is signed or when the write would be refused anyway, and the check of the fit writes nothing. A project that cannot be looked at is not written. The panel of the attachments asks as well. The commands of the suite file do not ask: they write and say that the signature was removed. All of this is decided in `consent`, which is tested without a screen.
 
