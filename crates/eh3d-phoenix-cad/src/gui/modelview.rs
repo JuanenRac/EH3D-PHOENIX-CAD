@@ -266,6 +266,8 @@ impl App {
                             let Some((_, section)) = &view.section else {
                                 return;
                             };
+                            // the figures of the section have a row of their own
+                            ui.end_row();
                             if let Some([width, height]) = section.size_mm {
                                 let words =
                                     [width, height, section.length_mm].map(|v| format!("{v:.2}"));
