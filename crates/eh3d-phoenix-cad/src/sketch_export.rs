@@ -66,7 +66,7 @@ fn outline_entities(layer: Layer, outline: &Outline, out: &mut Vec<(Layer, Entit
                 }
                 out.push((
                     layer,
-                    Entity::Arc(point(center), mm(radius as i64), start, end),
+                    Entity::Arc(point(center), mm(radius.round() as i64), start, end),
                 ));
             }
         }

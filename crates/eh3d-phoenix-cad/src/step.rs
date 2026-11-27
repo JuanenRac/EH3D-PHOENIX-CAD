@@ -9,15 +9,23 @@
 //! the lid its centring lip. Planar faces have their outline as outer bound and the openings of
 //! their holes as further bounds.
 //!
+//! The extrusions and pockets of sketches and the cooling fins are part of the same solid: their
+//! straight sides are flat faces and their arcs and circles exact cylinders. An island of a pocket
+//! that goes through its face is held by nothing, so it is a solid of its own. The placed parts and
+//! the turned and swept bodies are further solids of the file, one flat face for each triangle of
+//! the surface that [`crate::solid`] makes of them (their round faces are the sides of the circle
+//! table, not cylinders).
+//!
 //! The text is a pure function of the model: no date, no host, no program version. Lengths are in
 //! millimetres with the digits they have (at most six decimals, and seven for a radius of an odd
 //! number of nanometres), never rounded. Entities are numbered in the order they are made.
 //!
-//! The extrusions and pockets of sketches, the cooling fins, the placed parts, the turned and
-//! swept bodies and the treatment of the edges around the lid or the floor are not drawn:
-//! [`to_step`] leaves them out, so use [`export_step`], which refuses such a model
-//! (`PHOENIX-CAD-022`) instead of writing a file that would not show it. The script of
-//! [`crate::scad`] says what it draws. A post is part of the void: its wall (and the cone of its
+//! The treatment of the edges around the lid or the floor is not drawn, and [`to_step`] gives the
+//! box alone, without the parts and bodies next to it and without checking the model: use
+//! [`export_step`], which writes every solid, refuses the treated edges (`PHOENIX-CAD-022`) and
+//! refuses what the solid of triangles refuses (`PHOENIX-CAD-048` to `-050`: a hole over a corner
+//! of the walls, two shapes of a face that cross, a post in a wall) instead of writing a broken
+//! file. The script of [`crate::scad`] says what it draws. A post is part of the void: its wall (and the cone of its
 //! foot), its top ring, the wall of its bore and the bottom of the bore close the void, and the
 //! floor of the inner space has a circle where the post stands. The centring lip is part of the
 //! void too: the ceiling of the inner space is split in the part round the lip and the part inside
@@ -29,8 +37,14 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use crate::enclosure::{Enclosure, Face, HoleStyle, Treatment};
+use crate::config::{MeshSettings, Settings};
+use crate::enclosure::{Enclosure, Face, FeatureKind, HoleStyle, Treatment};
+use crate::mesh::Mesh;
+use crate::profile::{Outline, Piece};
 use crate::CadError;
+
+/// How far, in nanometres, the end of an arc of a sketch may be from the circle of its start.
+const ARC_END_NM: f64 = 10.0;
 
 /// A point in twice its nanometre coordinates, so that a radius of half a nanometre is exact.
 type P = (i128, i128, i128);
@@ -240,6 +254,26 @@ impl FaceFrame {
     }
 }
 
+/// The arc from one corner of a path to the next one.
+#[derive(Debug, Clone, Copy)]
+struct Arc {
+    centre: P2,
+    /// The radius in twice the nanometres.
+    radius2: i128,
+    /// Whether it goes counter-clockwise about its centre, seen from outside the face.
+    ccw: bool,
+}
+
+impl Arc {
+    fn ccw(centre: P2, radius2: i128) -> Option<Arc> {
+        Some(Arc {
+            centre,
+            radius2,
+            ccw: true,
+        })
+    }
+}
+
 /// A closed outline on the plane of a face.
 #[derive(Debug, Clone)]
 enum Opening {
@@ -247,9 +281,9 @@ enum Opening {
         centre: P2,
         radius2: i128,
     },
-    /// The corners counter-clockwise seen from outside, each with the centre and the radius of the
-    /// arc to the next one, or none for a straight side.
-    Path(Vec<(P2, Option<(P2, i128)>)>),
+    /// The corners counter-clockwise seen from outside, each with the arc to the next one, or
+    /// none for a straight side.
+    Path(Vec<(P2, Option<Arc>)>),
 }
 
 impl Opening {
@@ -276,8 +310,8 @@ impl Opening {
             Opening::Path(corners) => {
                 for (point, arc) in corners {
                     take(*point, 0);
-                    if let Some((centre, radius2)) = arc {
-                        take(*centre, *radius2);
+                    if let Some(arc) = arc {
+                        take(arc.centre, arc.radius2);
                     }
                 }
             }
@@ -328,11 +362,12 @@ fn ring(b: &mut Builder, frame: &FaceFrame, opening: &Opening, depth: i128) -> R
                     let (vb, to) = vertices[(i + 1) % vertices.len()];
                     match corners[i].1 {
                         None => b.line_edge(va, vb, from, to),
-                        Some((centre, radius2)) => {
-                            let placement = b.axis(frame.at(centre, depth), frame.n, frame.u);
+                        Some(arc) => {
+                            let placement = b.axis(frame.at(arc.centre, depth), frame.n, frame.u);
                             let circle =
-                                b.add(format!("CIRCLE('',#{placement},{})", real2(radius2)));
-                            b.add(format!("EDGE_CURVE('',#{va},#{vb},#{circle},.T.)"))
+                                b.add(format!("CIRCLE('',#{placement},{})", real2(arc.radius2)));
+                            let way = if arc.ccw { ".T." } else { ".F." };
+                            b.add(format!("EDGE_CURVE('',#{va},#{vb},#{circle},{way})"))
                         }
                     }
                 })
@@ -386,6 +421,7 @@ fn walls(
     from: &Ring,
     to: &Ring,
 ) -> Vec<usize> {
+    let inwards = to.depth > from.depth;
     match opening {
         Opening::Circle { centre, radius2 } => {
             let placement = b.axis(frame.at(*centre, from.depth), frame.n, across_of(frame.n));
@@ -395,7 +431,7 @@ fn walls(
             ));
             // the far circle goes the other way: it is on a face of the cavity turned round
             let loops = [vec![(from.edges[0], true)], vec![(to.edges[0], false)]];
-            vec![face_of(b, &loops, cylinder, false)]
+            vec![face_of(b, &loops, cylinder, !inwards)]
         }
         Opening::Path(corners) => {
             let count = corners.len();
@@ -429,13 +465,16 @@ fn walls(
                             let plane = b.add(format!("PLANE('',#{placement})"));
                             face_of(b, &edges, plane, true)
                         }
-                        Some((centre, radius2)) => {
-                            let placement = b.axis(frame.at(centre, from.depth), frame.n, frame.u);
+                        Some(arc) => {
+                            let placement =
+                                b.axis(frame.at(arc.centre, from.depth), frame.n, frame.u);
                             let cylinder = b.add(format!(
                                 "CYLINDRICAL_SURFACE('',#{placement},{})",
-                                real2(radius2)
+                                real2(arc.radius2)
                             ));
-                            face_of(b, &edges, cylinder, false)
+                            // the normal of a cylinder looks away from its axis
+                            let sense = if inwards { !arc.ccw } else { arc.ccw };
+                            face_of(b, &edges, cylinder, sense)
                         }
                     }
                 })
@@ -530,17 +569,17 @@ fn hole_shape(enclosure: &Enclosure, h: &crate::enclosure::Hole) -> HoleShape {
             } else if vertical {
                 let (low, high) = ((cu, cv - apart), (cu, cv + apart));
                 through(Opening::Path(vec![
-                    ((cu - d, cv - apart), Some((low, d))),
+                    ((cu - d, cv - apart), Arc::ccw(low, d)),
                     ((cu + d, cv - apart), None),
-                    ((cu + d, cv + apart), Some((high, d))),
+                    ((cu + d, cv + apart), Arc::ccw(high, d)),
                     ((cu - d, cv + apart), None),
                 ]))
             } else {
                 let (left, right) = ((cu - apart, cv), (cu + apart, cv));
                 through(Opening::Path(vec![
-                    ((cu + apart, cv - d), Some((right, d))),
+                    ((cu + apart, cv - d), Arc::ccw(right, d)),
                     ((cu + apart, cv + d), None),
-                    ((cu - apart, cv + d), Some((left, d))),
+                    ((cu - apart, cv + d), Arc::ccw(left, d)),
                     ((cu - apart, cv - d), None),
                 ]))
             }
@@ -609,6 +648,313 @@ impl LipPlace {
             LipSide::Over
         }
     }
+}
+
+/// Whether every arc of an outline ends on the circle of its start and the outline has at least
+/// two sides, as the faces of the file need.
+fn check_outline(sketch: &str, outline: &Outline) -> Result<(), CadError> {
+    if outline.circle_of().is_some() {
+        return Ok(());
+    }
+    let pieces = outline.pieces();
+    if pieces.len() < 2 {
+        return Err(CadError::NotExported(format!(
+            "an outline of the sketch {sketch} with fewer than two sides"
+        )));
+    }
+    for (i, piece) in pieces.iter().enumerate() {
+        if let Piece::Arc { center, from, .. } = *piece {
+            let end = pieces[(i + 1) % pieces.len()].start();
+            let far = |p: (i64, i64)| ((p.0 - center.0) as f64).hypot((p.1 - center.1) as f64);
+            if (far(end) - far(from)).abs() > ARC_END_NM {
+                return Err(CadError::NotExported(format!(
+                    "an arc of the sketch {sketch} that does not end on its circle"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// An outline of a sketch on its face, walked counter-clockwise seen from outside. `u0` and `v0`
+/// are the origin of the plane of the sketch on the face, in nanometres.
+fn outline_opening(outline: &Outline, u0: i64, v0: i64) -> Opening {
+    let place = |p: (i64, i64)| -> P2 {
+        (
+            2 * (i128::from(u0) + i128::from(p.0)),
+            2 * (i128::from(v0) + i128::from(p.1)),
+        )
+    };
+    if let Some((centre, radius)) = outline.circle_of() {
+        return Opening::Circle {
+            centre: place(centre),
+            radius2: 2 * i128::from(radius),
+        };
+    }
+    let pieces = outline.pieces();
+    let mut corners: Vec<(P2, Option<Arc>)> = Vec::with_capacity(pieces.len());
+    for piece in pieces {
+        let from = piece.start();
+        let arc = match *piece {
+            Piece::Line { .. } => None,
+            Piece::Arc { center, ccw, .. } => {
+                let radius = ((from.0 - center.0) as f64).hypot((from.1 - center.1) as f64);
+                Some(Arc {
+                    centre: place(center),
+                    radius2: (2.0 * radius).round() as i128,
+                    ccw,
+                })
+            }
+        };
+        corners.push((place(from), arc));
+    }
+    // the way the outline goes, from the corners of the straight lines that stand for it
+    let polygon = outline.polygon();
+    let twice_area: i128 = (0..polygon.len())
+        .map(|i| {
+            let (a, b) = (polygon[i], polygon[(i + 1) % polygon.len()]);
+            i128::from(a.0) * i128::from(b.1) - i128::from(b.0) * i128::from(a.1)
+        })
+        .sum();
+    if twice_area < 0 {
+        let n = corners.len();
+        corners = (0..n)
+            .map(|j| {
+                let arc = corners[(2 * n - j - 1) % n]
+                    .1
+                    .map(|a| Arc { ccw: !a.ccw, ..a });
+                (corners[(n - j) % n].0, arc)
+            })
+            .collect();
+    }
+    Opening::Path(corners)
+}
+
+/// A flat face at a depth of a face of the box, looking out of that face.
+fn flat_at(b: &mut Builder, frame: &FaceFrame, depth: i128, loops: &[Vec<(usize, bool)>]) -> usize {
+    let placement = b.axis(frame.at((0, 0), depth), frame.n, frame.u);
+    let plane = b.add(format!("PLANE('',#{placement})"));
+    face_of(b, loops, plane, true)
+}
+
+/// Material raised from a face: the walls, the cap and, inside each hole of the outline, the walls
+/// of the hole and the piece of the face at its bottom. Returns the further bound of the face.
+fn raised(
+    b: &mut Builder,
+    frame: &FaceFrame,
+    outer: &Opening,
+    holes: &[Opening],
+    height: i128,
+    faces: &mut Vec<usize>,
+) -> Vec<(usize, bool)> {
+    let base = ring(b, frame, outer, 0);
+    let top = ring(b, frame, outer, -height);
+    faces.extend(walls(b, frame, outer, &base, &top));
+    let mut cap = vec![top.along()];
+    for hole in holes {
+        let low = ring(b, frame, hole, 0);
+        let high = ring(b, frame, hole, -height);
+        faces.extend(walls(b, frame, hole, &high, &low));
+        cap.push(high.against());
+        faces.push(flat_at(b, frame, 0, &[low.along()]));
+    }
+    faces.push(flat_at(b, frame, -height, &cap));
+    base.against()
+}
+
+/// A pocket that stops inside the material: its walls, its floor and its islands, which stand on
+/// the floor up to the face. Returns the further bound of the face.
+fn blind_pocket(
+    b: &mut Builder,
+    frame: &FaceFrame,
+    outer: &Opening,
+    islands: &[Opening],
+    depth: i128,
+    faces: &mut Vec<usize>,
+) -> Vec<(usize, bool)> {
+    let mouth = ring(b, frame, outer, 0);
+    let floor = ring(b, frame, outer, depth);
+    faces.extend(walls(b, frame, outer, &mouth, &floor));
+    let mut flat = vec![floor.along()];
+    for island in islands {
+        let top = ring(b, frame, island, 0);
+        let low = ring(b, frame, island, depth);
+        faces.extend(walls(b, frame, island, &low, &top));
+        flat.push(low.against());
+        faces.push(flat_at(b, frame, 0, &[top.along()]));
+    }
+    faces.push(flat_at(b, frame, depth, &flat));
+    mouth.against()
+}
+
+/// The island of a pocket that goes through its face, as a solid of its own.
+fn loose_island(b: &mut Builder, frame: &FaceFrame, island: &Opening, thickness: i128) -> usize {
+    let top = ring(b, frame, island, 0);
+    let low = ring(b, frame, island, thickness);
+    let mut faces = walls(b, frame, island, &low, &top);
+    faces.push(flat_at(b, frame, 0, &[top.along()]));
+    let down = (-frame.n.0, -frame.n.1, -frame.n.2);
+    let placement = b.axis(frame.at((0, 0), thickness), down, frame.u);
+    let plane = b.add(format!("PLANE('',#{placement})"));
+    faces.push(face_of(b, &[low.against()], plane, true));
+    let shell = b.add(format!("CLOSED_SHELL('',({}))", id_list(&faces)));
+    b.add(format!("MANIFOLD_SOLID_BREP('island',#{shell})"))
+}
+
+fn id_list(ids: &[usize]) -> String {
+    ids.iter()
+        .map(|i| format!("#{i}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// The smallest rectangle of a face that holds an outline of a sketch (low u, low v, high u,
+/// high v, in twice the nanometres), from the lines that stand for it.
+fn outline_bounds(outline: &Outline, u0: i64, v0: i64) -> [i128; 4] {
+    let mut out = [i128::MAX, i128::MAX, i128::MIN, i128::MIN];
+    for p in outline.polygon() {
+        let u = 2 * (i128::from(u0) + i128::from(p.0));
+        let v = 2 * (i128::from(v0) + i128::from(p.1));
+        out = [out[0].min(u), out[1].min(v), out[2].max(u), out[3].max(v)];
+    }
+    out
+}
+
+/// The thickness of the material of a face, in twice the nanometres.
+fn thickness2(enclosure: &Enclosure, face: Face) -> i128 {
+    let p = enclosure.params();
+    let t = match face {
+        Face::Front | Face::Back | Face::Left | Face::Right => p.wall,
+        Face::Top => p.lid,
+        Face::Bottom => p.floor,
+    };
+    2 * i128::from(t.get())
+}
+
+/// A closed surface of triangles as solids with a flat face for each triangle: one solid for each
+/// piece of the surface that holds material, with the closed spaces inside it as voids.
+fn faceted_solids(b: &mut Builder, name: &str, mesh: &Mesh) -> Result<Vec<usize>, CadError> {
+    let refuse = |why: &str| CadError::NotExported(format!("{name}: {why}"));
+    let places: Vec<P> = mesh
+        .vertices
+        .iter()
+        .map(|v| {
+            let twice = |x: f64| (2.0 * x).round() as i128;
+            (twice(v[0]), twice(v[1]), twice(v[2]))
+        })
+        .collect();
+    // the pieces of the surface: triangles that share a side belong together
+    let mut parent: Vec<usize> = (0..mesh.triangles.len()).collect();
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    let mut owner: BTreeMap<(u32, u32), usize> = BTreeMap::new();
+    for (i, t) in mesh.triangles.iter().enumerate() {
+        for k in 0..3 {
+            let (a, c) = (t[k], t[(k + 1) % 3]);
+            if let Some(&other) = owner.get(&(a.min(c), a.max(c))) {
+                let (x, y) = (root(&mut parent, i), root(&mut parent, other));
+                parent[x.max(y)] = x.min(y);
+            } else {
+                owner.insert((a.min(c), a.max(c)), i);
+            }
+        }
+    }
+    let mut pieces: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for i in 0..mesh.triangles.len() {
+        let r = root(&mut parent, i);
+        pieces.entry(r).or_default().push(i);
+    }
+    // whether a piece holds material (its normals look out) or is a space inside another
+    let holds = |list: &[usize]| -> bool {
+        let base = mesh.vertices[mesh.triangles[list[0]][0] as usize];
+        let sum: f64 = list
+            .iter()
+            .map(|&i| {
+                let [p, q, r] = mesh.triangles[i].map(|v| {
+                    let at = mesh.vertices[v as usize];
+                    [at[0] - base[0], at[1] - base[1], at[2] - base[2]]
+                });
+                p[0] * (q[1] * r[2] - q[2] * r[1]) - p[1] * (q[0] * r[2] - q[2] * r[0])
+                    + p[2] * (q[0] * r[1] - q[1] * r[0])
+            })
+            .sum();
+        sum > 0.0
+    };
+    let (full, empty): (Vec<&Vec<usize>>, Vec<&Vec<usize>>) =
+        pieces.values().partition(|list| holds(list));
+    if full.is_empty() || (!empty.is_empty() && full.len() > 1) {
+        return Err(refuse("closed spaces inside more than one piece"));
+    }
+    let mut vertices: BTreeMap<u32, usize> = BTreeMap::new();
+    let mut edges: BTreeMap<(u32, u32), usize> = BTreeMap::new();
+    let mut shell = |b: &mut Builder, list: &[usize], turned: bool| -> Result<usize, CadError> {
+        let mut faces = Vec::with_capacity(list.len());
+        for &i in list {
+            let mut t = mesh.triangles[i];
+            if turned {
+                t.swap(1, 2);
+            }
+            let at = t.map(|v| places[v as usize]);
+            for &v in &t {
+                vertices
+                    .entry(v)
+                    .or_insert_with(|| b.vertex(places[v as usize]));
+            }
+            let (d, e) = (difference(at[1], at[0]), difference(at[2], at[0]));
+            let cross = (
+                d.1 * e.2 - d.2 * e.1,
+                d.2 * e.0 - d.0 * e.2,
+                d.0 * e.1 - d.1 * e.0,
+            );
+            if cross == (0.0, 0.0, 0.0) {
+                return Err(refuse("a triangle with no area"));
+            }
+            let mut walk = Vec::with_capacity(3);
+            for k in 0..3 {
+                let (a, c) = (t[k], t[(k + 1) % 3]);
+                let key = (a.min(c), a.max(c));
+                let edge = *edges.entry(key).or_insert_with(|| {
+                    b.line_edge(
+                        vertices[&key.0],
+                        vertices[&key.1],
+                        places[key.0 as usize],
+                        places[key.1 as usize],
+                    )
+                });
+                walk.push((edge, a < c));
+            }
+            let placement = b.axis_f(at[0], unit_f(cross), unit_f(d));
+            let plane = b.add(format!("PLANE('',#{placement})"));
+            faces.push(face_of(b, &[walk], plane, true));
+        }
+        Ok(b.add(format!("CLOSED_SHELL('',({}))", id_list(&faces))))
+    };
+    let name = step_name(name);
+    let mut outer = Vec::with_capacity(full.len());
+    for list in full {
+        outer.push(shell(b, list, false)?);
+    }
+    if empty.is_empty() {
+        return Ok(outer
+            .into_iter()
+            .map(|s| b.add(format!("MANIFOLD_SOLID_BREP('{name}',#{s})")))
+            .collect());
+    }
+    let mut voids = Vec::with_capacity(empty.len());
+    for list in empty {
+        let inner = shell(b, list, true)?;
+        voids.push(b.add(format!("ORIENTED_CLOSED_SHELL('',*,#{inner},.F.)")));
+    }
+    Ok(vec![b.add(format!(
+        "BREP_WITH_VOIDS('{name}',#{},({}))",
+        outer[0],
+        id_list(&voids)
+    ))])
 }
 
 /// The circles of a post (its foot, the top of its conical foot when it has one, its top, the top
@@ -819,8 +1165,15 @@ fn treated_faces(b: &mut Builder, outer: P, treatment: Treatment, holes: &Circle
     faces
 }
 
-/// The enclosure as STEP text.
+/// The box as STEP text, with its holes, posts, lip, extrusions, pockets and fins and without
+/// checking them or drawing what is next to it: [`export_step`] does both.
 pub fn to_step(enclosure: &Enclosure) -> String {
+    let (b, breps) = box_solids(enclosure);
+    finish_file(b, &breps, "enclosure")
+}
+
+/// The entities of the box and the solids made of them (the box first).
+fn box_solids(enclosure: &Enclosure) -> (Builder, Vec<usize>) {
     let p = enclosure.params();
     let (x, y, z) = p.outer();
     let n = |v: i64| 2 * i128::from(v);
@@ -866,6 +1219,62 @@ pub fn to_step(enclosure: &Enclosure) -> String {
             }
         }
         hole_rings.push((shape, frame, rings));
+    }
+    // the extrusions, the pockets and the fins: their faces and the bounds they open in the box
+    let mut added: Vec<usize> = Vec::new();
+    let mut loose: Vec<usize> = Vec::new();
+    let mut through = false;
+    for feature in enclosure.features().values() {
+        let frame = FaceFrame::of(feature.face, outer_max);
+        let thickness = thickness2(enclosure, feature.face);
+        let (u0, v0) = (feature.u0.get(), feature.v0.get());
+        let depth = feature.depth.map_or(thickness, |d| 2 * i128::from(d.get()));
+        for region in &feature.profile.regions {
+            let outer = outline_opening(&region.outer, u0, v0);
+            let holes: Vec<Opening> = region
+                .holes
+                .iter()
+                .map(|h| outline_opening(h, u0, v0))
+                .collect();
+            let bound = match feature.kind {
+                FeatureKind::Extrude => raised(&mut b, &frame, &outer, &holes, depth, &mut added),
+                FeatureKind::Pocket if depth < thickness => {
+                    blind_pocket(&mut b, &frame, &outer, &holes, depth, &mut added)
+                }
+                FeatureKind::Pocket => {
+                    through = true;
+                    let mouth = ring(&mut b, &frame, &outer, 0);
+                    let far = ring(&mut b, &frame, &outer, thickness);
+                    added.extend(walls(&mut b, &frame, &outer, &mouth, &far));
+                    let under_lip = feature.face == Face::Top
+                        && lip.as_ref().is_some_and(|lip| {
+                            lip.side(outline_bounds(&region.outer, u0, v0)) == LipSide::Inside
+                        });
+                    if under_lip {
+                        within_lip.push(far.against());
+                    } else {
+                        inner_circles
+                            .entry(feature.face)
+                            .or_default()
+                            .push(far.against());
+                    }
+                    for island in &holes {
+                        loose.push(loose_island(&mut b, &frame, island, thickness));
+                    }
+                    mouth.against()
+                }
+            };
+            outer_circles.entry(feature.face).or_default().push(bound);
+        }
+    }
+    for set in enclosure.fins().values() {
+        let frame = FaceFrame::of(set.face, outer_max);
+        let height = 2 * i128::from(set.height.get());
+        for r in set.rects() {
+            let fin = Opening::rectangle((r.u0, r.v0), (r.u1, r.v1));
+            let bound = raised(&mut b, &frame, &fin, &[], height, &mut added);
+            outer_circles.entry(set.face).or_default().push(bound);
+        }
     }
     // the circles of the posts: the foot is a bound of the floor of the inner space
     let mut rings: Vec<PostRing> = Vec::new();
@@ -1050,15 +1459,10 @@ pub fn to_step(enclosure: &Enclosure) -> String {
         cavity.push(face_of(&mut b, &loops, ceiling, true));
     }
 
-    let list = |ids: &[usize]| -> String {
-        ids.iter()
-            .map(|i| format!("#{i}"))
-            .collect::<Vec<_>>()
-            .join(",")
-    };
-    let brep = if all_holes.is_empty() {
-        let shell = b.add(format!("CLOSED_SHELL('',({}))", list(&faces)));
-        let void_shell = b.add(format!("CLOSED_SHELL('',({}))", list(&cavity)));
+    faces.append(&mut added);
+    let brep = if all_holes.is_empty() && !through {
+        let shell = b.add(format!("CLOSED_SHELL('',({}))", id_list(&faces)));
+        let void_shell = b.add(format!("CLOSED_SHELL('',({}))", id_list(&cavity)));
         let oriented_void = b.add(format!("ORIENTED_CLOSED_SHELL('',*,#{void_shell},.F.)"));
         b.add(format!(
             "BREP_WITH_VOIDS('enclosure',#{shell},(#{oriented_void}))"
@@ -1069,11 +1473,13 @@ pub fn to_step(enclosure: &Enclosure) -> String {
             b.turn_face(face);
         }
         faces.append(&mut cavity);
-        let shell = b.add(format!("CLOSED_SHELL('',({}))", list(&faces)));
+        let shell = b.add(format!("CLOSED_SHELL('',({}))", id_list(&faces)));
         b.add(format!("MANIFOLD_SOLID_BREP('enclosure',#{shell})"))
     };
 
-    finish_file(b, &[brep], "enclosure")
+    let mut breps = vec![brep];
+    breps.append(&mut loose);
+    (b, breps)
 }
 
 /// The product structure, the units and the header around a solid: the text of the file.
@@ -1133,28 +1539,20 @@ fn finish_file(mut b: Builder, breps: &[usize], name: &str) -> String {
     out
 }
 
-/// The enclosure as STEP text, or the error `PHOENIX-CAD-022` when the model has a shape that the
-/// file does not draw: a rounded or chamfered edge around the lid or the floor, an extrusion or a
-/// pocket of a sketch, a set of cooling fins, a placed part, a turned body, a swept body, a
-/// centring lip with no clearance to the walls or a hole of the lid that opens over the lip.
+/// [`export_step_with`] with the shipped settings of the surfaces.
 pub fn export_step(enclosure: &Enclosure) -> Result<String, CadError> {
-    if !enclosure.features().is_empty() {
-        return Err(CadError::NotExported(
-            "the extrusions and pockets of sketches".into(),
-        ));
-    }
-    if !enclosure.fins().is_empty() {
-        return Err(CadError::NotExported("cooling fins".into()));
-    }
-    if !enclosure.parts().is_empty() {
-        return Err(CadError::NotExported("placed parts".into()));
-    }
-    if !enclosure.turned().is_empty() {
-        return Err(CadError::NotExported("turned bodies".into()));
-    }
-    if !enclosure.swept().is_empty() {
-        return Err(CadError::NotExported("swept bodies".into()));
-    }
+    export_step_with(enclosure, &Settings::defaults().mesh)
+}
+
+/// The whole model as STEP text: the box with everything on it and then every placed part, turned
+/// body and swept body as further solids. Refused with `PHOENIX-CAD-022` when the model has a
+/// shape that the file does not draw (a rounded or chamfered edge around the lid or the floor, a
+/// centring lip with no clearance to the walls, a hole or a through pocket of the lid that opens
+/// over the lip, an arc of a sketch that does not end on its circle) and with the codes of the
+/// solid of triangles (`PHOENIX-CAD-048` to `-050`) when the model cannot be made into closed
+/// solids with its exact volume, so a broken file is never written. The settings give the sides
+/// of the circles of the parts and bodies and the limit of their triangles.
+pub fn export_step_with(enclosure: &Enclosure, mesh: &MeshSettings) -> Result<String, CadError> {
     let edging = enclosure.edging();
     if !edging.top.is_sharp() || !edging.bottom.is_sharp() {
         return Err(CadError::NotExported(
@@ -1184,8 +1582,41 @@ pub fn export_step(enclosure: &Enclosure) -> Result<String, CadError> {
                 )));
             }
         }
+        for feature in enclosure.features().values() {
+            let through = match feature.depth {
+                Some(depth) => depth >= enclosure.params().lid,
+                None => true,
+            };
+            let opens = through && feature.kind == FeatureKind::Pocket && feature.face == Face::Top;
+            let (u0, v0) = (feature.u0.get(), feature.v0.get());
+            if opens
+                && feature
+                    .profile
+                    .regions
+                    .iter()
+                    .any(|r| lip.side(outline_bounds(&r.outer, u0, v0)) == LipSide::Over)
+            {
+                return Err(CadError::NotExported(format!(
+                    "the pocket of the sketch {} over the centring lip",
+                    feature.sketch
+                )));
+            }
+        }
     }
-    Ok(to_step(enclosure))
+    for feature in enclosure.features().values() {
+        for region in &feature.profile.regions {
+            for outline in std::iter::once(&region.outer).chain(region.holes.iter()) {
+                check_outline(&feature.sketch, outline)?;
+            }
+        }
+    }
+    // the same checks as the solid of triangles, which also gives the surfaces of the others
+    let bodies = crate::solid::bodies(enclosure, mesh)?;
+    let (mut b, mut breps) = box_solids(enclosure);
+    for body in bodies.iter().skip(1) {
+        breps.extend(faceted_solids(&mut b, &body.name, &body.mesh)?);
+    }
+    Ok(finish_file(b, &breps, "enclosure"))
 }
 
 /// A prism as STEP text: the profile of a sketch raised from the plane `z0` by `height` (both in
@@ -1939,15 +2370,290 @@ mod tests {
         .unwrap();
     }
 
+    // ---- extrusions, pockets, fins, parts and bodies ----
+
+    use crate::sketch::{Sketch, SketchPlane};
+
+    fn read_back(text: &str) -> Vec<(String, crate::mesh::Mesh)> {
+        let limits = crate::step_import::StepLimits::from_settings(&Settings::defaults().mesh);
+        let bodies = crate::step_import::read_step(text, &limits).unwrap();
+        bodies
+            .into_iter()
+            .map(|b| {
+                b.1.check_closed().unwrap();
+                (b.0, b.1)
+            })
+            .collect()
+    }
+
+    fn numbers(body: &str) -> Vec<f64> {
+        body.rsplit_once("',(")
+            .and_then(|(_, rest)| rest.split_once(')'))
+            .map_or_else(Vec::new, |(list, _)| {
+                list.split(',').filter_map(|n| n.parse().ok()).collect()
+            })
+    }
+
+    /// Every flat face with straight sides: its outer bound goes counter-clockwise about the
+    /// normal of the face and its other bounds clockwise. Returns the faces looked at.
+    fn assert_flat_faces_turn_their_way(text: &str) -> usize {
+        let map = by_number(text);
+        let mut looked = 0;
+        for face in map.values().filter(|b| b.starts_with("ADVANCED_FACE")) {
+            let named = references(face);
+            let surface = map[named.last().unwrap()];
+            if !surface.starts_with("PLANE") {
+                continue;
+            }
+            let placement = map[&references(surface)[0]];
+            let axis = numbers(map[&references(placement)[1]]);
+            let sense = if face.ends_with(".T.)") { 1.0 } else { -1.0 };
+            for bound in &named[..named.len() - 1] {
+                let bound = map[bound];
+                let mut corners: Vec<Vec<f64>> = Vec::new();
+                let mut straight = true;
+                for oriented in references(map[&references(bound)[0]]) {
+                    let oriented = map[&oriented];
+                    let edge = map[&references(oriented)[0]];
+                    let ends = references(edge);
+                    straight &= map[&ends[2]].starts_with("LINE");
+                    let start = usize::from(oriented.ends_with(".F.)"));
+                    corners.push(numbers(map[&references(map[&ends[start]])[0]]));
+                }
+                if !straight {
+                    continue;
+                }
+                if bound.ends_with(".F.)") {
+                    corners.reverse();
+                }
+                let mut normal = [0.0f64; 3];
+                for i in 0..corners.len() {
+                    let (a, b) = (&corners[i], &corners[(i + 1) % corners.len()]);
+                    normal[0] += a[1] * b[2] - a[2] * b[1];
+                    normal[1] += a[2] * b[0] - a[0] * b[2];
+                    normal[2] += a[0] * b[1] - a[1] * b[0];
+                }
+                let way = sense * (0..3).map(|k| normal[k] * axis[k]).sum::<f64>();
+                let outer = bound.starts_with("FACE_OUTER_BOUND");
+                assert_eq!(way > 0.0, outer, "{face}: {bound}");
+                looked += 1;
+            }
+        }
+        looked
+    }
+
+    /// The senses of the faces on cylinders, those that look out first and those that look in
+    /// second.
+    fn cylinder_senses(text: &str) -> (usize, usize) {
+        let map = by_number(text);
+        let mut out = (0, 0);
+        for face in map.values().filter(|b| b.starts_with("ADVANCED_FACE")) {
+            let surface = map[references(face).last().unwrap()];
+            if surface.starts_with("CYLINDRICAL_SURFACE") {
+                if face.ends_with(".T.)") {
+                    out.0 += 1;
+                } else {
+                    out.1 += 1;
+                }
+            }
+        }
+        out
+    }
+
+    fn with_sketch(sketch: Sketch, kind: FeatureKind, depth: Option<i64>) -> Enclosure {
+        let name = sketch.name().to_string();
+        let mut e = enclosure(&[]);
+        e.set_sketches(vec![sketch], None);
+        let id = ObjectId::from_parts(1_700_000_000_000, 40, 41).unwrap();
+        e.apply(match kind {
+            FeatureKind::Extrude => Operation::Extrude {
+                id,
+                sketch: name,
+                height: mm(depth.unwrap()),
+            },
+            FeatureKind::Pocket => Operation::Pocket {
+                id,
+                sketch: name,
+                depth: depth.map(mm),
+            },
+        })
+        .unwrap();
+        e
+    }
+
+    fn on_lid(name: &str) -> Sketch {
+        let plane = SketchPlane {
+            u0: mm(20),
+            v0: mm(20),
+            ..SketchPlane::on_face(Face::Top)
+        };
+        Sketch::new(name, plane).unwrap()
+    }
+
+    /// A rectangle of 40 by 25 mm with a rectangle of 10 by 5 mm in it.
+    fn frame_sketch() -> Sketch {
+        let mut k = on_lid("frame");
+        k.add_rectangle((mm(0), mm(0)), (mm(40), mm(25))).unwrap();
+        k.add_rectangle((mm(10), mm(10)), (mm(20), mm(15))).unwrap();
+        k
+    }
+
+    /// A shape of 20 by 10 mm whose right side is a half circle that bulges out and whose left
+    /// side is one that goes in, so its area is 200 mm2.
+    fn arcs_sketch() -> Sketch {
+        let mut k = on_lid("arcs");
+        let a = k.add_point(mm(0), mm(0)).unwrap();
+        let b = k.add_point(mm(20), mm(0)).unwrap();
+        let c = k.add_point(mm(20), mm(10)).unwrap();
+        let d = k.add_point(mm(0), mm(10)).unwrap();
+        let right = k.add_point(mm(20), mm(5)).unwrap();
+        let left = k.add_point(mm(0), mm(5)).unwrap();
+        k.add_line(a, b).unwrap();
+        k.add_arc(right, b, c).unwrap();
+        k.add_line(c, d).unwrap();
+        k.add_arc(left, a, d).unwrap();
+        k
+    }
+
+    fn assert_flat_model(e: &Enclosure, solids: usize) -> String {
+        let text = export_step(e).unwrap();
+        assert_eq!(text, to_step(e));
+        assert_references_in_order(&text);
+        assert_every_edge_once_each_way(&text);
+        assert!(assert_flat_faces_turn_their_way(&text) > 12);
+        let bodies = read_back(&text);
+        assert_eq!(bodies.len(), solids);
+        let volume: f64 = bodies.iter().map(|b| b.1.volume_nm3()).sum();
+        let expected = crate::solid::enclosure_volume_nm3(e).unwrap();
+        assert!(
+            (volume - expected).abs() < 1.0e-9 * expected,
+            "{volume} {expected}"
+        );
+        text
+    }
+
     #[test]
-    fn a_placed_part_is_not_drawn_by_the_step_file_and_the_answer_is_the_code_of_the_shape() {
+    fn an_extrusion_with_a_hole_is_part_of_the_box_with_its_exact_volume() {
+        let e = with_sketch(frame_sketch(), FeatureKind::Extrude, Some(5));
+        let text = assert_flat_model(&e, 1);
+        // 12 faces of the box, 4 walls outside, 4 inside, the cap and the piece in the hole
+        assert_eq!(count(&text, "ADVANCED_FACE"), 12 + 4 + 4 + 1 + 1);
+        assert_eq!(count(&text, "BREP_WITH_VOIDS"), 1);
+    }
+
+    #[test]
+    fn a_pocket_with_an_island_stops_at_its_floor_and_a_through_one_leaves_a_loose_solid() {
+        let blind = with_sketch(frame_sketch(), FeatureKind::Pocket, Some(1));
+        let text = assert_flat_model(&blind, 1);
+        assert_eq!(count(&text, "ADVANCED_FACE"), 12 + 4 + 4 + 1 + 1);
+        assert_eq!(count(&text, "BREP_WITH_VOIDS"), 1);
+
+        let through = with_sketch(frame_sketch(), FeatureKind::Pocket, None);
+        let text = assert_flat_model(&through, 2);
+        // the walls of the opening join the inside and the outside; the island stands alone
+        assert_eq!(count(&text, "BREP_WITH_VOIDS"), 0);
+        assert_eq!(count(&text, "MANIFOLD_SOLID_BREP"), 2);
+        assert!(text.contains("MANIFOLD_SOLID_BREP('island',"));
+        assert_eq!(count(&text, "ADVANCED_FACE"), 12 + 4 + 6);
+    }
+
+    #[test]
+    fn the_arcs_of_a_sketch_are_cylinders_that_look_away_from_the_material() {
+        for (kind, depth, solids) in [
+            (FeatureKind::Extrude, Some(4), 1),
+            (FeatureKind::Pocket, Some(2), 1),
+            (FeatureKind::Pocket, None, 1),
+        ] {
+            let e = with_sketch(arcs_sketch(), kind, depth);
+            let text = export_step(&e).unwrap();
+            assert_references_in_order(&text);
+            assert_every_edge_once_each_way(&text);
+            assert_eq!(count(&text, "CYLINDRICAL_SURFACE"), 2, "{kind:?} {depth:?}");
+            // one half circle of each kind, whether the material is raised or taken away
+            assert_eq!(cylinder_senses(&text), (1, 1), "{kind:?} {depth:?}");
+            let bodies = read_back(&text);
+            assert_eq!(bodies.len(), solids);
+            let expected = crate::solid::enclosure_volume_nm3(&e).unwrap();
+            let volume = bodies[0].1.volume_nm3();
+            assert!(
+                (volume - expected).abs() < 1.0e-3 * expected,
+                "{kind:?} {depth:?} {volume} {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_round_extrusion_looks_out_and_a_round_pocket_looks_in() {
+        let round = || {
+            let mut k = on_lid("round");
+            let c = k.add_point(mm(10), mm(10)).unwrap();
+            k.add_circle(c, mm(4)).unwrap();
+            k
+        };
+        let boss = export_step(&with_sketch(round(), FeatureKind::Extrude, Some(3))).unwrap();
+        assert_eq!(cylinder_senses(&boss), (1, 0));
+        assert_every_edge_once_each_way(&boss);
+        let sunk = export_step(&with_sketch(round(), FeatureKind::Pocket, Some(1))).unwrap();
+        assert_eq!(cylinder_senses(&sunk), (0, 1));
+        assert_every_edge_once_each_way(&sunk);
+        assert!(boss.contains(",4.)"), "the radius is exact");
+    }
+
+    #[test]
+    fn placed_parts_are_further_solids_with_the_volume_of_their_triangles() {
         use crate::catalog::Axis;
         let mut e = enclosure(&[]);
-        assert!(export_step(&e).is_ok());
-        place(&mut e, 1, "bolt", [0, 0, 0], Axis::PlusZ, 0, None);
-        assert_eq!(
-            export_step(&e).unwrap_err(),
-            CadError::NotExported("placed parts".into())
+        for (n, kind) in ["tube", "bolt", "flat", "hex", "angle"].iter().enumerate() {
+            let at = [150 + 60 * n as i64, 0, 0];
+            // only a profile is cut to a length
+            let cut = (*kind == "tube").then_some(40);
+            place(&mut e, n as u64 + 1, kind, at, Axis::PlusZ, 0, cut);
+        }
+        let mesh = Settings::defaults().mesh;
+        let text = export_step_with(&e, &mesh).unwrap();
+        assert_references_in_order(&text);
+        assert_every_edge_once_each_way(&text);
+        assert!(assert_flat_faces_turn_their_way(&text) > 100);
+        let read = read_back(&text);
+        let made = crate::solid::bodies(&e, &mesh).unwrap();
+        assert!(read.len() >= made.len(), "{} {}", read.len(), made.len());
+        let volume: f64 = read.iter().map(|b| b.1.volume_nm3()).sum();
+        let expected: f64 = made.iter().map(|b| b.mesh.volume_nm3()).sum();
+        assert!(
+            (volume - expected).abs() < 1.0e-6 * expected,
+            "{volume} {expected}"
         );
+        assert!(text.contains("MANIFOLD_SOLID_BREP('piece_1',"), "named");
+        // the box alone has none of them
+        assert_eq!(count(&to_step(&e), "MANIFOLD_SOLID_BREP"), 0);
+        assert_eq!(text, export_step_with(&e, &mesh).unwrap());
+    }
+
+    #[test]
+    fn a_model_that_cannot_be_closed_is_refused_and_not_written_broken() {
+        // a hole whose centre is over the corner column of the walls
+        let mut e = Enclosure::new(EnclosureParams {
+            inner_length: mm(100),
+            inner_width: mm(60),
+            inner_height: mm(30),
+            wall: mm(5),
+            floor: mm(2),
+            lid: mm(3),
+            edge_margin: mm(1),
+            min_web: mm(2),
+        })
+        .unwrap();
+        let hole = Hole {
+            name: "corner".into(),
+            face: Face::Front,
+            u: mm(5),
+            v: mm(15),
+            diameter: mm(6),
+            style: crate::enclosure::HoleStyle::Plain,
+        };
+        let id = ObjectId::from_parts(1_700_000_000_000, 50, 51).unwrap();
+        e.apply(Operation::AddHole { id, hole }).unwrap();
+        assert!(crate::solid::bodies(&e, &Settings::defaults().mesh).is_err());
+        assert_eq!(export_step(&e).unwrap_err().code(), "PHOENIX-CAD-048");
     }
 }

@@ -4,6 +4,14 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **A DXF drawing in feet is no longer read as millimetres:** with the automatic unit, a header that declared feet, mils, yards, microns or decimetres was taken for millimetres, so the drawing came in at the wrong size; these units are followed now and any other declared unit is refused, so that the unit is given by hand.
+
+- **The STEP file holds extrusions, pockets and cooling fins:** they are part of the solid of the box, with flat sides and the arcs and circles of the sketch as exact cylinders; an island of a pocket through its face is a solid of its own. A box that had them was refused.
+
+- **The STEP file holds the placed parts and the turned and swept bodies:** each follows the box as a solid named after it, with a flat face for each triangle of its surface (round faces are the sides of the circle table). A model that had them was refused.
+
+- **A box that cannot be made is not written to STEP as a broken file:** a hole over a corner of the walls, or two shapes of one face that cross or touch, was refused by the STL file and written by the STEP file with faces that do not close; both are now refused with the same codes (`PHOENIX-CAD-048` to `-050`).
+
 - **A suite project saved by another program is not written over:** the window keeps the mark of the `.eh3d` file from the moment it opens or saves it and looks at it before every write and again after a question; when another program wrote it meanwhile, saving, the texts, the import, the board, the openings, handing back and signing write nothing, the window says so in the eight languages and offers to read it again, to save under another name or to close.
 
 - **Signing keys under a password:** the signing window asks for the password of a protected key, makes new keys under a password typed twice and offers to protect a key that has none; a password is wiped after use and is never kept, logged or shown. The commands `eh3d-keygen` and `eh3d-sign` take it as one line with `--password-stdin` and warn about a key without one.
