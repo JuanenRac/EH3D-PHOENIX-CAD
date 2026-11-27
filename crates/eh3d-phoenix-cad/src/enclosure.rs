@@ -2621,14 +2621,14 @@ mod feature_tests {
     }
 
     #[test]
-    fn the_exports_say_that_they_do_not_draw_the_extrusions_and_pockets() {
+    fn the_step_file_draws_the_extrusions_that_the_script_and_the_compensation_do_not() {
         let mut e = with_plate();
         assert!(crate::step::export_step(&e).is_ok());
         let printer = crate::config::Settings::defaults().printer;
         assert!(printer.for_fabrication(&e).is_ok());
         assert!(!crate::scad::to_scad(&e).contains("sketches"));
         e.apply(extrude(1, 10)).unwrap();
-        assert_eq!(code(crate::step::export_step(&e)), "PHOENIX-CAD-022");
+        assert!(crate::step::export_step(&e).is_ok());
         assert_eq!(code(printer.for_fabrication(&e)), "PHOENIX-CAD-022");
         assert!(crate::scad::to_scad(&e).contains("not drawn in this script"));
     }

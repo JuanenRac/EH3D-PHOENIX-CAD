@@ -4735,9 +4735,9 @@ impl Window {
     // -----------------------------------------------------------------------------------------
 
     /// The bytes of a format for the model as it is now. The STEP file is refused with
-    /// `PHOENIX-CAD-022` when the model has a shape it does not draw (the extrusions and pockets
-    /// of the sketches among them); the STL file with `PHOENIX-CAD-048` to `-050` when the solid
-    /// cannot be made, does not match the model or is above the limits.
+    /// `PHOENIX-CAD-022` when the model has a shape it does not draw (a treated edge around the
+    /// lid or the floor, for one); it and the STL file are refused with `PHOENIX-CAD-048` to
+    /// `-050` when the solid cannot be made, does not match the model or is above the limits.
     pub fn export_bytes(&self, format: Format) -> Result<Vec<u8>, CadError> {
         let text = match format {
             Format::Bill => self.bill_csv_text()?,
@@ -7358,6 +7358,18 @@ mod tests {
         assert_eq!(spanish, w.report_text());
     }
 
+    /// The solids of a STEP text read back, each checked to be closed.
+    fn step_solids(text: &str) -> usize {
+        let limits = crate::step_import::StepLimits::from_settings(
+            &crate::config::Settings::defaults().mesh,
+        );
+        let bodies = crate::step_import::read_step(text, &limits).unwrap();
+        for body in &bodies {
+            body.1.check_closed().unwrap();
+        }
+        bodies.len()
+    }
+
     #[test]
     fn a_new_box_is_written_as_a_step_file() {
         let dir = Scratch::new("step");
@@ -7372,9 +7384,11 @@ mod tests {
     #[test]
     fn a_shape_the_step_file_does_not_draw_gives_the_code_022_and_writes_nothing() {
         let dir = Scratch::new("shape");
-        // the STEP file does not draw cooling fins
+        // the STEP file does not draw a treated edge around the lid
         let mut w = fresh();
-        w.add_step(NewStep::Fins);
+        w.add_step(NewStep::Edging);
+        let kind = field(&w, Key::EdgeKind(1));
+        w.choose(kind, "chamfer");
         let target = dir.0.join("box.step");
         assert!(!w.export_to(Format::Step, &target, true));
         assert!(!target.exists());
@@ -7946,9 +7960,9 @@ mod tests {
         assert_eq!(again.enclosure().fins().len(), 1);
         let script = again.export_text(Format::Script).unwrap();
         assert!(script.contains("// fins Fins 1, top face"));
-        // the STEP file does not draw them and says so
-        let err = again.export_text(Format::Step).unwrap_err();
-        assert_eq!(err.code(), "PHOENIX-CAD-022");
+        // the STEP file draws them as part of the box
+        let step = again.export_text(Format::Step).unwrap();
+        assert_eq!(step_solids(&step), 1);
     }
 
     fn library_path() -> PathBuf {
@@ -8406,12 +8420,12 @@ mod tests {
             std::fs::read_to_string(&target).unwrap(),
             w.bill_csv_text().unwrap()
         );
-        // the script has one block for each part and the STEP file says it does not draw them
+        // the script has one block for each part and the STEP file one solid or more for each
         let script = w.export_text(Format::Script).unwrap();
         assert_eq!(script.matches("  // part ").count(), 18);
         assert!(script.contains("  // part front rail, tube-40x20 of the library chassis-basic\n"));
-        let err = w.export_text(Format::Step).unwrap_err();
-        assert_eq!(err.code(), "PHOENIX-CAD-022");
+        let step = w.export_text(Format::Step).unwrap();
+        assert!(step_solids(&step) >= 19);
         // a project with no parts has a bill with only the totals
         let plain = example().export_text(Format::Bill).unwrap();
         assert_eq!(
@@ -8886,7 +8900,9 @@ CONTORNO
         let bodies = crate::solid::bodies(w.enclosure(), &w.settings.mesh).unwrap();
         assert_eq!(bodies.len(), 2);
         assert_eq!(bodies[1].name, "Turned body 1");
-        assert!(crate::step::export_step(w.enclosure()).is_err());
+        let step = crate::step::export_step(w.enclosure()).unwrap();
+        assert!(step.contains("BREP('Turned_body_1',"), "{step}");
+        assert!(step_solids(&step) >= 2);
     }
 
     #[test]
@@ -8948,7 +8964,9 @@ CONTORNO
         let bodies = crate::solid::bodies(w.enclosure(), &w.settings.mesh).unwrap();
         assert_eq!(bodies.len(), 2);
         assert_eq!(bodies[1].name, "Swept body 1");
-        assert!(crate::step::export_step(w.enclosure()).is_err());
+        let step = crate::step::export_step(w.enclosure()).unwrap();
+        assert!(step.contains("BREP('Swept_body_1',"), "{step}");
+        assert!(step_solids(&step) >= 2);
     }
 
     #[test]

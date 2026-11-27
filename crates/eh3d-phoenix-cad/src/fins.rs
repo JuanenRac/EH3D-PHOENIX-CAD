@@ -1098,14 +1098,23 @@ mod tests {
     }
 
     #[test]
-    fn the_step_file_refuses_fins_and_says_so() {
+    fn the_step_file_draws_the_fins_with_their_exact_volume() {
         let mut e = enclosure();
+        let bare = crate::step::export_step(&e).unwrap();
         e.apply(add_fins(1, fins())).unwrap();
-        let err = crate::step::export_step(&e).unwrap_err();
-        assert_eq!(err.code(), "PHOENIX-CAD-022");
-        assert!(err.to_string().contains("cooling fins"), "{err}");
+        let text = crate::step::export_step(&e).unwrap();
+        let faces = |t: &str| t.matches("=ADVANCED_FACE(").count();
+        assert_eq!(faces(&text), faces(&bare) + 5 * fins().rects().len());
+        let limits = crate::step_import::StepLimits::from_settings(
+            &crate::config::Settings::defaults().mesh,
+        );
+        let bodies = crate::step_import::read_step(&text, &limits).unwrap();
+        assert_eq!(bodies.len(), 1);
+        bodies[0].1.check_closed().unwrap();
+        let expected = crate::solid::enclosure_volume_nm3(&e).unwrap();
+        assert!((bodies[0].1.volume_nm3() - expected).abs() < 1.0e-9 * expected);
         e.apply(Operation::RemoveFins { id: fid(1) }).unwrap();
-        assert!(crate::step::export_step(&e).is_ok());
+        assert_eq!(crate::step::export_step(&e).unwrap(), bare);
     }
 
     #[test]

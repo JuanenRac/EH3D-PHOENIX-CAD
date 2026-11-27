@@ -6,9 +6,9 @@
 //! file unless it was ordered to, nor over the project that is open, nor to a name that belongs to
 //! a project or a sketch) and the writing itself.
 //!
-//! The extrusions and pockets of the sketches are not drawn by the STEP file (the answer is
-//! `PHOENIX-CAD-022`, as in the library) and the script says so in a comment line; the STL file and
-//! the drawings do draw them (see [`crate::solid`] for what the STL file can be made of).
+//! The STEP file holds the whole model (see [`crate::step::export_step_with`]); the script does
+//! not draw the extrusions and pockets of the sketches and says so in a comment line; the STL file
+//! and the drawings do draw them (see [`crate::solid`] for what the STL file can be made of).
 
 use crate::assembly::Dim;
 use crate::browse::matches_extension;
@@ -21,7 +21,7 @@ use crate::mesh;
 use crate::scad::to_scad;
 use crate::sketch::file as sketch_file;
 use crate::solid;
-use crate::step::export_step;
+use crate::step::export_step_with;
 use crate::store;
 use crate::window::PROJECT_EXTENSIONS;
 use crate::CadError;
@@ -177,7 +177,7 @@ impl Format {
 /// The bytes of a format for a model: text, or the binary STL file. `text` is the text of the
 /// formats that are not a property of the enclosure alone: the fit report for [`Format::Report`]
 /// the bill of materials for [`Format::Bill`] and the order sheet for [`Format::Order`], which need the language. The STEP file can be
-/// refused with `PHOENIX-CAD-022`; the STL file with `PHOENIX-CAD-048`, `-049` or `-050`; a
+/// refused with `PHOENIX-CAD-022`, `-048`, `-049` or `-050`; the STL file with the last three; a
 /// drawing with `PHOENIX-CAD-050`.
 pub fn render(
     format: Format,
@@ -202,7 +202,7 @@ pub fn render_titled(
     let text_of = |s: String| Ok(s.into_bytes());
     match format {
         Format::Script => text_of(to_scad(enclosure)),
-        Format::Step => text_of(export_step(enclosure)?),
+        Format::Step => text_of(export_step_with(enclosure, &settings.mesh)?),
         Format::Report | Format::Bill | Format::Order => text_of(text.to_owned()),
         Format::Stl | Format::Obj | Format::ThreeMf => {
             let bodies = solid::bodies(enclosure, &settings.mesh)?;

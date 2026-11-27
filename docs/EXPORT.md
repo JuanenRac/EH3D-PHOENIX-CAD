@@ -5,7 +5,7 @@ The model is written to a file from the **Export** menu of the window or with th
 | Format | Word | Extension | What it is |
 |---|---|---|---|
 | Script | `script` | `.scad` | the model as an OpenSCAD-style script |
-| STEP | `step` | `.step` | a boundary representation of the box with its holes, posts, lid lip and vertical edges (see *The STEP file of the box*) |
+| STEP | `step` | `.step` | a boundary representation of the whole model: the box with everything on it and the parts and bodies next to it (see *The STEP file of the box*) |
 | STL | `stl` | `.stl` | the solid as triangles, binary or text |
 | OBJ | `obj` | `.obj` | the same solids as a Wavefront file, in millimetres |
 | 3MF | `3mf` | `.3mf` | the same solids as a 3MF package (a zip file without compression with the model as XML), in millimetres |
@@ -303,6 +303,10 @@ The size of a mesh and of a sketch are readings in floating point for the person
 
 `step::export_step` writes the box as an AP214 boundary representation, the same text for the same model. Without holes it is the outer box with the inner space as a void; a hole joins the two in one closed surface. Drawn are: the holes of every style on any face and those of the lid fixing (a round hole is a cylinder, a countersink a conical face over it, a counterbore a wider cylinder with a flat ring at its bottom, a rectangular hole four planes, a slot two planes and two half cylinders); the four vertical edges rounded (quarter cylinders) or chamfered (planes); the posts with their bore and their conical foot; and the centring lip of the lid, with the ceiling split in the part round the ring and the part inside it.
 
-Refused with `PHOENIX-CAD-022`, with the shape named: rounded or chamfered edges around the lid or the floor, extrusions and pockets of sketches, cooling fins, placed parts, turned and swept bodies, a centring lip with no clearance to the walls and a hole of the lid that opens over the lip.
+**Extrusions, pockets and fins** are part of the same solid as the box. Their straight sides are flat faces and the arcs and circles of the sketch are exact cylinders, with their radius, facing away from the material; an extrusion has its cap and, inside each hole of its outline, the walls of the hole and the piece of the face at its bottom; a pocket has its floor with its islands standing on it, and a pocket through the face joins the outside and the inner space. An island of a pocket through its face is held by nothing, so it is written as a solid of its own, named `island`. A fin is a box raised from its face.
+
+**Placed parts, turned bodies and swept bodies** follow as further solids named after them (spaces and characters outside printable ASCII become `_`). Each is the closed surface of triangles of the STL file, written with a flat face for each triangle and shared edges and corners: their round surfaces are the sides of the circle table (`mesh.circle_segments`), not cylinders, cones or tori. A body with a closed space inside it has that space as a void.
+
+Refused with `PHOENIX-CAD-022`, with the shape named: rounded or chamfered edges around the lid or the floor, a centring lip with no clearance to the walls, a hole or a through pocket of the lid that opens over the lip, and an arc of a sketch that does not end on its circle. The model is also checked as for the STL file before anything is written, so what the solid cannot be made of (a hole over a corner of the walls, two shapes of one face that cross or touch, a post that touches a wall, a solid that does not have the volume of the model, too many triangles) is refused with `PHOENIX-CAD-048` to `-050` instead of being written as a broken file.
 
 The tests walk every edge once each way and read each file back with the reader of this program: the surface is closed and the volume is that of the shapes, each circle taken as 72 straight pieces. No CAD program has opened any of these files.
