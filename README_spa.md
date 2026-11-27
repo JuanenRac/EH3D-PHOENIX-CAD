@@ -64,6 +64,8 @@ EH3D-PHOENIX-CAD forma parte de la familia PHOENIX de la EH3D Fabrication Suite.
 <p align="center">
   <img src="images/screens/es/phoenix-cad-01-box.png" alt="EH3D-PHOENIX-CAD window" width="49%">
   <img src="images/screens/es/phoenix-cad-02-sketch.png" alt="EH3D-PHOENIX-CAD sketch" width="49%">
+  <img src="images/screens/es/phoenix-cad-03-view.png" alt="EH3D-PHOENIX-CAD view of a 3D file cut open" width="49%">
+  <img src="images/screens/es/phoenix-cad-04-signature.png" alt="EH3D-PHOENIX-CAD signing the suite project" width="49%">
 </p>
 
 ## 🏛️ Arquitectura
