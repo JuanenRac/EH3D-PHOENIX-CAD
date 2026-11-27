@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.1.7] - Longer key passwords, DXF drawings in feet and more solids in STEP
+
 - **A new key password needs at least 12 characters (was 8):** it applies to a new key made by the window or by `eh3d-keygen --password-stdin` and to protecting a key that has none; the message that refuses a shorter one says the number in the eight languages. A key already under a password of 8 to 11 characters opens and signs as before. This comes with EH3D-COMMON 0.4.0, which the build takes now; from it also: a panel asked for is brought to the front, the settings panel of the server keeps to the width of its column and protecting a key through a link protects the file the link points at.
 - **Third-party notices in every package (`docs/THIRD_PARTY_NOTICES`):** the packages of the releases now carry the copyright notices and licence texts of the Rust crates and of the data the program is built with, and the CI fails when a new dependency or licence is not in the file.
 
