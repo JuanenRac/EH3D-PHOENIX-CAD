@@ -299,10 +299,31 @@ fn the_corner_under_the_pointer_is_a_corner_that_is_not_hidden() {
 #[test]
 fn a_cut_shows_the_inside_in_a_colour_of_its_own_and_hides_what_is_beyond() {
     let cube = cube_solid();
-    assert_eq!(Cut::of(&cube, 2, 0.5), Cut { axis: 2, at: 5.0 });
+    assert_eq!(
+        Cut::of(&cube, 2, 0.5),
+        Cut {
+            axis: 2,
+            at: 5.0,
+            tilt: [0.0; 2]
+        }
+    );
     // the share and the axis stay inside what there is
-    assert_eq!(Cut::of(&cube, 9, 7.0), Cut { axis: 2, at: 10.0 });
-    assert_eq!(Cut::of(&cube, 0, -1.0), Cut { axis: 0, at: 0.0 });
+    assert_eq!(
+        Cut::of(&cube, 9, 7.0),
+        Cut {
+            axis: 2,
+            at: 10.0,
+            tilt: [0.0; 2]
+        }
+    );
+    assert_eq!(
+        Cut::of(&cube, 0, -1.0),
+        Cut {
+            axis: 0,
+            at: 0.0,
+            tilt: [0.0; 2]
+        }
+    );
     let pose = Pose::fitted(Camera::TOP);
     let cut = |share: f64| Look {
         edges: true,
@@ -357,25 +378,64 @@ fn hollow() -> Solid {
 #[test]
 fn the_section_of_a_cut_is_its_outline_and_the_area_of_the_material() {
     let cube = cube_solid();
-    let middle = section(&cube, Cut { axis: 2, at: 5.0 });
+    let middle = section(
+        &cube,
+        Cut {
+            axis: 2,
+            at: 5.0,
+            tilt: [0.0; 2],
+        },
+    );
     assert!((middle.area_mm2.unwrap() - 100.0).abs() < 1e-9);
     // each of the four walls is two triangles
     assert_eq!(middle.lines.len(), 8);
     assert!(middle.lines.iter().flatten().all(|p| p[2] == 5.0));
     for axis in 0..2 {
-        let cut = section(&cube, Cut { axis, at: 2.5 });
+        let cut = section(
+            &cube,
+            Cut {
+                axis,
+                at: 2.5,
+                tilt: [0.0; 2],
+            },
+        );
         assert!((cut.area_mm2.unwrap() - 100.0).abs() < 1e-9, "{axis}");
     }
     // the hole in the middle is taken out
-    let through = section(&hollow(), Cut { axis: 2, at: 5.0 });
+    let through = section(
+        &hollow(),
+        Cut {
+            axis: 2,
+            at: 5.0,
+            tilt: [0.0; 2],
+        },
+    );
     assert!((through.area_mm2.unwrap() - 84.0).abs() < 1e-9);
     // at the far side nothing is met
-    let beyond = section(&cube, Cut { axis: 2, at: 10.0 });
+    let beyond = section(
+        &cube,
+        Cut {
+            axis: 2,
+            at: 10.0,
+            tilt: [0.0; 2],
+        },
+    );
     assert!(beyond.lines.is_empty() && beyond.area_mm2 == Some(0.0));
     // an open surface has an outline and no area
     let mut open = cube_solid();
     open.closed = false;
-    assert_eq!(section(&open, Cut { axis: 2, at: 5.0 }).area_mm2, None);
+    assert_eq!(
+        section(
+            &open,
+            Cut {
+                axis: 2,
+                at: 5.0,
+                tilt: [0.0; 2]
+            }
+        )
+        .area_mm2,
+        None
+    );
 }
 
 #[test]
@@ -637,4 +697,87 @@ fn the_original_that_an_import_kept_is_read_back_to_look_at_it() {
     assert!(crate::eh3dfile::kept_original(&project, 10).is_err());
     let job = Job::start(Origin::Bytes(name, bytes), options(), Lang::En);
     assert_eq!(solid(job.wait().unwrap()).count, 12);
+}
+
+#[test]
+fn a_cut_that_leans_goes_through_the_box_along_its_normal() {
+    let cube = cube_solid();
+    let lean = Cut::tilted(&cube, 2, [0.0, 45.0], 0.5);
+    // leaning towards y (the axis after the next one from z)
+    let normal = lean.normal();
+    let half = std::f64::consts::FRAC_1_SQRT_2;
+    assert!(normal[0].abs() < 1e-12, "{normal:?}");
+    assert!((normal[1] - half).abs() < 1e-12 && (normal[2] - half).abs() < 1e-12);
+    assert!((lean.at - 10.0 * half).abs() < 1e-9, "{}", lean.at);
+    // the plane is the diagonal of the cube: its area is the side times the diagonal
+    let section = section(&cube, lean);
+    let diagonal = 10.0 * std::f64::consts::SQRT_2;
+    assert!((section.area_mm2.unwrap() - 10.0 * diagonal).abs() < 1e-6);
+    assert!((section.length_mm - 2.0 * (10.0 + diagonal)).abs() < 1e-6);
+    let [width, height] = section.size_mm.unwrap();
+    assert!((width - 10.0).abs() < 1e-9 && (height - diagonal).abs() < 1e-9);
+    for p in section.lines.iter().flatten() {
+        assert!((lean.height(*p) - lean.at).abs() < 1e-9, "{p:?}");
+    }
+    // a lean is kept within its bounds
+    assert_eq!(
+        Cut::tilted(&cube, 0, [200.0, f64::NAN], 0.0).tilt,
+        [80.0, 0.0]
+    );
+    // what is over the plane is not drawn, and the face of the cut closes the solid
+    let pose = Pose::fitted(Camera::TOP);
+    let look = Look {
+        cap: true,
+        cut: Some(lean),
+        ..Look::BARE
+    };
+    let picture = render(&cube, &pose, 400, 400, look);
+    let at = place_of(&cube, &pose, (400.0, 400.0), [5.0, 5.0, 5.0]);
+    let colour = picture.pixel(at.0 as usize, at.1 as usize);
+    assert!(
+        colour == [214, 142, 78, 255] || colour == [150, 94, 48, 255],
+        "{colour:?}"
+    );
+}
+
+#[test]
+fn the_section_is_measured_and_its_corners_and_sides_are_picked() {
+    let hollow = hollow();
+    let cut = Cut::of(&hollow, 2, 0.5);
+    let section = section(&hollow, cut);
+    // a square of 10 mm with a square hole of 4 mm
+    assert_eq!(section.size_mm, Some([10.0, 10.0]));
+    assert!(
+        (section.length_mm - 56.0).abs() < 1e-9,
+        "{}",
+        section.length_mm
+    );
+    // the corners of the two squares, not the middle of a wall where two triangles meet
+    assert_eq!(section.corners().len(), 8);
+    let pose = Pose::fitted(Camera::TOP);
+    let look = Look {
+        cap: true,
+        cut: Some(cut),
+        ..Look::BARE
+    };
+    let picture = render(&hollow, &pose, 400, 400, look);
+    let pane = (400.0, 400.0);
+    let corner = [10.0, 10.0, 5.0];
+    let at = place_of(&hollow, &pose, pane, corner);
+    assert_eq!(
+        pick_cut(&hollow, &pose, &picture, at, 4.0, &section),
+        Some(corner)
+    );
+    // away from every corner the point of the side under the pointer is taken
+    let side = [10.0, 3.0, 5.0];
+    let at = place_of(&hollow, &pose, pane, side);
+    let picked = pick_cut(&hollow, &pose, &picture, at, 4.0, &section).unwrap();
+    assert!(
+        (0..3).all(|k| (picked[k] - side[k]).abs() < 1e-6),
+        "{picked:?}"
+    );
+    assert_eq!(
+        pick_cut(&hollow, &pose, &picture, (2.0, 2.0), 4.0, &section),
+        None
+    );
 }

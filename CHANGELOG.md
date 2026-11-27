@@ -4,6 +4,18 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **Countersinks and counterbores in the STEP file:** a countersunk hole is written as a conical face and a counterbored one as two cylinders with the flat ring between them, the holes of the lid fixing included; they were refused before.
+
+- **Rectangular holes and slots in the STEP file:** a rectangular hole is written as four flat faces and a slot as two flat faces and two half cylinders, on any face of the box.
+
+- **Rounded and chamfered vertical edges in the STEP file:** the four vertical edges of the box are written as quarter cylinders or flat cuts; the edges around the lid and the floor are still refused by name.
+
+- **The foot of a post and the centring lip in the STEP file:** the conical foot of a post and the centring lip of the lid are written, with the holes of the lid on the side of the ring where they open; a hole that opens over the lip is refused by name. The STEP file of each of these shapes is read back by the program as a closed surface with its volume.
+
+- **A cut that leans:** the plane that cuts the view can lean up to 80 degrees from its axis in two directions, with a slider for each or `--viewer-cut z:30,15` in the picture mode; the face that closes the cut and the area follow it.
+
+- **Measuring on the section:** next to the area, the view tells the width, the height and the length of the outline of the section, and the distance can be taken between its corners or any points of its sides.
+
 - **Pictures of the view and of the signature:** the README files show a 3D file cut open in the view and the window that signs a signed suite project, in the eight languages; that window now opens clear of the menu.
 
 - **The picture mode shows a cut and the signing window:** `--viewer-cut x|y|z` cuts the file of `--viewer` at its middle and `--sign-window` opens the window that signs the suite project, so their pictures can be taken without a person.

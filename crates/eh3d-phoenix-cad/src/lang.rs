@@ -1117,6 +1117,8 @@ messages! {
     MvSmooth => ["Smooth", "Suavizado", "Glatt", "Lissé", "Levigato", "滑らか", "平滑", "Suavizado"],
     MvCutFace => ["Closed at the cut", "Cara de cierre", "Schnittfläche", "Face de coupe", "Faccia di taglio", "切断面を閉じる", "封闭切面", "Face de corte"],
     MvCutArea => ["Section: {0} mm2", "Sección: {0} mm2", "Schnitt: {0} mm2", "Section : {0} mm2", "Sezione: {0} mm2", "断面積: {0} mm2", "截面积：{0} mm2", "Secção: {0} mm2"],
+    MvCutTilt => ["Tilt of the cut", "Inclinación del corte", "Neigung des Schnitts", "Inclinaison de la coupe", "Inclinazione del taglio", "切断面の傾き", "剖切面倾角", "Inclinação do corte"],
+    MvCutSize => ["{0} × {1} mm, outline {2} mm", "{0} × {1} mm, contorno {2} mm", "{0} × {1} mm, Umriss {2} mm", "{0} × {1} mm, contour {2} mm", "{0} × {1} mm, contorno {2} mm", "{0} × {1} mm、輪郭 {2} mm", "{0} × {1} mm，轮廓 {2} mm", "{0} × {1} mm, contorno {2} mm"],
     SuiteOpenedSigned => ["Opened {0}. Signatures: {1}", "Abierto {0}. Firmas: {1}", "{0} geöffnet. Signaturen: {1}", "{0} ouvert. Signatures : {1}", "Aperto {0}. Firme: {1}", "{0} を開きました。署名: {1}", "已打开 {0}。签名：{1}", "Aberto {0}. Assinaturas: {1}"],
 }
 

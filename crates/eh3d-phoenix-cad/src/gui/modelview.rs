@@ -7,7 +7,7 @@
 use super::*;
 use crate::modelview::{
     self, can_show, Content, Cut, Job, Look, Origin, Picture, Pose, Section, Solid, ViewOptions,
-    STRAIGHT_VIEWS,
+    STRAIGHT_VIEWS, TILT_MAX,
 };
 use crate::projection::{Camera, Point3};
 
@@ -28,6 +28,8 @@ pub(super) struct ViewerState {
     drawn: Option<Drawn>,
     cutting: bool,
     cut_axis: usize,
+    /// How the plane of the cut leans from the axis, in degrees.
+    cut_tilt: [f64; 2],
     /// Where the cut is, as a share of the way along the box of the solid.
     cut_share: f64,
 }
@@ -103,15 +105,17 @@ impl App {
             drawn: None,
             cutting: false,
             cut_axis: 2,
+            cut_tilt: [0.0; 2],
             cut_share: 0.5,
         });
     }
 
-    /// Cuts the file that is looked at along an axis, at its middle.
-    pub(super) fn cut_viewer(&mut self, axis: usize) {
+    /// Cuts the file that is looked at along an axis, at its middle, leaning by these degrees.
+    pub(super) fn cut_viewer(&mut self, axis: usize, tilt: [f64; 2]) {
         if let Some(view) = &mut self.viewer {
             view.cutting = true;
             view.cut_axis = axis.min(2);
+            view.cut_tilt = tilt.map(|t| t.clamp(-TILT_MAX, TILT_MAX));
         }
     }
 
@@ -242,17 +246,35 @@ impl App {
                             let slider =
                                 egui::Slider::new(&mut view.cut_share, 0.0..=1.0).show_value(false);
                             ui.add(slider);
-                            let cut = Cut::of(solid, view.cut_axis, view.cut_share);
+                            ui.label(Msg::MvCutTilt.tr(lang));
+                            for tilt in &mut view.cut_tilt {
+                                let lean = egui::Slider::new(tilt, -TILT_MAX..=TILT_MAX)
+                                    .step_by(1.0)
+                                    .suffix("°");
+                                ui.add(lean);
+                            }
+                            let cut =
+                                Cut::tilted(solid, view.cut_axis, view.cut_tilt, view.cut_share);
                             ui.label(format!("{:.2} mm", cut.at));
+                            if view.section.as_ref().map(|s| s.0) != Some(cut) {
+                                view.section = Some((cut, modelview::section(solid, cut)));
+                            }
+                            let Some((_, section)) = &view.section else {
+                                return;
+                            };
+                            if let Some([width, height]) = section.size_mm {
+                                let words =
+                                    [width, height, section.length_mm].map(|v| format!("{v:.2}"));
+                                ui.label(fill(
+                                    Msg::MvCutSize.tr(lang),
+                                    &[&words[0], &words[1], &words[2]],
+                                ));
+                            }
                             if !solid.closed {
                                 return;
                             }
                             ui.checkbox(&mut view.cut_face, Msg::MvCutFace.tr(lang));
-                            if view.section.as_ref().map(|s| s.0) != Some(cut) {
-                                view.section = Some((cut, modelview::section(solid, cut)));
-                            }
-                            let area = view.section.as_ref().and_then(|s| s.1.area_mm2);
-                            if let Some(area) = area {
+                            if let Some(area) = section.area_mm2 {
                                 let area = format!("{area:.2}");
                                 ui.label(fill(Msg::MvCutArea.tr(lang), &[&area]));
                             }
@@ -293,9 +315,9 @@ impl App {
                         Content::Solid(solid) => {
                             // one pixel of the picture for each pixel of the screen
                             let sharp = f64::from(ui.ctx().pixels_per_point()).clamp(0.5, 4.0);
-                            let cut = view
-                                .cutting
-                                .then(|| Cut::of(solid, view.cut_axis, view.cut_share));
+                            let cut = view.cutting.then(|| {
+                                Cut::tilted(solid, view.cut_axis, view.cut_tilt, view.cut_share)
+                            });
                             // while the view is dragged one point for each pixel is enough
                             let samples = if response.dragged() {
                                 1
@@ -325,13 +347,24 @@ impl App {
                                     f64::from(p.x - rect.min.x) * sharp,
                                     f64::from(p.y - rect.min.y) * sharp,
                                 );
-                                let found = modelview::pick(
-                                    solid,
-                                    &drawn.key.0,
-                                    &drawn.picture,
-                                    at,
-                                    radius * sharp,
-                                );
+                                let section = view.section.as_ref().filter(|_| view.cutting);
+                                let found = match section {
+                                    Some((_, section)) => modelview::pick_cut(
+                                        solid,
+                                        &drawn.key.0,
+                                        &drawn.picture,
+                                        at,
+                                        radius * sharp,
+                                        section,
+                                    ),
+                                    None => modelview::pick(
+                                        solid,
+                                        &drawn.key.0,
+                                        &drawn.picture,
+                                        at,
+                                        radius * sharp,
+                                    ),
+                                };
                                 if let Some(corner) = found {
                                     if view.picks.len() >= 2 {
                                         view.picks.clear();

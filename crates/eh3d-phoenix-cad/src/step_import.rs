@@ -1684,6 +1684,211 @@ mod round_trip_tests {
             .contains("triangles that the settings allow"));
     }
 
+    fn export_id(n: u64) -> eh3d_container::ObjectId {
+        eh3d_container::ObjectId::from_parts(1_700_000_000_000, 1, n).unwrap()
+    }
+
+    fn add_styled(
+        e: &mut crate::enclosure::Enclosure,
+        n: u64,
+        face: Face,
+        at: (i64, i64),
+        d: i64,
+        style: crate::enclosure::HoleStyle,
+    ) {
+        e.apply(crate::enclosure::Operation::AddHole {
+            id: export_id(n),
+            hole: crate::enclosure::Hole {
+                name: format!("h{n}"),
+                face,
+                u: mm(at.0),
+                v: mm(at.1),
+                diameter: mm(d),
+                style,
+            },
+        })
+        .unwrap();
+    }
+
+    /// The volume of the exported file, read back closed.
+    fn exported_mm3(e: &crate::enclosure::Enclosure) -> f64 {
+        let text = crate::step::export_step(e).unwrap();
+        let bodies = read_step(&text, &limits()).unwrap();
+        assert_eq!(bodies.len(), 1);
+        let closed = bodies[0].1.check_closed();
+        assert!(closed.is_ok(), "{closed:?}");
+        volume_mm3(&bodies)
+    }
+
+    fn assert_near(got: f64, expected: f64) {
+        assert!((got - expected).abs() < 0.01, "{got} against {expected}");
+    }
+
+    /// A cone cut off between two regular polygons with their corners at the same angles.
+    fn frustum_mm3(wide: f64, narrow: f64, height: f64) -> f64 {
+        let (a, b) = (polygon_area(wide, 72), polygon_area(narrow, 72));
+        height / 3.0 * (a + b + (a * b).sqrt())
+    }
+
+    #[test]
+    fn every_style_of_hole_of_the_export_is_read_back_closed_with_its_volume() {
+        use crate::enclosure::HoleStyle;
+        // what each style takes out of a wall of a thickness
+        type Removed = fn(f64) -> f64;
+        let cases: [(HoleStyle, Removed); 5] = [
+            (
+                HoleStyle::Countersunk {
+                    head_diameter: mm(7),
+                },
+                |t| frustum_mm3(7.0, 4.0, 1.5) + polygon_area(4.0, 72) * (t - 1.5),
+            ),
+            (
+                HoleStyle::Counterbored {
+                    head_diameter: mm(8),
+                    depth: mm(1),
+                },
+                |t| polygon_area(8.0, 72) + polygon_area(4.0, 72) * (t - 1.0),
+            ),
+            (HoleStyle::Rectangular { height: mm(6) }, |t| 24.0 * t),
+            (
+                HoleStyle::Oval {
+                    length: mm(12),
+                    vertical: false,
+                },
+                |t| (32.0 + polygon_area(4.0, 72)) * t,
+            ),
+            (
+                HoleStyle::Oval {
+                    length: mm(12),
+                    vertical: true,
+                },
+                |t| (32.0 + polygon_area(4.0, 72)) * t,
+            ),
+        ];
+        let faces = [
+            (Face::Front, 2.0),
+            (Face::Back, 2.0),
+            (Face::Left, 2.0),
+            (Face::Right, 2.0),
+            (Face::Top, 3.0),
+            (Face::Bottom, 2.0),
+        ];
+        for (style, removed) in cases {
+            for (face, wall) in faces {
+                let mut e = small_box();
+                add_styled(&mut e, 1, face, (30, 16), 4, style);
+                assert_near(exported_mm3(&e), WALLS_MM3 - removed(wall));
+            }
+        }
+    }
+
+    #[test]
+    fn the_rounded_and_chamfered_vertical_edges_are_read_back_closed_with_their_volume() {
+        use crate::enclosure::{Edging, HoleStyle, Operation, Treatment};
+        let quarter = polygon_area(10.0, 72) / 4.0;
+        for (treatment, lost) in [
+            (Treatment::Round(mm(5)), 4.0 * (25.0 - quarter)),
+            (Treatment::Chamfer(mm(3)), 4.0 * 4.5),
+        ] {
+            let mut e = small_box();
+            e.apply(Operation::SetEdging(Edging {
+                vertical: treatment,
+                ..Edging::default()
+            }))
+            .unwrap();
+            assert_near(exported_mm3(&e), WALLS_MM3 - lost * 35.0);
+            // with a hole in a side, in the lid and in the floor
+            let faces = [(Face::Front, 2.0), (Face::Top, 3.0), (Face::Bottom, 2.0)];
+            let mut removed = 0.0;
+            for (n, (face, wall)) in faces.into_iter().enumerate() {
+                add_styled(&mut e, n as u64 + 1, face, (30, 16), 4, HoleStyle::Plain);
+                removed += polygon_area(4.0, 72) * wall;
+            }
+            assert_near(exported_mm3(&e), WALLS_MM3 - lost * 35.0 - removed);
+        }
+    }
+
+    #[test]
+    fn the_foot_of_a_post_and_the_centring_lip_are_read_back_closed_with_their_volume() {
+        use crate::enclosure::{HoleStyle, Operation};
+        use crate::mount::{Base, BoreKind, Lid, LidFixing, Lip, Post};
+        let mut e = small_box();
+        e.apply(Operation::AddPost {
+            id: export_id(30),
+            post: Post {
+                name: "p".into(),
+                board_hole: None,
+                kind: BoreKind::SelfTapping,
+                x: mm(50),
+                y: mm(30),
+                outer_diameter: mm(8),
+                bore_diameter: mm(3),
+                height: mm(10),
+                bore_depth: mm(8),
+                base: Some(Base {
+                    diameter: mm(12),
+                    height: mm(2),
+                }),
+            },
+        })
+        .unwrap();
+        let post =
+            frustum_mm3(12.0, 8.0, 2.0) + polygon_area(8.0, 72) * 8.0 - polygon_area(3.0, 72) * 8.0;
+        assert_near(exported_mm3(&e), WALLS_MM3 + post);
+
+        let lid = |style| Lid {
+            fixing: LidFixing::Corners { inset: mm(6) },
+            screw: "M3".into(),
+            hole_diameter: Length::new(3_400_000).unwrap(),
+            style,
+            clearance: Length::new(200_000).unwrap(),
+            lip: Some(Lip {
+                thickness: Length::new(1_200_000).unwrap(),
+                depth: mm(3),
+            }),
+        };
+        e.apply(Operation::SetLid(Some(lid(HoleStyle::Plain))))
+            .unwrap();
+        let ring = (99.6 * 59.6 - 97.2 * 57.2) * 3.0;
+        let screws = 4.0 * polygon_area(3.4, 72) * 3.0;
+        assert_near(exported_mm3(&e), WALLS_MM3 + post + ring - screws);
+        // a hole in the middle of the lid opens inside the ring
+        add_styled(&mut e, 1, Face::Top, (30, 30), 6, HoleStyle::Plain);
+        let middle = polygon_area(6.0, 72) * 3.0;
+        assert_near(exported_mm3(&e), WALLS_MM3 + post + ring - screws - middle);
+        // countersunk screws of the lid
+        let sunk_style = HoleStyle::Countersunk {
+            head_diameter: Length::new(6_400_000).unwrap(),
+        };
+        e.apply(Operation::SetLid(Some(lid(sunk_style)))).unwrap();
+        let sunk = 4.0 * (frustum_mm3(6.4, 3.4, 1.5) + polygon_area(3.4, 72) * 1.5);
+        assert_near(exported_mm3(&e), WALLS_MM3 + post + ring - sunk - middle);
+        // a hole over the ring is refused by name
+        add_styled(&mut e, 2, Face::Top, (4, 30), 2, HoleStyle::Plain);
+        assert_eq!(
+            crate::step::export_step(&e).unwrap_err(),
+            crate::CadError::NotExported("hole h2 over the centring lip".into())
+        );
+    }
+
+    #[test]
+    fn the_example_box_with_rounded_corners_countersinks_and_a_lip_is_written_to_step() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("box.phoenixproj");
+        let mut w = crate::window::Window::new(
+            crate::lang::Lang::En,
+            crate::config::Settings::defaults(),
+            crate::uiconfig::UiSettings::defaults(),
+        )
+        .unwrap();
+        assert!(w.open(&path), "{:?}", w.status);
+        let exact = crate::solid::enclosure_volume_nm3(w.enclosure()).unwrap() / 1.0e18;
+        let got = exported_mm3(w.enclosure());
+        // the pieces of the arcs are inside the circles, which moves the volume a little
+        assert!((got / exact - 1.0).abs() < 2e-3, "{got} against {exact}");
+    }
+
     #[test]
     fn an_edge_that_goes_against_its_curve_is_walked_from_its_first_vertex() {
         // the sense of the curve says nothing about which vertex an edge starts at

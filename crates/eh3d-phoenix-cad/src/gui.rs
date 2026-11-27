@@ -4142,16 +4142,18 @@ pub struct Start {
     pub viewer: Option<PathBuf>,
     /// The axis along which that file is cut at its middle as it opens.
     pub viewer_cut: Option<usize>,
+    /// How the plane of that cut leans from the axis, in degrees.
+    pub viewer_tilt: [i8; 2],
     /// The window that signs the project of the suite opens with the window.
     pub sign_window: bool,
 }
 
 /// Opens what the command line asked to see besides the project.
-fn open_asked(app: &mut App, viewer: Option<PathBuf>, cut: Option<usize>, sign: bool) {
+fn open_asked(app: &mut App, viewer: Option<PathBuf>, cut: Option<(usize, [i8; 2])>, sign: bool) {
     if let Some(file) = viewer {
         app.open_viewer(crate::modelview::Origin::File(file));
-        if let Some(axis) = cut {
-            app.cut_viewer(axis);
+        if let Some((axis, tilt)) = cut {
+            app.cut_viewer(axis, tilt.map(f64::from));
         }
     }
     if sign {
@@ -4192,7 +4194,8 @@ fn make_window(start: Start) -> Result<(Window, SketchEditor, StartView), String
 pub fn run(start: Start) -> Result<(), String> {
     let (size, minimum) = (start.ui.window_size, start.ui.window_min);
     let (window, config) = (start.window, start.config.clone());
-    let (viewer, cut, sign) = (start.viewer.clone(), start.viewer_cut, start.sign_window);
+    let cut = start.viewer_cut.map(|axis| (axis, start.viewer_tilt));
+    let (viewer, sign) = (start.viewer.clone(), start.sign_window);
     let settings = config
         .as_ref()
         .and_then(|p| std::fs::read_to_string(p).ok())
@@ -4331,7 +4334,8 @@ pub fn run_shot(start: Start, request: ShotRequest) -> Result<(), String> {
         return Err(format!("{} is not a file", missing.display()));
     }
     let (window, config) = (start.window, start.config.clone());
-    let (viewer, cut, sign) = (start.viewer.clone(), start.viewer_cut, start.sign_window);
+    let cut = start.viewer_cut.map(|axis| (axis, start.viewer_tilt));
+    let (viewer, sign) = (start.viewer.clone(), start.sign_window);
     let settings = config
         .as_ref()
         .and_then(|p| std::fs::read_to_string(p).ok())
