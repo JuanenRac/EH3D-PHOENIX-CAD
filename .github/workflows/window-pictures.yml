@@ -71,7 +71,7 @@ jobs:
             (
               cd "$work"
               asked() { xvfb-run -a -s "-screen 0 2560x1440x24" timeout 90 "$exe" gui "$@" --view model --lang "$lang" --size 2100x1080 --theme forge --wait 12; }
-              asked box.phoenixproj --viewer box.stl --viewer-cut z --shot "$out/$lang/phoenix-cad-03-view.png"
+              asked box.phoenixproj --viewer box.stl --viewer-cut z:20,25 --shot "$out/$lang/phoenix-cad-03-view.png"
               asked box.eh3d --sign-window --config pictures.cfg --shot "$out/$lang/phoenix-cad-04-signature.png"
             )
           done

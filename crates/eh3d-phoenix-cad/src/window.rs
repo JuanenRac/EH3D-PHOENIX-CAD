@@ -7289,8 +7289,9 @@ mod tests {
     #[test]
     fn a_shape_the_step_file_does_not_draw_gives_the_code_022_and_writes_nothing() {
         let dir = Scratch::new("shape");
-        // the example has rounded corners and a lid with a lip
-        let mut w = example();
+        // the STEP file does not draw cooling fins
+        let mut w = fresh();
+        w.add_step(NewStep::Fins);
         let target = dir.0.join("box.step");
         assert!(!w.export_to(Format::Step, &target, true));
         assert!(!target.exists());

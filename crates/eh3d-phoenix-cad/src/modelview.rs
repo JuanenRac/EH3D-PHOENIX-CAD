@@ -585,29 +585,74 @@ const HATCH: [u8; 4] = [150, 94, 48, 255];
 /// How far apart the lines across the face of a cut are, in pixels of the picture.
 const HATCH_EVERY: usize = 9;
 
-/// A cut of the view: what is beyond a coordinate along one axis is not drawn, so that the inside
-/// is seen. Nothing of the file is changed.
+/// A cut of the view: what is beyond a plane is not drawn, so that the inside is seen. The plane
+/// is square to one axis, or leans from it. Nothing of the file is changed.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Cut {
     /// The axis: 0 for x, 1 for y, 2 for z.
     pub axis: usize,
-    /// The coordinate in millimetres; what is larger than it is cut away.
+    /// How far the plane lies along its normal, in millimetres; what is farther is cut away.
     pub at: f64,
+    /// How the normal of the plane leans from the axis, in degrees: towards the next axis (y
+    /// after x, z after y, x after z) and towards the one after it. Zero is square to the axis.
+    pub tilt: [f64; 2],
 }
 
+/// The most degrees a cut leans each way.
+pub const TILT_MAX: f64 = 80.0;
+
 impl Cut {
-    /// The cut at a share (0 to 1) of the way along the box of the solid.
+    /// The cut square to an axis at a share (0 to 1) of the way along the box of the solid.
     pub fn of(solid: &Solid, axis: usize, share: f64) -> Cut {
-        let axis = axis.min(2);
-        let share = share.clamp(0.0, 1.0);
-        Cut {
-            axis,
-            at: solid.low[axis] + (solid.high[axis] - solid.low[axis]) * share,
-        }
+        Cut::tilted(solid, axis, [0.0; 2], share)
     }
 
-    fn keeps(self, coordinate: f64) -> bool {
-        coordinate <= self.at + 1e-9
+    /// The cut that leans from an axis, at a share (0 to 1) of the way across the box of the
+    /// solid, seen along its normal.
+    pub fn tilted(solid: &Solid, axis: usize, tilt: [f64; 2], share: f64) -> Cut {
+        let mut cut = Cut {
+            axis: axis.min(2),
+            at: 0.0,
+            tilt: tilt.map(|t| if t.is_finite() { t } else { 0.0 }),
+        };
+        cut.tilt = cut.tilt.map(|t| t.clamp(-TILT_MAX, TILT_MAX));
+        let share = share.clamp(0.0, 1.0);
+        let normal = cut.normal();
+        let (mut low, mut high) = (f64::INFINITY, f64::NEG_INFINITY);
+        for corner in 0..8 {
+            let p = [0, 1, 2].map(|k| {
+                if corner >> k & 1 == 0 {
+                    solid.low[k]
+                } else {
+                    solid.high[k]
+                }
+            });
+            let height = dot(normal, p);
+            low = low.min(height);
+            high = high.max(height);
+        }
+        cut.at = low + (high - low) * share;
+        cut
+    }
+
+    /// The unit normal of the plane, towards what is cut away.
+    pub fn normal(self) -> Point3 {
+        let axis = self.axis.min(2);
+        let [first, second] = self.tilt.map(f64::to_radians);
+        let mut normal = [0.0; 3];
+        normal[axis] = first.cos() * second.cos();
+        normal[(axis + 1) % 3] = first.sin() * second.cos();
+        normal[(axis + 2) % 3] = second.sin();
+        normal
+    }
+
+    /// How far a point lies along the normal.
+    pub fn height(self, point: Point3) -> f64 {
+        dot(self.normal(), point)
+    }
+
+    fn keeps(self, height: f64) -> bool {
+        height <= self.at + 1e-9
     }
 }
 
@@ -619,20 +664,53 @@ pub struct Section {
     /// The area of the material that the plane goes through, in square millimetres, when the
     /// surface is closed.
     pub area_mm2: Option<f64>,
+    /// The length of the whole outline, holes included, in millimetres.
+    pub length_mm: f64,
+    /// The width and the height of the smallest rectangle in the plane that holds the outline,
+    /// along the two other axes (as they lie in the plane), in millimetres; none when the plane
+    /// meets nothing.
+    pub size_mm: Option<[f64; 2]>,
+}
+
+impl Section {
+    /// The points where the outline turns or ends: not those that only join two pieces of one
+    /// straight side.
+    pub fn corners(&self) -> Vec<Point3> {
+        let key = |p: Point3| p.map(|v| (v * 1.0e6).round() as i64);
+        let mut ends: BTreeMap<[i64; 3], (Point3, Vec<Point3>)> = BTreeMap::new();
+        for [a, b] in &self.lines {
+            let Some(way) = unit(sub(*b, *a)) else {
+                continue;
+            };
+            ends.entry(key(*a)).or_insert((*a, Vec::new())).1.push(way);
+            ends.entry(key(*b)).or_insert((*b, Vec::new())).1.push(way);
+        }
+        ends.into_values()
+            .filter(|(_, ways)| match ways.as_slice() {
+                [one, two] => {
+                    let turn = cross(*one, *two);
+                    dot(turn, turn) > 1.0e-10
+                }
+                _ => true,
+            })
+            .map(|(point, _)| point)
+            .collect()
+    }
 }
 
 /// The section of a solid by the plane of a cut. A corner on the plane counts as under it, so a
 /// cut at the far side of the solid meets nothing.
 pub fn section(solid: &Solid, cut: Cut) -> Section {
     let axis = cut.axis.min(2);
-    let (a, b) = ((axis + 1) % 3, (axis + 2) % 3);
-    let mut across = [0.0; 3];
-    across[axis] = 1.0;
+    let across = cut.normal();
+    let square = cut.tilt == [0.0; 2];
     let mut lines = Vec::new();
     let mut twice = 0.0;
+    let mut length = 0.0;
     for t in &solid.triangles {
         let corners = t.corners.map(|v| solid.points[v as usize]);
-        let above = corners.map(|p| p[axis] > cut.at);
+        let heights = corners.map(|p| dot(across, p));
+        let above = heights.map(|h| h > cut.at);
         let mut ends = [[0.0; 3]; 2];
         let mut found = 0;
         for k in 0..3 {
@@ -642,30 +720,51 @@ pub fn section(solid: &Solid, cut: Cut) -> Section {
             }
             // from the corner under the plane to the one over it, so that the two triangles of a
             // side give the same point
-            let (low, high) = if above[k] {
-                (corners[next], corners[k])
-            } else {
-                (corners[k], corners[next])
-            };
-            let share = (cut.at - low[axis]) / (high[axis] - low[axis]);
-            let mut point = [0, 1, 2].map(|i| low[i] + (high[i] - low[i]) * share);
-            point[axis] = cut.at;
+            let (low, high) = if above[k] { (next, k) } else { (k, next) };
+            let share = (cut.at - heights[low]) / (heights[high] - heights[low]);
+            let (from, to) = (corners[low], corners[high]);
+            let mut point = [0, 1, 2].map(|i| from[i] + (to[i] - from[i]) * share);
+            if square {
+                point[axis] = cut.at;
+            }
             ends[found] = point;
             found += 1;
         }
         if found < 2 {
             continue;
         }
-        // round the material counter-clockwise seen from the far end of the axis
+        // round the material counter-clockwise seen from the far end of the normal
         if dot(sub(ends[1], ends[0]), cross(across, t.normal)) < 0.0 {
             ends.swap(0, 1);
         }
-        twice += ends[0][a] * ends[1][b] - ends[1][a] * ends[0][b];
+        twice += dot(across, cross(ends[0], ends[1]));
+        let piece = sub(ends[1], ends[0]);
+        length += dot(piece, piece).sqrt();
         lines.push(ends);
     }
+    // the two directions in the plane that the size is told along
+    let mut first = [0.0; 3];
+    first[usize::from(axis == 0)] = 1.0;
+    let lean = dot(first, across);
+    let right = unit([0, 1, 2].map(|k| first[k] - across[k] * lean)).unwrap_or([0.0; 3]);
+    let up = cross(across, right);
+    let size_mm = (!lines.is_empty()).then(|| {
+        [right, up].map(|way| {
+            let (low, high) = lines
+                .iter()
+                .flatten()
+                .map(|p| dot(way, *p))
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), v| {
+                    (low.min(v), high.max(v))
+                });
+            high - low
+        })
+    });
     Section {
         lines,
         area_mm2: solid.closed.then_some((twice / 2.0).max(0.0)),
+        length_mm: length,
+        size_mm,
     }
 }
 
@@ -943,7 +1042,8 @@ pub fn render(solid: &Solid, pose: &Pose, width: usize, height: usize, look: Loo
         ..*pose
     };
     let pane = (wide as f64, tall as f64);
-    let axis = look.cut.map_or(0, |cut| cut.axis.min(2));
+    // where a point lies along the normal of the cut
+    let normal = look.cut.map_or([0.0; 3], Cut::normal);
     // the light comes from over the left shoulder of the person
     let light = unit([-0.35, 0.55, -0.75]).unwrap_or([0.0, 0.0, -1.0]);
     // where each axis goes: to the right, up and away. Worked out once for the whole picture
@@ -982,7 +1082,7 @@ pub fn render(solid: &Solid, pose: &Pose, width: usize, height: usize, look: Loo
         };
         Some(Painted {
             at: t.corners.map(|v| corners[v as usize]),
-            along: t.corners.map(|v| solid.points[v as usize][axis]),
+            along: t.corners.map(|v| dot(normal, solid.points[v as usize])),
             shade: match solid.smooth.get(index).filter(|_| look.smooth) {
                 Some(corners) => corners.map(|n| shade(n.map(f64::from))),
                 None => [shade(t.normal); 3],
@@ -995,10 +1095,10 @@ pub fn render(solid: &Solid, pose: &Pose, width: usize, height: usize, look: Loo
     // the face that closes the cut and the outline round it
     let cap = look.cut.filter(|_| look.cap && solid.closed);
     let plane = cap.and_then(|cut| {
-        let grows = axes[axis];
+        let grows = turn(normal);
         // only a person on the side that was cut away sees the face
         (grows.2 < -1e-9).then(|| Plane {
-            offset: cut.at - centre[axis],
+            offset: cut.at - dot(normal, centre),
             grows,
             scale,
         })
@@ -1181,7 +1281,7 @@ pub fn pick(
             let corner = solid.points[v as usize];
             if picture
                 .cut
-                .is_some_and(|cut| !cut.keeps(corner[cut.axis.min(2)]))
+                .is_some_and(|cut| !cut.keeps(cut.height(corner)))
             {
                 continue;
             }
@@ -1198,6 +1298,58 @@ pub fn pick(
         }
     }
     found.map(|(_, _, corner)| corner)
+}
+
+/// What is picked on a cut solid: the nearest corner within `radius` pixels, of the solid or of
+/// the outline of the section, and when there is none the point of that outline nearest to the
+/// place, so that a wall can be measured anywhere along it.
+pub fn pick_cut(
+    solid: &Solid,
+    pose: &Pose,
+    picture: &Picture,
+    at: (f64, f64),
+    radius: f64,
+    section: &Section,
+) -> Option<Point3> {
+    let pane = (picture.width as f64, picture.height as f64);
+    let slack = slack(solid);
+    let apart = |point: Point3| {
+        let (x, y, depth) = on_pane(solid, pose, pane, point);
+        let apart = (x - at.0).hypot(y - at.1);
+        (apart <= radius && picture.sees(x, y, depth, slack)).then_some(apart)
+    };
+    let nearest = |points: Vec<Point3>| {
+        points
+            .into_iter()
+            .filter_map(|p| apart(p).map(|a| (a, p)))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+    };
+    let own = pick(solid, pose, picture, at, radius).into_iter().collect();
+    // a corner of the section wins over one of the solid behind it on the same pixel
+    let corner = match (nearest(section.corners()), nearest(own)) {
+        (Some(cut), Some(solid)) if solid.0 + 0.5 < cut.0 => Some(solid),
+        (cut, solid) => cut.or(solid),
+    };
+    if let Some((_, point)) = corner {
+        return Some(point);
+    }
+    let on_sides = section
+        .lines
+        .iter()
+        .map(|[a, b]| {
+            let (ax, ay, _) = on_pane(solid, pose, pane, *a);
+            let (bx, by, _) = on_pane(solid, pose, pane, *b);
+            let (dx, dy) = (bx - ax, by - ay);
+            let long = dx * dx + dy * dy;
+            let share = if long > 0.0 {
+                (((at.0 - ax) * dx + (at.1 - ay) * dy) / long).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            [0, 1, 2].map(|k| a[k] + (b[k] - a[k]) * share)
+        })
+        .collect();
+    nearest(on_sides).map(|(_, point)| point)
 }
 
 /// Where a corner of the solid is on the pane.

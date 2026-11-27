@@ -120,6 +120,8 @@ pub struct WindowArgs {
     /// The axis (0 for x, 1 for y, 2 for z) along which that file is cut at its middle as it
     /// opens (`--viewer-cut x|y|z`).
     pub viewer_cut: Option<usize>,
+    /// How the plane of that cut leans from the axis, in whole degrees (`--viewer-cut z:30,15`).
+    pub viewer_tilt: [i8; 2],
     /// The window that signs the project of the suite is opened at once (`--sign-window`).
     pub sign_window: bool,
     /// The picture mode: the window opens, saves a PNG file and closes by itself.
@@ -149,7 +151,7 @@ struct PictureOptions {
     replace: bool,
 }
 
-/// Reads the arguments of the window (after an optional leading `gui`): `--shot FILE.png`, `--size WxH`, `--theme`, `--wait N`, `--replace`, `--lang CODE`, `--view model|sketch`, `--window model|review|compact`, `--config FILE`, `--open FILE`, `--viewer FILE`, `--viewer-cut x|y|z`, `--sign-window` and bare
+/// Reads the arguments of the window (after an optional leading `gui`): `--shot FILE.png`, `--size WxH`, `--theme`, `--wait N`, `--replace`, `--lang CODE`, `--view model|sketch`, `--window model|review|compact`, `--config FILE`, `--open FILE`, `--viewer FILE`, `--viewer-cut x|y|z[:DEG[,DEG]]`, `--sign-window` and bare
 /// file names, of which at most `max_files` are accepted. The answer for a mistake is the reason.
 pub fn parse_window_args(args: &[String], max_files: usize) -> Result<WindowArgs, String> {
     let args = if args.first().is_some_and(|a| a == "gui") {
@@ -219,13 +221,12 @@ pub fn parse_window_args(args: &[String], max_files: usize) -> Result<WindowArgs
                 parsed.viewer = Some(PathBuf::from(path));
             }
             "--viewer-cut" => {
-                let axis = iter.next().ok_or("--viewer-cut needs x, y or z")?;
-                parsed.viewer_cut = Some(match axis.as_str() {
-                    "x" | "X" => 0,
-                    "y" | "Y" => 1,
-                    "z" | "Z" => 2,
-                    _ => return Err("--viewer-cut is x, y or z".to_owned()),
-                });
+                let text = iter.next().ok_or("--viewer-cut needs x, y or z")?;
+                let (axis, tilt) = parse_cut(text).ok_or(
+                    "--viewer-cut is x, y or z, and after a colon one or two leans from -80 to 80 degrees, as z:30,-15",
+                )?;
+                parsed.viewer_cut = Some(axis);
+                parsed.viewer_tilt = tilt;
             }
             "--sign-window" => parsed.sign_window = true,
             "--open" => {
@@ -259,6 +260,35 @@ pub fn parse_window_args(args: &[String], max_files: usize) -> Result<WindowArgs
         }
     };
     Ok(parsed)
+}
+
+/// An axis, and after a colon how the cut leans from it: one or two whole degrees.
+fn parse_cut(text: &str) -> Option<(usize, [i8; 2])> {
+    let (axis, leans) = match text.split_once(':') {
+        Some((axis, leans)) => (axis, Some(leans)),
+        None => (text, None),
+    };
+    let axis = match axis {
+        "x" | "X" => 0,
+        "y" | "Y" => 1,
+        "z" | "Z" => 2,
+        _ => return None,
+    };
+    let mut tilt = [0i8; 2];
+    if let Some(leans) = leans {
+        let mut parts = leans.split(',');
+        for (k, part) in parts.by_ref().take(2).enumerate() {
+            tilt[k] = part
+                .trim()
+                .parse::<i8>()
+                .ok()
+                .filter(|d| (-80..=80).contains(d))?;
+        }
+        if parts.next().is_some() {
+            return None;
+        }
+    }
+    Some((axis, tilt))
 }
 
 fn add_file(parsed: &mut WindowArgs, path: &str, max_files: usize) -> Result<(), String> {
@@ -296,6 +326,16 @@ mod tests {
         let parsed =
             parse_window_args(&args(&["--viewer", "a.stl", "--viewer-cut", "Y"]), 1).unwrap();
         assert_eq!((parsed.viewer_cut, parsed.sign_window), (Some(1), false));
+        assert_eq!(parsed.viewer_tilt, [0, 0]);
+        for (text, tilt) in [("z:30", [30, 0]), ("x:-15,80", [-15, 80])] {
+            let parsed =
+                parse_window_args(&args(&["--viewer", "a.stl", "--viewer-cut", text]), 1).unwrap();
+            assert_eq!(parsed.viewer_tilt, tilt, "{text}");
+        }
+        for text in ["z:", "z:81", "z:1,2,3", "z:ten", ":5"] {
+            let line = ["--viewer", "a.stl", "--viewer-cut", text];
+            assert!(parse_window_args(&args(&line), 1).is_err(), "{text}");
+        }
         assert!(
             parse_window_args(&args(&["--sign-window"]), 1)
                 .unwrap()
