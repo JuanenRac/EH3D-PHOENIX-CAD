@@ -12,7 +12,7 @@ All notable changes to this project are documented here.
 
 - **The foot of a post and the centring lip in the STEP file:** the conical foot of a post and the centring lip of the lid are written, with the holes of the lid on the side of the ring where they open; a hole that opens over the lip is refused by name. The STEP file of each of these shapes is read back by the program as a closed surface with its volume.
 
-- **A cut that leans:** the plane that cuts the view can lean up to 80 degrees from its axis in two directions, with a slider for each or `--viewer-cut z:30,15` in the picture mode; the face that closes the cut and the area follow it.
+- **A cut that leans:** the plane that cuts the view can lean up to 80 degrees from its axis in two directions, with a slider for each or `--viewer-cut z:30,15` in the picture mode; the face that closes the cut and the area follow it. The position in millimetres is told while the cut is square to its axis, and the figures of the section have a row of their own.
 
 - **Measuring on the section:** next to the area, the view tells the width, the height and the length of the outline of the section, and the distance can be taken between its corners or any points of its sides.
 

@@ -246,6 +246,11 @@ impl App {
                             let slider =
                                 egui::Slider::new(&mut view.cut_share, 0.0..=1.0).show_value(false);
                             ui.add(slider);
+                            // where a square cut is, next to its slider: the coordinate it cuts at
+                            if view.cut_tilt == [0.0; 2] {
+                                let at = Cut::of(solid, view.cut_axis, view.cut_share).at;
+                                ui.label(format!("{at:.2} mm"));
+                            }
                             ui.label(Msg::MvCutTilt.tr(lang));
                             for tilt in &mut view.cut_tilt {
                                 let lean = egui::Slider::new(tilt, -TILT_MAX..=TILT_MAX)
@@ -255,13 +260,14 @@ impl App {
                             }
                             let cut =
                                 Cut::tilted(solid, view.cut_axis, view.cut_tilt, view.cut_share);
-                            ui.label(format!("{:.2} mm", cut.at));
                             if view.section.as_ref().map(|s| s.0) != Some(cut) {
                                 view.section = Some((cut, modelview::section(solid, cut)));
                             }
                             let Some((_, section)) = &view.section else {
                                 return;
                             };
+                            // the figures of the section have a row of their own
+                            ui.end_row();
                             if let Some([width, height]) = section.size_mm {
                                 let words =
                                     [width, height, section.length_mm].map(|v| format!("{v:.2}"));
