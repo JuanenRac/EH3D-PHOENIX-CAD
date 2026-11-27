@@ -153,7 +153,7 @@ jobs:
           mkdir "$name"
           # one program: the command line and, with the same file, the window (`eh3d-phoenix-cad gui`)
           cp "target/${MATRIX_TARGET}/release/eh3d-phoenix-cad${MATRIX_EXT}" "$name/"
-          cp LICENSE README.md CHANGELOG.md "$name/"
+          cp LICENSE README.md CHANGELOG.md docs/THIRD_PARTY_NOTICES "$name/"
           # the icon of the program, the default settings and the sample files (projects, sketches and part libraries), from the simplest to a whole assembly
           cp images/brand/app.ico images/brand/icon-256.png "$name/"
           cp crates/eh3d-phoenix-cad/*.default.cfg "$name/"

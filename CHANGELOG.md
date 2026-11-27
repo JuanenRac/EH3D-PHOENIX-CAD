@@ -5,6 +5,7 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 - **Ready for the longer minimum of a new key password:** EH3D-COMMON now asks for at least 12 characters in a new password of a signing key; the window already shows the number the library asks, so it says 12 once the build takes a version that has it (the build takes 0.3.7, which asks 8). The tests no longer suppose 8.
+- **Third-party notices in every package (`docs/THIRD_PARTY_NOTICES`):** the packages of the releases now carry the copyright notices and licence texts of the Rust crates and of the data the program is built with, and the CI fails when a new dependency or licence is not in the file.
 
 - **A DXF drawing in feet is no longer read as millimetres:** with the automatic unit, a header that declared feet, mils, yards, microns or decimetres was taken for millimetres, so the drawing came in at the wrong size; these units are followed now and any other declared unit is refused, so that the unit is given by hand.
 
