@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **Ready for the longer minimum of a new key password:** EH3D-COMMON now asks for at least 12 characters in a new password of a signing key; the window already shows the number the library asks, so it says 12 once the build takes a version that has it (the build takes 0.3.7, which asks 8). The tests no longer suppose 8.
+
 - **A DXF drawing in feet is no longer read as millimetres:** with the automatic unit, a header that declared feet, mils, yards, microns or decimetres was taken for millimetres, so the drawing came in at the wrong size; these units are followed now and any other declared unit is refused, so that the unit is given by hand.
 
 - **The STEP file holds extrusions, pockets and cooling fins:** they are part of the solid of the box, with flat sides and the arcs and circles of the sketch as exact cylinders; an island of a pocket through its face is a solid of its own. A box that had them was refused.

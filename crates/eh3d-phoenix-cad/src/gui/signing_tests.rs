@@ -50,7 +50,7 @@ fn a_key_made_in_the_window_has_a_password_and_only_its_path_is_remembered() {
     let dir = Scratch::new("gui-key");
     let (mut app, _) = saved(&dir);
     // made up for this run
-    let typed = format!("made-up-{}", std::process::id());
+    let typed = format!("made-up-for-{}", std::process::id());
     let key = dir.path("mine.key");
     app.open_signing();
     // two words that differ make nothing and are wiped
