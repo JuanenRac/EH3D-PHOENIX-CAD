@@ -2605,7 +2605,9 @@ mod tests {
         let mut e = enclosure(&[]);
         for (n, kind) in ["tube", "bolt", "flat", "hex", "angle"].iter().enumerate() {
             let at = [150 + 60 * n as i64, 0, 0];
-            place(&mut e, n as u64 + 1, kind, at, Axis::PlusZ, 0, None);
+            // only a profile is cut to a length
+            let cut = (*kind == "tube").then_some(40);
+            place(&mut e, n as u64 + 1, kind, at, Axis::PlusZ, 0, cut);
         }
         let mesh = Settings::defaults().mesh;
         let text = export_step_with(&e, &mesh).unwrap();
