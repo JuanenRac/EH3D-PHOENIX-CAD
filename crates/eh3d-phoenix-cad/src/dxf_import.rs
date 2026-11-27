@@ -48,37 +48,56 @@ pub fn unit_nm(word: &str) -> Option<i64> {
     }
 }
 
-/// The unit that the header of a text DXF drawing declares in `$INSUNITS`, as the word of
-/// [`UNITS`] (`in` for 1, `mm` for 4, `cm` for 5 and `m` for 6); `None` when the header has no
-/// such variable or declares another unit or none (0). Refused with `PHOENIX-CAD-035` when the
-/// text is not a text DXF drawing.
-pub fn header_unit(text: &str) -> Result<Option<&'static str>, CadError> {
+/// The number of the variable `$INSUNITS` of the header of a text DXF drawing, if it has one.
+fn header_code(text: &str) -> Result<Option<i32>, CadError> {
     let pairs = parse_pairs(text)?;
-    let value = pairs
+    Ok(pairs
         .windows(2)
         .find(|w| w[0] == (9, "$INSUNITS") && w[1].0 == 70)
-        .and_then(|w| w[1].1.parse::<i32>().ok());
-    Ok(match value {
-        Some(1) => Some("in"),
-        Some(4) => Some("mm"),
-        Some(5) => Some("cm"),
-        Some(6) => Some("m"),
-        _ => None,
-    })
+        .and_then(|w| w[1].1.parse::<i32>().ok()))
+}
+
+/// The units of `$INSUNITS` that an automatic unit follows: the number of the header, the word
+/// and the nanometres of one.
+const HEADER_UNITS: [(i32, &str, i64); 9] = [
+    (1, "in", 25_400_000),
+    (2, "ft", 304_800_000),
+    (4, "mm", 1_000_000),
+    (5, "cm", 10_000_000),
+    (6, "m", 1_000_000_000),
+    (9, "mil", 25_400),
+    (10, "yd", 914_400_000),
+    (13, "um", 1_000),
+    (14, "dm", 100_000_000),
+];
+
+/// The unit that the header of a text DXF drawing declares in `$INSUNITS`, as a word (`in` for
+/// 1, `ft` for 2, `mm` for 4, `cm` for 5, `m` for 6, `mil` for 9, `yd` for 10, `um` for 13 and
+/// `dm` for 14); `None` when the header has no such variable or declares another unit or none
+/// (0). Refused with `PHOENIX-CAD-035` when the text is not a text DXF drawing.
+pub fn header_unit(text: &str) -> Result<Option<&'static str>, CadError> {
+    let code = header_code(text)?;
+    Ok(HEADER_UNITS.iter().find(|u| Some(u.0) == code).map(|u| u.1))
 }
 
 /// The nanometres of one unit of a drawing whose unit was asked for as `auto`, with a line in the
 /// language that says where the unit came from: the one the header declares, or millimetres when
-/// it declares none.
+/// it declares none (no variable, or 0). A header that declares a unit that is not followed
+/// (kilometres, miles and the like) is refused with `PHOENIX-CAD-035` instead of being taken for
+/// millimetres; the unit has to be given then.
 pub fn auto_unit(text: &str, lang: Lang) -> Result<(i64, String), CadError> {
-    let (word, msg) = match header_unit(text)? {
-        Some(word) => (word, Msg::DxfUnitRead),
-        None => ("mm", Msg::DxfUnitDefault),
+    let (nm, word, msg) = match header_code(text)? {
+        None | Some(0) => (1_000_000, "mm", Msg::DxfUnitDefault),
+        Some(code) => match HEADER_UNITS.iter().find(|u| u.0 == code) {
+            Some(&(_, word, nm)) => (nm, word, Msg::DxfUnitRead),
+            None => {
+                return Err(CadError::SketchFile(format!(
+                    "$INSUNITS = {code}: --unit mm|cm|m|in"
+                )))
+            }
+        },
     };
-    Ok((
-        unit_nm(word).unwrap_or(1_000_000),
-        fill(msg.tr(lang), &[word]),
-    ))
+    Ok((nm, fill(msg.tr(lang), &[word])))
 }
 
 /// What was read as lines of text in the language: how many lines, circles and arcs, then one
@@ -732,8 +751,17 @@ mod tests {
         for (code, word) in [("1", "in"), ("4", "mm"), ("5", "cm"), ("6", "m")] {
             assert_eq!(header_unit(&with(code)).unwrap(), Some(word), "{code}");
         }
-        // unitless, an unknown unit and a value that is not a number say nothing
-        for code in ["0", "2", "14", "x", ""] {
+        for (code, word) in [
+            ("2", "ft"),
+            ("9", "mil"),
+            ("10", "yd"),
+            ("13", "um"),
+            ("14", "dm"),
+        ] {
+            assert_eq!(header_unit(&with(code)).unwrap(), Some(word), "{code}");
+        }
+        // unitless, a unit that is not followed and a value that is not a number say nothing
+        for code in ["0", "7", "x", ""] {
             assert_eq!(header_unit(&with(code)).unwrap(), None, "{code:?}");
         }
         // no header, and a variable with the wrong group code
@@ -746,6 +774,27 @@ mod tests {
             header_unit("hello\nworld\n").unwrap_err().code(),
             "PHOENIX-CAD-035"
         );
+    }
+
+    #[test]
+    fn a_drawing_in_feet_is_not_taken_for_millimetres_and_an_odd_unit_is_refused() {
+        let header =
+            |unit: &str| format!("0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n{unit}\n0\nENDSEC\n");
+        for (code, nm) in [
+            ("2", 304_800_000),
+            ("9", 25_400),
+            ("10", 914_400_000),
+            ("13", 1_000),
+            ("14", 100_000_000),
+        ] {
+            assert_eq!(auto_unit(&header(code), Lang::En).unwrap().0, nm, "{code}");
+        }
+        for code in ["3", "7", "8", "11", "21", "-1"] {
+            let err = auto_unit(&header(code), Lang::En).unwrap_err();
+            assert_eq!(err.code(), "PHOENIX-CAD-035", "{code}");
+            assert!(err.to_string().contains(code), "{err}");
+        }
+        assert_eq!(auto_unit(&header("0"), Lang::En).unwrap().0, 1_000_000);
     }
 
     #[test]

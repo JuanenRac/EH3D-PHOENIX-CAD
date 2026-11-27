@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- **A DXF drawing in feet is no longer read as millimetres:** with the automatic unit, a header that declared feet, mils, yards, microns or decimetres was taken for millimetres, so the drawing came in at the wrong size; these units are followed now and any other declared unit is refused, so that the unit is given by hand.
+
 - **The STEP file holds extrusions, pockets and cooling fins:** they are part of the solid of the box, with flat sides and the arcs and circles of the sketch as exact cylinders; an island of a pocket through its face is a solid of its own. A box that had them was refused.
 
 - **The STEP file holds the placed parts and the turned and swept bodies:** each follows the box as a solid named after it, with a flat face for each triangle of its surface (round faces are the sides of the circle table). A model that had them was refused.
