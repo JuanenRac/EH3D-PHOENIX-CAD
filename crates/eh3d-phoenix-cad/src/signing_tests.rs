@@ -269,7 +269,7 @@ fn a_key_under_a_password_signs_only_with_it_and_the_password_is_never_told() {
     let dir = Scratch::new("sign-locked");
     let (file, _) = signed_up(&dir);
     // made up for this run
-    let typed = format!("made-up-{}", std::process::id());
+    let typed = format!("made-up-for-{}", std::process::id());
     let key = locked_key(&dir, "locked.key", &typed);
     assert!(matches!(
         protection(&key),
@@ -294,10 +294,11 @@ fn a_key_under_a_password_signs_only_with_it_and_the_password_is_never_told() {
 #[test]
 fn a_new_key_can_be_made_under_a_password_and_an_old_one_protected() {
     let dir = Scratch::new("sign-protect");
-    let typed = format!("made-up-{}", std::process::id());
+    let typed = format!("made-up-for-{}", std::process::id());
     let short = new_locked_key(&dir.path("short.key"), &Password::new("abc".to_owned()));
     let error = short.unwrap_err();
-    assert!(key_words(&error, &dir.path("short.key"), Lang::En).contains('8'));
+    let least = eh3d_project::keylock::MIN_PASSWORD_CHARS.to_string();
+    assert!(key_words(&error, &dir.path("short.key"), Lang::En).contains(&least));
     assert!(!dir.path("short.key").exists());
     new_locked_key(&dir.path("new.key"), &Password::new(typed.clone())).unwrap();
     assert!(matches!(
@@ -353,7 +354,7 @@ fn the_commands_take_the_password_from_a_line_and_replace_only_when_told() {
     let dir = Scratch::new("sign-cli-locked");
     let file = dir.path("p.eh3d");
     eh3dfile::save_cad_project(&file, b"project", &SaveSettings::default()).unwrap();
-    let typed = format!("made-up-{}", std::process::id());
+    let typed = format!("made-up-for-{}", std::process::id());
     let key = locked_key(&dir, "locked.key", &typed);
     let other = dir.path("other.key");
     new_key(&other).unwrap();
