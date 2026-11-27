@@ -9,3 +9,10 @@ edition = "2021"
 rust-version = "1.88"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/JuanenRac/EH3D-PHOENIX-CAD"
+
+# Argon2id is meant to cost time and memory: unoptimised it would cost the tests many times more
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3

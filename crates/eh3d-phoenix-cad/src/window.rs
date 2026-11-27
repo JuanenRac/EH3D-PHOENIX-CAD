@@ -58,6 +58,7 @@ use crate::uiconfig::UiSettings;
 use crate::units::{format_angle, format_length, parse_angle, parse_length, Count, Unit};
 use crate::vars::{Param, Variables};
 use crate::{CadError, Length};
+use eh3d_project::suiteview;
 use std::path::{Path, PathBuf};
 
 /// The extensions of the project files that the window opens and writes.
@@ -580,6 +581,11 @@ pub struct Window {
     pub read_only: bool,
     /// True when the project has changes that are not saved.
     pub dirty: bool,
+    /// The project file of the suite a write was refused for because another program saved it
+    /// since it was read here, until the person chooses what to do.
+    pub changed: Option<PathBuf>,
+    /// The project file of the suite the window read or saved, with its mark at that moment.
+    seen: Option<(PathBuf, String)>,
     /// The recipe of the box.
     pub mech: Mechanical,
     /// What is selected in the tree.
@@ -799,6 +805,8 @@ impl Window {
             pending: Vec::new(),
             drag: None,
             history: History::new(settings.undo_depth),
+            changed: None,
+            seen: None,
             info: Info {
                 outer: [Length::ZERO; 3],
                 inner: [Length::ZERO; 3],
@@ -859,6 +867,8 @@ impl Window {
         self.document = Document::new();
         (self.settings.unit, self.settings.decimals) = self.base_units;
         self.path = None;
+        self.changed = None;
+        self.seen = None;
         self.read_only = false;
         self.dirty = false;
         self.history.clear();
@@ -4182,9 +4192,14 @@ impl Window {
 
     fn read_project(&mut self, path: &Path) -> Result<(), Status> {
         let limit = self.settings.mechanical.max_bytes.saturating_add(1 << 20);
+        // the mark is taken before the bytes are read: a save of another program between the two
+        // is seen as a change
+        let mark = Self::mark_of(path);
         // a project file, or the branch `cad` of a project file of the suite (`.eh3d`)
         let bytes = eh3dfile::load_project_bytes(path, limit as u64).map_err(Status::Error)?;
-        self.read_project_bytes(&bytes, Some(path))
+        self.read_project_bytes(&bytes, Some(path))?;
+        self.seen = mark;
+        Ok(())
     }
 
     /// Opens a project from its bytes; `path` is the file it came from, if it came from one (a
@@ -4237,6 +4252,8 @@ impl Window {
         self.read_only = opened.read_only || damaged.is_some();
         self.active_sketch = None;
         self.path = path.map(Path::to_path_buf);
+        self.changed = None;
+        self.seen = None;
         self.dirty = false;
         self.history.clear();
         self.selection = Selection::Body;
@@ -4257,6 +4274,60 @@ impl Window {
         Ok(())
     }
 
+    /// The project file of the suite at `path` with its mark as it is now; nothing for another
+    /// kind of file or one that cannot be read.
+    fn mark_of(path: &Path) -> Option<(PathBuf, String)> {
+        if !eh3dfile::is_eh3d(path) || !path.is_file() {
+            return None;
+        }
+        let mark = suiteview::view(path, eh3dfile::BRANCH).ok()?.own_hash?;
+        Some((path.to_path_buf(), mark))
+    }
+
+    /// The mark of `file` taken when the window read or saved it.
+    pub(crate) fn seen_mark(&self, file: &Path) -> Option<&str> {
+        self.seen
+            .as_ref()
+            .filter(|(seen, _)| suiteview::same_file(seen, file))
+            .map(|(_, mark)| mark.as_str())
+    }
+
+    /// Whether `file` still holds what the window read or saved. It is asked right before every
+    /// write into it: when another program saved it meanwhile, the window says so, remembers it in
+    /// [`Window::changed`] and nothing is to be written. A file the window did not read passes.
+    pub(crate) fn is_unchanged(&mut self, file: &Path) -> bool {
+        let unchanged = self
+            .seen_mark(file)
+            .is_none_or(|mark| suiteview::check_unchanged(file, mark).is_ok());
+        if !unchanged {
+            self.refuse_changed(file);
+        }
+        unchanged
+    }
+
+    /// Says that `file` was saved by another program and that nothing was written.
+    pub(crate) fn refuse_changed(&mut self, file: &Path) {
+        let name = file
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.changed = Some(file.to_path_buf());
+        self.status = Status::Problem(Msg::SuiteChanged, vec![name]);
+    }
+
+    /// Takes the mark again after a write of this program. A save of another program is not
+    /// taken in: the old mark stays and the next write is refused.
+    pub(crate) fn seen_again(&mut self) {
+        let Some((file, mark)) = &self.seen else {
+            return;
+        };
+        if suiteview::check_unchanged(file, mark).is_ok() {
+            if let Some(now) = Self::mark_of(file) {
+                self.seen = Some(now);
+            }
+        }
+    }
+
     /// The file of the suite whose branches go along when the project is saved as `path`: the
     /// one the window works on, when `path` is another file of the suite that is not there yet.
     pub(crate) fn carried_from(&self, path: &Path) -> Option<PathBuf> {
@@ -4272,6 +4343,10 @@ impl Window {
     pub fn save_to(&mut self, path: &Path) -> bool {
         if self.read_only {
             self.status = Status::Problem(Msg::ReadOnlyBadge, Vec::new());
+            return false;
+        }
+        // a project of the suite that another program saved meanwhile is not written over
+        if eh3dfile::is_eh3d(path) && !self.is_unchanged(path) {
             return false;
         }
         let mut document = self.document.clone();
@@ -4305,6 +4380,8 @@ impl Window {
                 self.document = document;
                 self.path = Some(path.to_path_buf());
                 self.dirty = false;
+                self.changed = None;
+                self.seen = Self::mark_of(path);
                 let name = path
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
@@ -4322,7 +4399,12 @@ impl Window {
                 if source.is_some() {
                     let _ = std::fs::remove_file(path);
                 }
-                self.status = Status::Error(e);
+                // saved by another program between the look and the write
+                if suiteview::is_changed_refusal(&format!("{e:?}")) {
+                    self.refuse_changed(path);
+                } else {
+                    self.status = Status::Error(e);
+                }
                 false
             }
         }
@@ -4334,6 +4416,7 @@ impl Window {
         self.new_project();
         if matches!(self.status, Status::Done(..)) {
             self.path = Some(path.to_path_buf());
+            self.seen = Self::mark_of(path);
             self.dirty = true;
         }
     }

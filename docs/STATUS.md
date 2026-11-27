@@ -50,7 +50,7 @@ The window has the panel «Attachments» of the suite (the shared `eh3d-attachpa
 
 The cut of the view can lean from its axis, and the section is measured (width, height, length of the outline, area, and distances between its corners or sides); the new sliders have not been seen on a screen by a person.
 
-3D files and flat DXF drawings (attachments, the original of an import, files of the disk) are seen inside the window, with their size, volume and whether they fit in the box, and the suite project is signed from the window and from the commands `eh3d-keygen` and `eh3d-sign`; the window asks before a write that would remove a signature (`docs/BOARD_INTERCHANGE.md`). Both were tried on made-up files by the tests only; the windows have not been seen on a screen.
+3D files and flat DXF drawings (attachments, the original of an import, files of the disk) are seen inside the window, with their size, volume and whether they fit in the box, and the suite project is signed from the window and from the commands `eh3d-keygen` and `eh3d-sign`; the window asks before a write that would remove a signature (`docs/BOARD_INTERCHANGE.md`). Keys may be under a password, only the path of the key is remembered, a signature of another key is replaced only when agreed, and a project that another program saved is not written over: the window offers to read it again or to save under another name. All of this was tried by the tests only, with a made-up second program. Both were tried on made-up files by the tests only; the windows have not been seen on a screen.
 
 ## Capabilities
 

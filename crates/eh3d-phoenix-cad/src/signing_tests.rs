@@ -246,3 +246,140 @@ fn the_commands_make_a_key_sign_and_say_when_a_signature_goes() {
     assert!(standing(&file).branch);
     assert!(!standing(&file).project);
 }
+
+/// A key under a password, with a cost small enough for a test.
+fn locked_key(dir: &Scratch, name: &str, password: &str) -> PathBuf {
+    let path = dir.path(name);
+    let cheap = eh3d_project::KdfParams {
+        memory_kib: 64,
+        passes: 1,
+        lanes: 1,
+    };
+    eh3d_project::ed25519::generate_locked_key_files_with(
+        &path,
+        &Password::new(password.to_owned()),
+        cheap,
+    )
+    .unwrap();
+    path
+}
+
+#[test]
+fn a_key_under_a_password_signs_only_with_it_and_the_password_is_never_told() {
+    let dir = Scratch::new("sign-locked");
+    let (file, _) = signed_up(&dir);
+    // made up for this run
+    let typed = format!("made-up-{}", std::process::id());
+    let key = locked_key(&dir, "locked.key", &typed);
+    assert!(matches!(
+        protection(&key),
+        Some(KeyProtection::Password { .. })
+    ));
+    let before = fs::read(&file).unwrap();
+    for (given, lang) in [(None, Lang::En), (Some("not the one at all"), Lang::Es)] {
+        let password = given.map(|text| Password::new(text.to_owned()));
+        let error = read_key(&key, password.as_ref()).unwrap_err();
+        let words = key_words(&error, &key, lang);
+        assert!(words.contains("locked.key"), "{words}");
+        assert!(!words.contains(&typed), "{words}");
+    }
+    assert!(sign(&file, &key, &Request::own()).is_err());
+    assert_eq!(fs::read(&file).unwrap(), before);
+    let signer = read_key(&key, Some(&Password::new(typed.clone()))).unwrap();
+    sign_with(&file, &signer, &Request::own(), false).unwrap();
+    assert!(standing(&file).branch);
+    assert!(!String::from_utf8_lossy(&fs::read(&file).unwrap()).contains(&typed));
+}
+
+#[test]
+fn a_new_key_can_be_made_under_a_password_and_an_old_one_protected() {
+    let dir = Scratch::new("sign-protect");
+    let typed = format!("made-up-{}", std::process::id());
+    let short = new_locked_key(&dir.path("short.key"), &Password::new("abc".to_owned()));
+    let error = short.unwrap_err();
+    assert!(key_words(&error, &dir.path("short.key"), Lang::En).contains('8'));
+    assert!(!dir.path("short.key").exists());
+    new_locked_key(&dir.path("new.key"), &Password::new(typed.clone())).unwrap();
+    assert!(matches!(
+        protection(&dir.path("new.key")),
+        Some(KeyProtection::Password { .. })
+    ));
+    let old = dir.path("old.key");
+    new_key(&old).unwrap();
+    assert!(matches!(
+        protection(&old),
+        Some(KeyProtection::Unprotected { .. })
+    ));
+    protect(&old, &Password::new(typed.clone())).unwrap();
+    assert!(read_key(&old, None).is_err());
+    assert!(read_key(&old, Some(&Password::new(typed))).is_ok());
+}
+
+#[test]
+fn a_signature_of_another_key_is_replaced_only_when_agreed() {
+    let dir = Scratch::new("sign-replace");
+    let (file, key) = signed_up(&dir);
+    let both = Request {
+        branches: vec![BRANCH.to_owned()],
+        whole: true,
+    };
+    let first = sign(&file, &key, &both).unwrap();
+    // the same key again replaces nothing of another
+    let mine = read_key(&key, None).unwrap();
+    assert!(to_replace(&file, &mine, &both).unwrap().is_empty());
+    let other = dir.path("other.key");
+    new_key(&other).unwrap();
+    let theirs = read_key(&other, None).unwrap();
+    let held = to_replace(&file, &theirs, &both).unwrap();
+    assert_eq!(
+        held.iter().map(|h| h.what.as_str()).collect::<Vec<_>>(),
+        vec![BRANCH, WHOLE]
+    );
+    assert!(held.iter().all(|h| h.key_id == first.key_id));
+    assert!(held[0].question(Lang::En).contains(&first.key_id));
+    let before = fs::read(&file).unwrap();
+    let error = sign_with(&file, &theirs, &both, false).unwrap_err();
+    assert!(format!("{error:?}").contains("EH3D-PKG-026"), "{error:?}");
+    assert_eq!(fs::read(&file).unwrap(), before);
+    sign_with(&file, &theirs, &both, true).unwrap();
+    assert_eq!(
+        status_of_cad(&file, &dir.path("other.key.pub")),
+        SignatureStatus::Valid(theirs.key_id().to_owned())
+    );
+}
+
+#[test]
+fn the_commands_take_the_password_from_a_line_and_replace_only_when_told() {
+    let dir = Scratch::new("sign-cli-locked");
+    let file = dir.path("p.eh3d");
+    eh3dfile::save_cad_project(&file, b"project", &SaveSettings::default()).unwrap();
+    let typed = format!("made-up-{}", std::process::id());
+    let key = locked_key(&dir, "locked.key", &typed);
+    let other = dir.path("other.key");
+    new_key(&other).unwrap();
+    let words = |list: &[&str]| list.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+    let (file_text, key_text) = (file.display().to_string(), key.display().to_string());
+    let other_text = other.display().to_string();
+    // without the password the command says how to give it
+    let error =
+        crate::suite_cli::run("eh3d-sign", &words(&[&file_text, "--key", &key_text])).unwrap_err();
+    assert!(error.contains("--password-stdin"), "{error}");
+    let (out, ok) =
+        crate::suite_cli::run("eh3d-sign", &words(&[&file_text, "--key", &other_text])).unwrap();
+    assert!(ok && out.contains("no password"), "{out}");
+    let before = fs::read(&file).unwrap();
+    let signer = read_key(&key, Some(&Password::new(typed))).unwrap();
+    assert_eq!(
+        to_replace(&file, &signer, &Request::own()).unwrap().len(),
+        1
+    );
+    let third = dir.path("third.key");
+    new_key(&third).unwrap();
+    let third_text = third.display().to_string();
+    let args = words(&[&file_text, "--key", &third_text]);
+    let error = crate::suite_cli::run("eh3d-sign", &args).unwrap_err();
+    assert!(error.contains("EH3D-PKG-026"), "{error}");
+    assert_eq!(fs::read(&file).unwrap(), before);
+    let args = words(&[&file_text, "--key", &third_text, "--replace-signature"]);
+    assert!(crate::suite_cli::run("eh3d-sign", &args).unwrap().1);
+}

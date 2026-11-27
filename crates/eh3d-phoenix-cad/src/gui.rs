@@ -39,9 +39,11 @@ use eh3d_attachpanel::{AttachPanel, Program};
 use eh3d_dock::about::Phoenix;
 use eh3d_dock::core::AboutInfo;
 use eh3d_dock::gui::Dock;
+use eh3d_dock::key_store::KeyStore;
 use eh3d_dock::menu::{Chosen as MenuChosen, DockAction, MenuBar, StdAction};
 use eh3d_dock::palette;
 use eh3d_project::suitetext::{Said, S};
+use eh3d_project::suiteview;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -185,6 +187,10 @@ struct App {
     signing: Option<signing::SignForm>,
     /// A write that waits for the person, with what it would take away.
     asking: Option<(Write, Vec<Said>)>,
+    /// The file of that question as it was when it was asked.
+    asked_mark: Option<(PathBuf, String)>,
+    /// Where the path of the signing key used last is kept; none keeps nothing.
+    key_store: Option<KeyStore>,
     /// The settings file given with `--config`, where the arrangement of the panels is kept.
     config_path: Option<PathBuf>,
     /// Whether the 3D view and the sketch were drawn in this frame.
@@ -236,6 +242,8 @@ impl App {
             viewer: None,
             signing: None,
             asking: None,
+            asked_mark: None,
+            key_store: None,
             config_path: None,
             drew_view3d: false,
             drew_sketch: false,
@@ -338,7 +346,7 @@ impl App {
             keep_backup: self.win.settings.backups > 0,
             ..SaveSettings::default()
         };
-        match suitewin::import_original(&target, foreign, &self.win.settings.mesh, &how) {
+        match suitewin::import_into(&mut self.win, &target, foreign, &how) {
             Ok(done) => {
                 let mut lines = vec![fill(
                     Msg::SuiteImported.tr(lang),
@@ -352,6 +360,8 @@ impl App {
                 self.suite_note = Some((Msg::SuiteImportTitle, lines));
                 true
             }
+            // the window of a project that another program saved tells it
+            Err(suitewin::ImportError::Changed(_)) => false,
             Err(e) => {
                 self.suite_note = Some((Msg::SuiteImportTitle, vec![e.text(lang)]));
                 false
@@ -371,7 +381,9 @@ impl App {
             Ok(taken) => taken.text.lines().map(str::to_owned).collect(),
             Err(why) => vec![why],
         };
-        self.suite_note = Some((Msg::SuiteMenuBoard, lines));
+        if self.win.changed.is_none() {
+            self.suite_note = Some((Msg::SuiteMenuBoard, lines));
+        }
         self.refresh_branches();
     }
 
@@ -392,7 +404,9 @@ impl App {
             Ok(done) => done.text.lines().map(str::to_owned).collect(),
             Err(why) => vec![why],
         };
-        self.suite_note = Some((title, lines));
+        if self.win.changed.is_none() || work == BoardWork::CheckFit {
+            self.suite_note = Some((title, lines));
+        }
         self.refresh_branches();
     }
 
@@ -403,11 +417,17 @@ impl App {
         match consent::question(&self.win, &write) {
             Ok(lines) if lines.is_empty() => false,
             Ok(lines) => {
+                self.asked_mark = consent::mark(&self.win, &write);
                 self.asking = Some((write, lines));
                 true
             }
             Err(why) => {
-                self.win.status = Status::Error(CadError::SuiteFile(why));
+                match suitewin::current_file(&self.win) {
+                    Some(file) if suiteview::is_changed_refusal(&why) => {
+                        self.win.refuse_changed(&file);
+                    }
+                    _ => self.win.status = Status::Error(CadError::SuiteFile(why)),
+                }
                 true
             }
         }
@@ -419,6 +439,13 @@ impl App {
         let Some((write, _)) = self.asking.take() else {
             return;
         };
+        // the person may have taken long to answer: when another program saved the file
+        // meanwhile, what is there now is asked about, or refused
+        if let Some((file, mark)) = self.asked_mark.take() {
+            if suiteview::check_unchanged(&file, &mark).is_err() && self.ask_first(write.clone()) {
+                return;
+            }
+        }
         match write {
             Write::Save(path) => {
                 if self.win.save_to(&path) {
@@ -475,6 +502,57 @@ impl App {
         } else if cancel || answer.should_close() {
             self.asking = None;
         }
+    }
+
+    /// What is offered when a write was refused because another program saved the project: read it
+    /// again, save under another name or close. Escape closes; nothing here writes the file.
+    fn changed_window(&mut self, ctx: &egui::Context) {
+        if self.win.changed.is_none() {
+            return;
+        }
+        let lang = self.win.lang;
+        let code = lang.code();
+        let name = self
+            .win
+            .changed
+            .as_deref()
+            .and_then(Path::file_name)
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let line = fill(Msg::SuiteChanged.tr(lang), &[&name]);
+        let (mut again, mut save_as, mut close) = (false, false, false);
+        egui::Window::new(Msg::SuiteMenu.tr(lang))
+            .id(egui::Id::unique("suite-changed"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(420.0);
+                ui.colored_label(DANGER, line.as_str());
+                if self.win.dirty {
+                    ui.colored_label(ACCENT, Msg::Unsaved.tr(lang));
+                }
+                ui.horizontal_wrapped(|ui| {
+                    again = ui.button(S::ReadAgain.tr(code)).clicked();
+                    save_as = ui.button(S::MenuSaveAs.tr(code)).clicked();
+                    close = ui.button(S::Close.tr(code)).clicked();
+                });
+            });
+        close |= ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        if again {
+            self.read_changed_again();
+        } else if save_as {
+            self.win.changed = None;
+            self.suite_dialog(SuiteAsk::SaveAs);
+        } else if close {
+            self.win.changed = None;
+        }
+    }
+
+    /// Reads the project another program saved in the place of what the window holds.
+    fn read_changed_again(&mut self) {
+        suitewin::reopen(&mut self.win);
+        self.refresh_branches();
     }
 
     /// Checks the sketch that is being drawn and shows what it found.
@@ -2244,8 +2322,9 @@ impl App {
                         }
                     }
                 };
-                // a write that waits for the person closes the window that asked for it
-                if self.asking.is_some() {
+                // a write that waits for the person closes the window that asked for it, and so does
+                // a project that another program saved
+                if self.asking.is_some() || self.win.changed.is_some() {
                     return;
                 }
                 // a file to import and a key are not projects to open again
@@ -3252,6 +3331,7 @@ impl App {
         self.signing_window(ctx);
         self.dialog_window(ctx);
         self.consent_window(ctx);
+        self.changed_window(ctx);
         self.shot_tick(ctx);
     }
 
@@ -4219,6 +4299,8 @@ pub fn run(start: Start) -> Result<(), String> {
             install_fonts(&cc.egui_ctx);
             apply_theme(&cc.egui_ctx, ShotTheme::Forge);
             let mut app = App::new(win, sketch, view);
+            // the path of the signing key used last lives in the folder of the user too
+            app.key_store = KeyStore::for_user(Phoenix::Cad);
             open_asked(&mut app, viewer, cut, sign);
             let mut shell = Shell::new(app, window, &settings, config);
             // the list of recent projects lives in the folder of the user, with or without `--config`

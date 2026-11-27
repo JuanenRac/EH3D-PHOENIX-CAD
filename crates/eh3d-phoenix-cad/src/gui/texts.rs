@@ -105,7 +105,7 @@ impl App {
 
     /// Writes the title and the description and says how it went in the window of the texts.
     pub(super) fn write_texts_now(&mut self, language: Lang, title: &str, description: &str) {
-        let said = suitewin::write_texts(&self.win, language, title, description);
+        let said = suitewin::write_texts(&mut self.win, language, title, description);
         if let Some(form) = &mut self.texts {
             form.said = Some(match said {
                 Ok(text) => (text, true),
