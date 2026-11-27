@@ -317,6 +317,30 @@ fn a_new_key_can_be_made_under_a_password_and_an_old_one_protected() {
 }
 
 #[test]
+fn a_new_key_password_needs_twelve_characters_in_every_language() {
+    let dir = Scratch::new("sign-twelve");
+    let old = dir.path("old.key");
+    new_key(&old).unwrap();
+    let before = fs::read(&old).unwrap();
+    // made up for this test: eleven characters, one too few
+    let eleven = Password::new("abcdefghijk".to_owned());
+    let short = dir.path("short.key");
+    let error = new_locked_key(&short, &eleven).unwrap_err();
+    for lang in Lang::ALL {
+        let words = key_words(&error, &short, lang);
+        assert!(words.contains("12"), "{words}");
+    }
+    assert!(!short.exists());
+    assert!(protect(&old, &eleven).is_err());
+    assert_eq!(fs::read(&old).unwrap(), before);
+    protect(&old, &Password::new("abcdefghijkl".to_owned())).unwrap();
+    assert!(matches!(
+        protection(&old),
+        Some(KeyProtection::Password { .. })
+    ));
+}
+
+#[test]
 fn a_signature_of_another_key_is_replaced_only_when_agreed() {
     let dir = Scratch::new("sign-replace");
     let (file, key) = signed_up(&dir);
