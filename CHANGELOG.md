@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.1.6] - STEP with countersinks, slots and rounded edges, a tilted section view and measuring on the section
+
 - **Countersinks and counterbores in the STEP file:** a countersunk hole is written as a conical face and a counterbored one as two cylinders with the flat ring between them, the holes of the lid fixing included; they were refused before.
 
 - **Rectangular holes and slots in the STEP file:** a rectangular hole is written as four flat faces and a slot as two flat faces and two half cylinders, on any face of the box.

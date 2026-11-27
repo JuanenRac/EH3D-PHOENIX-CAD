@@ -705,7 +705,7 @@ version = "0.0.1"
 
 [[package]]
 name = "eh3d-phoenix-cad"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "eframe",
  "eh3d-attachpanel",
@@ -723,7 +723,7 @@ dependencies = [
 
 [[package]]
 name = "eh3d-phoenix-cad-solver"
-version = "0.1.5"
+version = "0.1.6"
 
 [[package]]
 name = "eh3d-project"
